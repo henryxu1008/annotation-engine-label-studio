@@ -63,12 +63,19 @@ describe("import waits for its project", () => {
         cy.then(() => release?.());
         cy.wait("@projectReady");
         cy.intercept("POST", `**/api/projects/${fixture.project_id}/import*`).as("imported");
+        cy.intercept("POST", `**/api/projects/${fixture.project_id}/reimport*`).as("committed");
         cy.get("#file-input").selectFile({
           contents: Cypress.Buffer.from(JSON.stringify([{ text: "Slow project 日本語" }])),
           fileName: "slow-project.json", mimeType: "application/json",
         }, { force: true });
         cy.wait("@imported").its("response.statusCode").should("eq", 201);
+        // An upload response precedes the rendered file list and final commit.
+        // Wait for actual readiness/completion rather than a navigation timeout.
+        cy.contains(".lsf-upload_page__file-name", "slow-project.json").closest("tr")
+          .find(".lsf-upload_page__file-status")
+          .should("not.have.class", "lsf-upload_page__file-status_uploading");
         cy.get('[aria-label="' + (locale === "zh-CN" ? "完成导入" : "Finish import") + '"]').click();
+        cy.wait("@committed").its("response.statusCode").should("eq", 201);
         cy.location("pathname").should("eq", `/projects/${fixture.project_id}/data`);
         cy.request(`/api/tasks/?project=${fixture.project_id}`).then((response) => {
           expect(JSON.stringify(response.body)).to.contain("Slow project 日本語");
