@@ -32,6 +32,11 @@ Cypress.Commands.add('loginAs', (email: string, password: string, nextPath = '/'
   });
 
   cy.visit(nextPath);
+  if (nextPath === '/user/account/personal-info') {
+    // Server authentication does not mean the frontend actor query has settled.
+    // Account actions require the real actor rendered by AuthProvider.
+    cy.get('input[type="email"]').should('have.value', email);
+  }
   // Legacy enterprise specs assert English copy. Establish that test premise
   // explicitly when requested; bilingual specs choose their own locale.
   const loginLocale = Cypress.env('loginLocale');
