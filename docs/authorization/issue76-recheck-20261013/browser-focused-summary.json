@@ -1,0 +1,23 @@
+{
+  "status": "PASS_CURRENT_FIXED_CANDIDATE_BILINGUAL",
+  "at": "2026-10-13T15:26:45.991957+00:00",
+  "image_source": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+  "test_HEAD": "9fdda5c8ed97ad57098e9033411f52764eac41df",
+  "suites": [
+    {
+      "suite": "import-initialization",
+      "exit_code": 0,
+      "passing": 4,
+      "failing": 0,
+      "duration_seconds": 18,
+      "log_SHA256": "fb162e483f03edd8cce32f0e0a06a2ae95b5adaebab569f61b2ca35dba1389bb",
+      "result": "PASS"
+    }
+  ],
+  "passed": 4,
+  "transport": "Native fixed production assets over loopback HTTP; trusted browser HTTPS not tested",
+  "new_Compose": 0,
+  "source_overlay": false,
+  "existing_fixture_users_deleted": false,
+  "Core_business": "PAUSED"
+}

@@ -40,3 +40,23 @@ PR #77 had no review threads or formal reviews at preflight. Its prior HEAD's tw
 - Full local report: `C:\Users\Henry\.codex\reports\ls-issue76-recheck-20261013`. Native test sources are in this PR; local execution/generation hashes bind the scoped runner to those sources.
 
 Stop/start only the existing project with its current interpolation file. Retain volumes; do not run `down -v`, prune, regenerate trust, restore a database or enable IAM recovery as part of this handoff. The first image-update readback encountered Docker Desktop's alternate Windows bind-path representation; the checker now resolves only the two existing expected folders and still requires exact named-volume identity.
+
+## CI concurrency correction
+
+The first follow-up PR HEAD `b53707d89` passed authorization CI and the existing,
+locale and full collaboration browser phases, but its final import phase failed.
+The retained CI log/screenshot shows SQLite `database is locked` and
+`SessionInterrupted`, plus an import-location assertion while the final commit
+was still pending. The candidate itself uses PostgreSQL. Browser integration CI
+now uses an ephemeral PostgreSQL 17 Actions service, matching that backend;
+SQLite authorization foundation coverage remains in Fork PR Gate. This adds no
+local Compose project or runtime service.
+
+The import regression now waits for the rendered completed upload row and the
+actual `reimport` 201 before asserting navigation/readback. The same fixed native
+image passed [all four strengthened cases](issue76-recheck-20261013/browser-focused-summary.json)
+at test HEAD `9fdda5c8ed97ad57098e9033411f52764eac41df`. The other 40 qualified
+native cases have unchanged source hashes; their existing receipt remains bound
+to the same image. Both receipts are retained, with the [CI correction record](issue76-recheck-20261013/ci-correction.json).
+The seven additional synthetic identities and their temporary credentials were
+also retired. Final current-head CI remains the separate live PR record.

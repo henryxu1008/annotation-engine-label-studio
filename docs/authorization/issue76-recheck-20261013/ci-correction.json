@@ -1,0 +1,17 @@
+{
+  "status": "PASS_NATIVE_FOCUSED_REGRESSION",
+  "failed_head": "b53707d8916ff0b42a81b657abc8dc1e15f96664",
+  "failed_browser_CI": "https://github.com/qq550723504/annotation-engine-label-studio/actions/runs/38417679368",
+  "authorization_CI_at_failed_head": "PASS",
+  "failure": "SQLite concurrent writes raised database-is-locked/SessionInterrupted; import navigation asserted while final commit was still pending",
+  "correction": "Browser CI now uses PostgreSQL 17, matching the candidate; SQLite foundation coverage retained; upload row readiness and final reimport 201 awaited",
+  "runtime_source_unchanged": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+  "test_HEAD": "9fdda5c8ed97ad57098e9033411f52764eac41df",
+  "native_focused_tests": 4,
+  "unchanged_qualified_tests": 40,
+  "changed_acceptance_source": [
+    "e2e/import-initialization.cy.ts"
+  ],
+  "new_local_Compose": 0,
+  "CI_service": "Ephemeral GitHub Actions PostgreSQL container only"
+}
