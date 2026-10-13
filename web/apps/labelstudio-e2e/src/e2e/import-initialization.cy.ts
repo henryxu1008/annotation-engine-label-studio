@@ -5,6 +5,29 @@ describe("import waits for its project", () => {
   afterEach(() => release?.());
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`cancels a queued collection load after leaving its workspace in ${locale}`, () => {
+      cy.readFile(".enterprise-e2e.json").then((fixture) => {
+        cy.loginAs(fixture.users.annotator_b.email, fixture.password, "/user/account/personal-info");
+        cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("localeSaved");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.wait("@localeSaved").its("response.statusCode").should("eq", 200);
+        cy.visit(`/projects/${fixture.project_id}/data`);
+        cy.window().should((window: any) => expect(window.dataManager?.store?.taskStore?.list?.length).to.be.greaterThan(0));
+        cy.clock(undefined, ["setTimeout", "clearTimeout"]);
+        let pending: Promise<unknown>;
+        cy.window().then((window: any) => {
+          const store = window.dataManager.store;
+          pending = store.taskStore.fetch({ id: store.viewsStore.selected.id });
+        });
+        cy.get('a[href="/projects"]').first().click();
+        cy.location("pathname").should("eq", "/projects");
+        cy.get(".lsf-datamanager").should("not.exist");
+        cy.tick(150);
+        cy.then(() => pending).should("be.undefined");
+        cy.get('[data-testid="create-project-context"]').should("be.visible");
+      });
+    });
+
     it(`ignores initialization that finishes after leaving the data page in ${locale}`, () => {
       cy.readFile(".enterprise-e2e.json").then((fixture) => {
         cy.loginAs(fixture.users.manager_b.email, fixture.password, "/user/account/personal-info");
