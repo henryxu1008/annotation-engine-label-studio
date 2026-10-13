@@ -1,0 +1,13 @@
+{
+  "source_commit": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+  "source_tree": "6aa1d9c6c8c3f89f789198efc5c7c21f1da7c338",
+  "version": "1.23.0+fork.rc76.89c794e1",
+  "platform": "linux/amd64",
+  "oci_index_digest": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+  "platform_manifest_digest": "sha256:0b6865e45f4d3c764c5f6854a2712b7834f3b2bfb85ebc27bee72ce891cf94c8",
+  "image_config_digest": "sha256:84ee35d8971f6d7a08af329095013c501933506351f2527071868924ad21b699",
+  "archive_sha256": "a6b7f657a57030bd3f00c6a96f726d10e12904bbc6ea080389899e64a130ca34",
+  "archive_bytes": 410091008,
+  "availability": "LOCAL_ONLY; receiver/destination not specified",
+  "production_deployed": false
+}

@@ -1,0 +1,86 @@
+{
+  "status": "PASS_CURRENT_FIXED_CANDIDATE_BILINGUAL",
+  "at": "2026-10-13T14:53:23.816643+00:00",
+  "image_source": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+  "test_HEAD": "6e8a7679b91fc72f5e6640054a9e4374e7312aa6",
+  "suites": [
+    {
+      "suite": "auth-tips-timeout",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 12,
+      "log_SHA256": "d611d338e4c55026e2aaa63efcdb39f22d13693c75d9524b804ec7418abdf38b",
+      "result": "PASS"
+    },
+    {
+      "suite": "import-initialization",
+      "exit_code": 0,
+      "passing": 4,
+      "failing": 0,
+      "duration_seconds": 21,
+      "log_SHA256": "a48983db823fd92ce5830930beac47fd4b9ad4c8ec0af67e62b534a2b40c0e16",
+      "result": "PASS"
+    },
+    {
+      "suite": "app-locale",
+      "exit_code": 0,
+      "passing": 24,
+      "failing": 0,
+      "duration_seconds": 59,
+      "log_SHA256": "bdd12bfef136990080fd10155ef03d47c1381bc2e886f1ed89444bb9ea8c5918",
+      "result": "PASS"
+    },
+    {
+      "suite": "dm-editor-locale",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 12,
+      "log_SHA256": "57f7695bb867a858e1a97b8a7803e996feaa05cbf154e450e043c04f46c88efe",
+      "result": "PASS"
+    },
+    {
+      "suite": "dm-export-locale",
+      "exit_code": 0,
+      "passing": 6,
+      "failing": 0,
+      "duration_seconds": 15,
+      "log_SHA256": "36c19cba6fc8a6fdbb998d6f20ad45a000cc6747d091444468b74750aeb3e336",
+      "result": "PASS"
+    },
+    {
+      "suite": "collaboration-locale",
+      "exit_code": 0,
+      "passing": 4,
+      "failing": 0,
+      "duration_seconds": 31,
+      "log_SHA256": "557f22823fc8e4c265819c9277d84c71e599cab2b4156a2eb62ed95f3c1138c1",
+      "result": "PASS"
+    },
+    {
+      "suite": "full-enterprise-workflow-en-US",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 102,
+      "log_SHA256": "599a4bd4c8b583dd3f97b38834cd0add06d48956f577459ff3e49cee9793c711",
+      "result": "PASS"
+    },
+    {
+      "suite": "full-enterprise-workflow-zh-CN",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 102,
+      "log_SHA256": "a9c65dff4c0782aa9790b6ddffee690945516783f8f0a442734a53f1c201bc35",
+      "result": "PASS"
+    }
+  ],
+  "passed": 44,
+  "transport": "Native fixed production assets over loopback HTTP; trusted browser HTTPS not tested",
+  "new_Compose": 0,
+  "source_overlay": false,
+  "existing_fixture_users_deleted": false,
+  "Core_business": "PAUSED"
+}

@@ -1,4 +1,6 @@
-# Issue #76 local release candidate
+# Issue #76 local release candidate (historical 2026-10-09 receipt)
+
+The active local image and current startup interpolation file are documented in the [2026-10-13 recheck](issue76-recheck-20261013.md). All artifact identities and PASS results below belong only to the historical `38bc51f9` image; do not inherit them for the current artifact.
 
 This unmerged candidate delivers the first two steps of [#76](https://github.com/qq550723504/annotation-engine-label-studio/issues/76). Target-environment operations remain under #48/#44. Core integration is deferred under [DPP #294](https://github.com/qq550723504/data-product-platform/issues/294); this change does not alter its Core-only-review contract or DPP files. [Draft PR #77](https://github.com/qq550723504/annotation-engine-label-studio/pull/77) is the sole writer result.
 
