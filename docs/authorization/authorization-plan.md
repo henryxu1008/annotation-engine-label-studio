@@ -418,3 +418,14 @@ and reject an absent/already-initialized DOM root before creating the workspace.
 The bilingual delayed-backend navigation regression exercises this on the real
 page. These guards control UI lifetime only; they do not authorize access or
 replace server-side membership, assignment and revocation checks.
+
+The data-list debounce must resolve without calling a destroyed model. Guard
+collection fetches before accessing their workspace SDK and after asynchronous
+responses, using the existing MST `isAlive` checks. Re-run the five collection
+fetch lifecycle cases and real import/navigation journeys on upgrades; these
+checks retain normal live loading and do not relax server authorization.
+
+The E2E submission fixture must lock its assignment without joining the nullable
+annotation relation. Lazy annotation access inside the transaction keeps the
+fixture compatible with PostgreSQL; the actual submission service retains its
+own authoritative locks and checks.

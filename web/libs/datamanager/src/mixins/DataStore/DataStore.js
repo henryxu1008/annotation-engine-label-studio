@@ -1,4 +1,4 @@
-import { flow, getRoot, types } from "mobx-state-tree";
+import { flow, getRoot, isAlive, types } from "mobx-state-tree";
 import { guidGenerator } from "../../utils/random";
 import { isDefined } from "../../utils/utils";
 import { DEFAULT_PAGE_SIZE, getStoredPageSize } from "../../components/Common/Pagination/Pagination";
@@ -194,6 +194,10 @@ export const DataStore = (modelName, { listItemType, apiMethod, properties, asso
 
               // Set new timeout
               timeoutId = setTimeout(async () => {
+                if (!isAlive(self)) {
+                  resolve();
+                  return;
+                }
                 try {
                   pendingPromise = self._performFetch(params);
                   const result = await pendingPromise;
@@ -211,10 +215,12 @@ export const DataStore = (modelName, { listItemType, apiMethod, properties, asso
 
       // Internal fetch function that performs the actual API call
       _performFetch: flow(function* ({ id, query, pageNumber = null, reload = false, interaction, pageSize } = {}) {
+        if (!isAlive(self)) return;
+        const root = getRoot(self);
+        if (!isAlive(root) || !root.SDK) return;
         let currentViewId;
         let currentViewQuery;
         const requestId = (self.requestId = guidGenerator());
-        const root = getRoot(self);
 
         if (id) {
           currentViewId = id;
@@ -259,6 +265,7 @@ export const DataStore = (modelName, { listItemType, apiMethod, properties, asso
         if (interaction) Object.assign(params, { interaction });
 
         const data = yield root.apiCall(apiMethod, params, {}, { allowToCancel: root.SDK.type === "DE" });
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
         // We cancel current request processing if request id
         // changed during the request. It indicates that something
@@ -298,8 +305,10 @@ export const DataStore = (modelName, { listItemType, apiMethod, properties, asso
 
       // Public fetch function that uses debouncing
       fetch({ id, query, pageNumber = null, reload = false, interaction, pageSize } = {}) {
+        if (!isAlive(self)) return Promise.resolve();
         const params = { id, query, pageNumber, reload, interaction, pageSize };
         const root = getRoot(self);
+        if (!isAlive(root) || !root.SDK) return Promise.resolve();
         // Only use debouncing for virtual tabs that use queries (like search/filter tabs)
         const currentView = root.viewsStore.selected;
         // const isVirtualTab = currentView?.virtual && currentView?.query;
