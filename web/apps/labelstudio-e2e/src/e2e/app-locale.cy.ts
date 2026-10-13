@@ -417,7 +417,8 @@ describe('main application display locale', () => {
         const modal = $button[0].closest('.lsf-modal-ls')!;
         const window = modal.ownerDocument.defaultView!;
         expect(window.getComputedStyle(modal).opacity).to.eq('1');
-        expect(window.getComputedStyle(modal.firstElementChild!).transform).to.eq('none');
+        const transform = window.getComputedStyle(modal.firstElementChild!).transform;
+        expect(new window.DOMMatrixReadOnly(transform === 'none' ? undefined : transform).isIdentity).to.eq(true);
       }).then(($button) => $button[0].scrollIntoView({ block: 'nearest' }));
       cy.get(copyButton).should('be.visible');
     });

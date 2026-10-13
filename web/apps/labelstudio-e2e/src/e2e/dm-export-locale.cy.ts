@@ -41,6 +41,9 @@ describe("Data Manager export locale", () => {
       }).as("download");
 
       cy.visit(`/projects/${fixture.project_id}/data/export`);
+      // The parent data workspace can finish initialization after the modal
+      // first renders. Act on the settled workspace, not a replaced button.
+      cy.window().its("dataManager").should("exist");
       cy.wait("@formats");
       cy.get(`[aria-label="${copy.heading}"]`).should("be.visible");
       cy.get('[data-testid="export-format-COCO_WITH_IMAGES"]')

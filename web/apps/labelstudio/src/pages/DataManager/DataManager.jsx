@@ -23,9 +23,9 @@ import "./DataManager.scss";
 
 const loadDependencies = () => [import("@humansignal/datamanager"), import("@humansignal/editor")];
 
-const initializeDataManager = async (root, props, params) => {
+const initializeDataManager = (root, props, params) => {
   if (!window.LabelStudio) throw Error("Label Studio Frontend doesn't exist on the page");
-  if (!root && root.dataset.dmInitialized) return;
+  if (!root || root.dataset.dmInitialized) return;
 
   root.dataset.dmInitialized = true;
 
@@ -121,7 +121,7 @@ export const DataManagerPage = ({ ...props }) => {
   const dataManagerRef = useRef();
   const projectId = project?.id;
 
-  const init = useCallback(async () => {
+  const init = useCallback(async (isCancelled) => {
     if (!window.LabelStudio) return;
     if (!window.DataManager) return;
     if (!root.current) return;
@@ -132,16 +132,20 @@ export const DataManagerPage = ({ ...props }) => {
       params: { project: project.id },
     });
 
+    // A slow backend response can arrive after navigation or a newer init
+    // effect. Never construct a workspace for the disposed page.
+    if (isCancelled() || !root.current || dataManagerRef.current) return;
+
     const interactiveBacked = (mlBackends ?? []).find(({ is_interactive }) => is_interactive);
 
-    const dataManager = (dataManagerRef.current =
-      dataManagerRef.current ??
-      (await initializeDataManager(root.current, props, {
-        ...params,
-        project,
-        autoAnnotation: isDefined(interactiveBacked),
-        locale: latestLocale.current,
-      })));
+    const dataManager = initializeDataManager(root.current, props, {
+      ...params,
+      project,
+      autoAnnotation: isDefined(interactiveBacked),
+      locale: latestLocale.current,
+    });
+    if (!dataManager) return;
+    dataManagerRef.current = dataManager;
 
     Object.assign(window, { dataManager });
 
@@ -255,9 +259,14 @@ export const DataManagerPage = ({ ...props }) => {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     Promise.all(dependencies)
-      .then(() => setLoading(false))
-      .then(init);
+      .then(() => {
+        if (cancelled) return;
+        setLoading(false);
+        return init(() => cancelled);
+      });
+    return () => { cancelled = true; };
   }, [init]);
 
   useEffect(() => {

@@ -404,3 +404,17 @@ synthetic-data commands, receipts and inspection limits.
 Retain complete opaque-token matching, including RFC 6750 `+`, `/` and `~`
 characters. The artifact auditor must reject missing/empty directories,
 media-only text inputs and empty logs; an empty scan is not accepted evidence.
+
+## Candidate UI lifecycle checks
+
+On upstream upgrades, preserve the optional login-tips timeout's bound
+`AbortController.abort` receiver. A slow advisory request must not raise an
+exception or interrupt authentication. The bilingual timeout regression checks
+the actual aborted signal, retained input and successful password login.
+
+Data Manager initialization must ignore dependency/backend completions after
+its React page effect is disposed. Check cancellation after asynchronous work
+and reject an absent/already-initialized DOM root before creating the workspace.
+The bilingual delayed-backend navigation regression exercises this on the real
+page. These guards control UI lifetime only; they do not authorize access or
+replace server-side membership, assignment and revocation checks.

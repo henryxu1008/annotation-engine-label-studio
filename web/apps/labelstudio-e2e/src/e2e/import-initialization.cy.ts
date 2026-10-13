@@ -5,6 +5,32 @@ describe("import waits for its project", () => {
   afterEach(() => release?.());
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`ignores initialization that finishes after leaving the data page in ${locale}`, () => {
+      cy.readFile(".enterprise-e2e.json").then((fixture) => {
+        cy.loginAs(fixture.users.manager_b.email, fixture.password, "/user/account/personal-info");
+        cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("localeSaved");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.wait("@localeSaved").its("response.statusCode").should("eq", 200);
+        cy.get("html").should("have.attr", "lang", locale);
+        let pending = 0;
+        const responseGate = new Promise<void>((resolve) => { release = resolve; });
+        cy.intercept({ method: "GET", pathname: /^\/api\/ml\/?$/ }, (request) => {
+          request.on("before:response", () => { pending += 1; return responseGate; });
+        }).as("workspaceReady");
+        cy.visit(`/projects/${fixture.project_id}/data`);
+        cy.wrap(null).should(() => expect(pending, "workspace initialization is held").to.be.greaterThan(0));
+        // Use the application's own navigation, so the same document receives
+        // the delayed response after its data workspace has been unmounted.
+        cy.get('a[href="/projects"]').first().click();
+        cy.location("pathname").should("eq", "/projects");
+        cy.get(".datamanager").should("not.exist");
+        cy.then(() => release?.());
+        cy.wait("@workspaceReady");
+        cy.get('[data-testid="create-project-context"]').should("be.visible");
+        cy.window().should((window: any) => expect(window.dataManager).not.to.exist);
+      });
+    });
+
     it(`waits for a slow project before accepting an upload in ${locale}`, () => {
       cy.readFile(".enterprise-e2e.json").then((fixture) => {
         cy.loginAs(fixture.users.manager.email, fixture.password, "/user/account/personal-info");
