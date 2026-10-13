@@ -44,8 +44,17 @@ Cypress.Commands.add('loginAs', (email: string, password: string, nextPath = '/'
     if (loginLocale !== 'en-US' && loginLocale !== 'zh-CN') throw new Error(`Unsupported login locale: ${loginLocale}`);
     cy.get('[data-testid="user-menu-trigger"]', { timeout: 30000 }).click();
     cy.get('[data-testid="menu-language-select"]').then(($select) => {
-      if ($select.val() !== loginLocale) cy.wrap($select).select(loginLocale);
+      if ($select.val() !== loginLocale) {
+        cy.intercept('PATCH', '/api/current-user/locale/').as('loginLocaleSaved');
+        cy.wrap($select).select(loginLocale);
+        cy.wait('@loginLocaleSaved').then(({ response }) => {
+          expect(response?.statusCode).to.eq(200);
+          expect(response?.body.preference).to.eq(loginLocale);
+        });
+      }
     });
+    cy.get('[data-testid="menu-language-select"]').should('have.value', loginLocale).and('not.be.disabled');
+    cy.request('/api/current-user/locale/').its('body.preference').should('eq', loginLocale);
     cy.get('html').should('have.attr', 'lang', loginLocale);
     cy.get('[data-testid="user-menu-trigger"]').click();
   }
