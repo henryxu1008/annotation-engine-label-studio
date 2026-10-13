@@ -24,7 +24,6 @@ class Command(BaseCommand):
         actor = User.objects.get(email=ACTORS[options['actor']])
         assignment = (
             TaskAssignment.objects.select_for_update()
-            .select_related('annotation')
             .filter(
                 task_id=options['task_id'],
                 assignee=actor,
