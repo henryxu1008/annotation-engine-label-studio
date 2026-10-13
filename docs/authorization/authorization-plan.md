@@ -430,6 +430,10 @@ workspace disposal. A cancelled data-list promise resolving is not permission
 to send a tab-change event or update an old view. Keep the tab lifecycle
 regressions alongside the collection cases and run the whole Data Manager
 unit suite before carrying these patches through an upstream upgrade.
+The enclosing `fetchTabs` initializer must recheck workspace lifetime after
+selection and save as well: a cancelled child flow may resolve normally while
+its parent still owns a disposed model. Do not yield actions from that model
+or start labeling after disposal.
 
 The E2E submission fixture must lock its assignment without joining the nullable
 annotation relation. Lazy annotation access inside the transaction keeps the

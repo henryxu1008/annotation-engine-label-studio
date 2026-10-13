@@ -495,8 +495,10 @@ export const TabStore = types
     },
 
     fetchTabs: flow(function* (tab, taskID, labeling) {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       const tabId = Number.parseInt(tab);
-      const response = yield getRoot(self).apiCall("tabs");
+      const response = yield root.apiCall("tabs");
       if (!isAlive(self)) return;
       if (response?.error) return;
       const tabs = response?.tabs ?? response ?? [];
@@ -518,17 +520,19 @@ export const TabStore = types
       yield self.setSelected(Number.isNaN(tabId) ? tab : tabId, {
         pushState: tab === undefined,
       });
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
       yield self.selected?.save();
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
       if (labeling) {
-        getRoot(self).startLabelStream({
+        root.startLabelStream({
           pushState: false,
         });
       } else if (isDefined(taskID)) {
         const task = { id: Number.parseInt(taskID) };
 
-        getRoot(self).startLabeling(task, {
+        root.startLabeling(task, {
           pushState: false,
         });
       }
