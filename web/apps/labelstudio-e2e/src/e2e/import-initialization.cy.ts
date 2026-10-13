@@ -26,7 +26,7 @@ describe("import waits for its project", () => {
         cy.location("pathname").should("eq", "/projects");
         cy.get(".lsf-datamanager").should("not.exist");
         cy.then(() => release?.());
-        cy.wait("@workspaceReady");
+        cy.wait("@workspaceReady").its("response.statusCode").should("eq", 200);
         cy.get('[data-testid="create-project-context"]').should("be.visible");
         cy.window().should((window: any) => expect(window.dataManager).not.to.exist);
       });
