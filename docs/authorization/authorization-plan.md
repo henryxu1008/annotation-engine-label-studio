@@ -425,6 +425,12 @@ responses, using the existing MST `isAlive` checks. Re-run the five collection
 fetch lifecycle cases and real import/navigation journeys on upgrades; these
 checks retain normal live loading and do not relax server authorization.
 
+Tab selection, reload, creation and save continuations must also stop after
+workspace disposal. A cancelled data-list promise resolving is not permission
+to send a tab-change event or update an old view. Keep the tab lifecycle
+regressions alongside the collection cases and run the whole Data Manager
+unit suite before carrying these patches through an upstream upgrade.
+
 The E2E submission fixture must lock its assignment without joining the nullable
 annotation relation. Lazy annotation access inside the transaction keeps the
 fixture compatible with PostgreSQL; the actual submission service retains its

@@ -15,9 +15,18 @@ describe("Data Manager export locale", () => {
 
   const chooseLocale = (locale: "en-US" | "zh-CN") => {
     cy.loginAs(fixture.users.manager.email, fixture.password, "/user/account/personal-info");
+    cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("exportLocaleSaved");
     cy.get('[data-testid="language-preference-select"]').then(($select) => {
-      if ($select.val() !== locale) cy.wrap($select).select(locale);
+      if ($select.val() !== locale) {
+        cy.wrap($select).select(locale);
+        cy.wait("@exportLocaleSaved").then(({ response }) => {
+          expect(response?.statusCode).to.eq(200);
+          expect(response?.body.preference).to.eq(locale);
+        });
+      }
     });
+    cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+    cy.request("/api/current-user/locale/").its("body.preference").should("eq", locale);
     cy.get("html").should("have.attr", "lang", locale);
   };
 
