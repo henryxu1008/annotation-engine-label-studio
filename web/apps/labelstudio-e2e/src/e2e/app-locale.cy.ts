@@ -410,7 +410,16 @@ describe('main application display locale', () => {
       cy.document().then((document) => { document.documentElement.style.zoom = '200%'; });
       cy.get('[data-testid="home-action-createProject"]').scrollIntoView().should('be.visible');
       cy.get('[data-testid="home-action-inviteMembers"]').scrollIntoView().should('contain.text', copy.invite).click();
-      cy.get(`button[aria-label="${copy.inviteCopy}"]`).scrollIntoView().should('be.visible');
+      const copyButton = `button[aria-label="${copy.inviteCopy}"]`;
+      // Wait for the fixed dialog's geometry to settle before scrolling. Use
+      // native scrolling so root CSS zoom does not distort pixel calculations.
+      cy.get(copyButton).should(($button) => {
+        const modal = $button[0].closest('.lsf-modal-ls')!;
+        const window = modal.ownerDocument.defaultView!;
+        expect(window.getComputedStyle(modal).opacity).to.eq('1');
+        expect(window.getComputedStyle(modal.firstElementChild!).transform).to.eq('none');
+      }).then(($button) => $button[0].scrollIntoView({ block: 'nearest' }));
+      cy.get(copyButton).should('be.visible');
     });
   }
 

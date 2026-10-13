@@ -8,7 +8,19 @@ describe("import waits for its project", () => {
     it(`waits for a slow project before accepting an upload in ${locale}`, () => {
       cy.readFile(".enterprise-e2e.json").then((fixture) => {
         cy.loginAs(fixture.users.manager.email, fixture.password, "/user/account/personal-info");
+        // Establish the language through its real persisted preference before
+        // navigation. Merely selecting an option can abandon the pending save.
+        cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }, (request) => {
+          return new Cypress.Promise<void>((resolve) => setTimeout(resolve, 500)).then(() => request.continue());
+        }).as("localeSaved");
         cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.wait("@localeSaved").then(({ request, response }) => {
+          expect(request.body.preference).to.eq(locale);
+          expect(response?.statusCode).to.eq(200);
+          expect(response?.body.preference).to.eq(locale);
+        });
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
         let pending = 0;
         const responseGate = new Promise<void>((resolve) => { release = resolve; });
         cy.intercept({ method: "GET", pathname: new RegExp(`^/api/projects/${fixture.project_id}/?$`) }, (request) => {
