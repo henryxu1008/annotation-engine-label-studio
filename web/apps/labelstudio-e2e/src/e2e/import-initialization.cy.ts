@@ -18,12 +18,13 @@ describe("import waits for its project", () => {
           request.on("before:response", () => { pending += 1; return responseGate; });
         }).as("workspaceReady");
         cy.visit(`/projects/${fixture.project_id}/data`);
+        cy.get(".lsf-datamanager").should("exist");
         cy.wrap(null).should(() => expect(pending, "workspace initialization is held").to.be.greaterThan(0));
         // Use the application's own navigation, so the same document receives
         // the delayed response after its data workspace has been unmounted.
         cy.get('a[href="/projects"]').first().click();
         cy.location("pathname").should("eq", "/projects");
-        cy.get(".datamanager").should("not.exist");
+        cy.get(".lsf-datamanager").should("not.exist");
         cy.then(() => release?.());
         cy.wait("@workspaceReady");
         cy.get('[data-testid="create-project-context"]').should("be.visible");
