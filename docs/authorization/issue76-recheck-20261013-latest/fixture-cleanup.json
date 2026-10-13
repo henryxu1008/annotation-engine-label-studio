@@ -1,0 +1,10 @@
+{
+  "disabled": 301,
+  "sessions_deleted": 74,
+  "files_removed": 43,
+  "status": "PASS",
+  "only_this_run_ids": true,
+  "original_identities_untouched": true,
+  "test_data_preserved": true,
+  "runner_password_copy_removed": true
+}

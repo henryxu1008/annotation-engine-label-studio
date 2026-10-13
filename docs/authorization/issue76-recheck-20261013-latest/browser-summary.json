@@ -1,0 +1,128 @@
+{
+  "status": "PASS_CURRENT_FIXED_CANDIDATE_BILINGUAL",
+  "at": "2026-10-13T18:55:08.443742+00:00",
+  "image_source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+  "test_HEAD": "0253cc4d6a5a00a103e4d7b600641ee34276740a",
+  "qualification": "Composite same-artifact qualification: 46 unchanged cases from the full run plus the two affected reviewer cases after fixing their explicit loginLocale setup; per-suite execution HEADs and log hashes retained",
+  "suites": [
+    {
+      "suite": "auth-tips-timeout",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 11,
+      "log_SHA256": "18694225090d359b74df193e1e7f232fdd599ae2aac11fd36f19979921514922",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "reviewer-workspace",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 48,
+      "log_SHA256": "d114209b993cb7d4d358da74a87480bb473a04a6cc3fa75fdda95fb5586e401d",
+      "result": "PASS",
+      "attempt": "attempt-20-reviewer-af1",
+      "executed_test_HEAD": "0253cc4d6a5a00a103e4d7b600641ee34276740a"
+    },
+    {
+      "suite": "import-initialization",
+      "exit_code": 0,
+      "passing": 6,
+      "failing": 0,
+      "duration_seconds": 23,
+      "log_SHA256": "8a1178e6b26749821930fef3813c0a29e2847bdef5202d058e3a09136cc4d079",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "app-locale",
+      "exit_code": 0,
+      "passing": 24,
+      "failing": 0,
+      "duration_seconds": 48,
+      "log_SHA256": "cc2b1d7f3d5b0b0b3813e1a4eec0eb78da402fe22c475fd246407c6e90f24b3c",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "dm-editor-locale",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 12,
+      "log_SHA256": "898e175e20bfe4b2f4ae6f44ded3557051b7ab415898b301fbf28bcab6c389cc",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "dm-export-locale",
+      "exit_code": 0,
+      "passing": 6,
+      "failing": 0,
+      "duration_seconds": 14,
+      "log_SHA256": "2e22965f19d51975e5e040a436f3fe09edcfb1a70517380deaaedda721d8bdd5",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "collaboration-locale",
+      "exit_code": 0,
+      "passing": 4,
+      "failing": 0,
+      "duration_seconds": 30,
+      "log_SHA256": "6dda2e3f42723f7e4209a81eab7bd16b9b74b2ba47d32823844f8e9fd9c03eb0",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "full-enterprise-workflow-en-US",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 95,
+      "log_SHA256": "af0bfc7c69ed150ad95be80c13651c61d3c456bc0592926824aa27ca8301ee1e",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    },
+    {
+      "suite": "full-enterprise-workflow-zh-CN",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 96,
+      "log_SHA256": "497acc5c6e9c1df11cba9ba53c0bd8604688bfc07c6309c0c5bd18d2ab3907e9",
+      "result": "PASS",
+      "attempt": "attempt-18-final-af1",
+      "executed_test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947"
+    }
+  ],
+  "passed": 48,
+  "failed": 0,
+  "full_run_receipt": {
+    "path": "attempt-18-final-af1/browser-summary.json",
+    "sha256": "1a407ac1a97672909d10e0ffc50b89616a5279b3293f34cd30857bac1a8262fe"
+  },
+  "focused_receipt": {
+    "path": "attempt-20-reviewer-af1/browser-summary.json",
+    "sha256": "aecf81db9f10e2aed83d4dcfd52df5c7cd44dd91e858de01b278f0239b8f5cae"
+  },
+  "changed_acceptance_source": [
+    "web/apps/labelstudio-e2e/src/support/commands.ts"
+  ],
+  "unchanged_default_login_prefix_sha256": "e3d39fd772ed4064e7c1a089be1a58c2ca9883cf809bd85c3d58bd0d6f29dcd2",
+  "other_suites_explicit_loginLocale": false,
+  "transport": "Native fixed production assets over loopback HTTP; trusted-browser HTTPS not tested",
+  "new_Compose": 0,
+  "source_overlay": false,
+  "Core_business": "PAUSED",
+  "IAM_operations": "PAUSED"
+}

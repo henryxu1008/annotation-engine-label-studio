@@ -1,3 +1,5 @@
+Historical receipt for the superseded 89c794e1 artifact. See the [active fixed candidate](issue76-recheck-20261013-latest.md).
+
 # Issue #76 LS candidate recheck, 2026-10-13
 
 This is the active local candidate for [Issue #76](https://github.com/qq550723504/annotation-engine-label-studio/issues/76) and [draft PR #77](https://github.com/qq550723504/annotation-engine-label-studio/pull/77). The [2026-10-09 receipt](issue76-release-candidate.md) remains historical evidence for its different image. IAM operations/recovery and Core business integration remain paused. No merge, production deployment, new Compose project or certificate-trust change occurred.

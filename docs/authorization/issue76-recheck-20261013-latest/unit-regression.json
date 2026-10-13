@@ -1,0 +1,30 @@
+{
+  "status": "PASS",
+  "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+  "suite_count": 23,
+  "passed": 689,
+  "failed": 0,
+  "new_cases": 9,
+  "negative_lifetime_cases": 7,
+  "normal_loading_controls": 2,
+  "collection_before": "4 fail / 1 pass",
+  "collection_after": "5 pass",
+  "tab_continuation_before": "2 fail / 1 pass",
+  "tab_continuation_after": "3 pass",
+  "tab_initializer_before": "1 fail / 3 pass; reproduces the native MST non-promise-yield error",
+  "tab_initializer_after": "4 pass",
+  "runtime": "Matching pinned Node20/frozen-lock dependencies; readonly changed-source mounts; no network or database; separate from native artifact acceptance",
+  "nonqualifying_tooling_attempts": [
+    "tabs-unit-before.log used an unsupported Jest matcher in the live control",
+    "datamanager-unit-all-corrected.log qualifies 688 earlier cases; datamanager-unit-all.log mounted the collection source at an incorrect path"
+  ],
+  "logs": {
+    "datastore-unit-before.log": "b52b04c28b1972a66d2aac303049a2f628a9047d3bb79e5299412a8f28dcc8e1",
+    "datastore-unit-after.log": "e8523340a4647e1889fe3520b54613ddcc0d7b014d6654abc8af2175a7c1f7da",
+    "tabs-unit-before-control.log": "6b91924c0a362b91fd4a6f3fcf98ded756945dcf37271cca24345d41cc0418c8",
+    "tabs-unit-after.log": "3830cba262fc1e470ecc99378d865dcfe2514d903f553629f95cfda9b8504414",
+    "tabs-initialization-before.log": "514484712e99914f37648e3c696b448a4f045e4b9e26b194cd40a543702656ee",
+    "tabs-initialization-after.log": "e1fb9508679afce31cf3d164f0010d4e8827a5c788e73c9f134d103aef48f92d",
+    "datamanager-unit-all-tabinit.log": "bc8ab0e664d5c5c074530d71def5e17abd1e326b29a4bf7a9aa6bf4d8e61329d"
+  }
+}

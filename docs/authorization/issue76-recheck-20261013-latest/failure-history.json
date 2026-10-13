@@ -1,0 +1,119 @@
+{
+  "status": "PRESERVED_INTERMEDIATE_RESULTS_NOT_FINAL_ACCEPTANCE",
+  "native_attempts": [
+    {
+      "attempt": "attempt-10-final",
+      "source": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+      "test_HEAD": "6e8a7679b91fc72f5e6640054a9e4374e7312aa6",
+      "passed": 44,
+      "failed": 0,
+      "suite_count": 8,
+      "summary_sha256": "4c551610c7169cdc6e36c27ca381f468abdd44b977b36f4b7a6eb0a0fecaa879"
+    },
+    {
+      "attempt": "attempt-12-reviewer-before",
+      "source": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+      "test_HEAD": "9fdda5c8ed97ad57098e9033411f52764eac41df",
+      "passed": 0,
+      "failed": 2,
+      "suite_count": 1,
+      "summary_sha256": "bc1ac4c5e838780b226b887883be829047a1d1954a955bf1cf07b56362120fb3"
+    },
+    {
+      "attempt": "attempt-13-final-8ec",
+      "source": "8ec60fe3a858fdeec6a454136362258f861e6a44",
+      "test_HEAD": "8ec60fe3a858fdeec6a454136362258f861e6a44",
+      "passed": 7,
+      "failed": 1,
+      "suite_count": 3,
+      "summary_sha256": "8bf8dc0507fe6f5e79404c1b71884bc7f38b5cf4a58a78b482a15722880fed39"
+    },
+    {
+      "attempt": "attempt-14-collection-before",
+      "source": "8ec60fe3a858fdeec6a454136362258f861e6a44",
+      "test_HEAD": "8ec60fe3a858fdeec6a454136362258f861e6a44",
+      "passed": 4,
+      "failed": 2,
+      "suite_count": 1,
+      "summary_sha256": "5e9bf331f184d903a33ea94c73a6c2514d8731d60ef62dc49d83eb9718f78632"
+    },
+    {
+      "attempt": "attempt-15-final-030",
+      "source": "030a8dc16892d7b0c4884ada18f3138d54825d8c",
+      "test_HEAD": "4a7eb38071c30266bdf749e2e20aa9f89aea7649",
+      "passed": 45,
+      "failed": 3,
+      "suite_count": 9,
+      "summary_sha256": "a5b5d15c2ac43b98ede6abf1fb6cd28ae47274f38b69c55ce431cbba962a3f33"
+    },
+    {
+      "attempt": "attempt-16-final-1a5",
+      "source": "1a5d64d1f9785e13730c98355f15f066a82f8dbf",
+      "test_HEAD": "1a5d64d1f9785e13730c98355f15f066a82f8dbf",
+      "passed": 47,
+      "failed": 1,
+      "suite_count": 9,
+      "summary_sha256": "42e167a96719eaba5ea57b9ff58bea3be69e585267fdc0770a9252c01bb0a8e8"
+    },
+    {
+      "attempt": "attempt-17-final-af1",
+      "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+      "test_HEAD": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+      "passed": 46,
+      "failed": 2,
+      "suite_count": 9,
+      "summary_sha256": "8732537e4586631a84a14ec89e14fddf75b6bbcf9dfde3b0204ca95a56092b44"
+    },
+    {
+      "attempt": "attempt-18-final-af1",
+      "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+      "test_HEAD": "e0447a72ace9ec6be2695436ab018498df456947",
+      "passed": 47,
+      "failed": 1,
+      "suite_count": 9,
+      "summary_sha256": "1a407ac1a97672909d10e0ffc50b89616a5279b3293f34cd30857bac1a8262fe"
+    },
+    {
+      "attempt": "attempt-19-reviewer-af1",
+      "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+      "test_HEAD": "3ed151d0589333ac64b62a65f5c30808eb200a76",
+      "passed": 1,
+      "failed": 1,
+      "suite_count": 1,
+      "summary_sha256": "7dc39f2e94b81d52274c7972f8a02e1d8868c6da79cec9577f473796f75c3c5f"
+    },
+    {
+      "attempt": "attempt-20-reviewer-af1",
+      "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+      "test_HEAD": "0253cc4d6a5a00a103e4d7b600641ee34276740a",
+      "passed": 2,
+      "failed": 0,
+      "suite_count": 1,
+      "summary_sha256": "aecf81db9f10e2aed83d4dcfd52df5c7cd44dd91e858de01b278f0239b8f5cae"
+    }
+  ],
+  "reviewer_fixture_lock": "a670 PR browser CI failed PostgreSQL nullable-join FOR UPDATE; native reviewer cases reproduce before removal of the unused join",
+  "collection_lifetime": "8ec native delayed import failed SDK.type; two explicit queued collection navigation cases reproduce before guards",
+  "tab_lifetime": "030 full 48-case attempt failed late tab SDK.invoke in both imports; collection guards alone were incomplete",
+  "outer_initializer": "1a5 full 48-case attempt passed 47 and failed English import with MST non-promise yield; dedicated unit regression reproduced before the enclosing initializer guard",
+  "test_premises": "Upload completion/reimport response, persisted locale PATCH/readback, account identity rendering, CSS animation/scroll readiness are awaited explicitly; application exceptions remain unsuppressed",
+  "driver_correction": "attempt-13-final-8ec ran only three suites/eight cases due the selection-list mistake; no full acceptance is inferred from it",
+  "failed_CI": [
+    {
+      "head": "b53707d8916ff0b42a81b657abc8dc1e15f96664",
+      "url": "https://github.com/qq550723504/annotation-engine-label-studio/actions/runs/38417679368",
+      "failure": "SQLite writer contention and pending import commit",
+      "fix": "PostgreSQL 17 ephemeral Actions service; wait upload-ready row and real reimport 201; local Compose unchanged"
+    },
+    {
+      "head": "a6701f058c1e066eef903fd57fcfc7535042020c",
+      "url": "https://github.com/qq550723504/annotation-engine-label-studio/actions/runs/38422429234",
+      "failure": "Fixture nullable annotation join in FOR UPDATE",
+      "fix": "Remove only the unnecessary fixture join; assignment lock preserved"
+    }
+  ],
+  "reviewer_locale_premise": "Final af1 image passed the other 46 cases; English-only reviewer assertions read Chinese after navigation before preference persistence completed. Explicit loginLocale now awaits PATCH 200, returned preference, enabled selected locale and GET readback. No product exception suppression or production-source change.",
+  "provenance_limit": "attempt-14-collection-before contains a stale test_HEAD field from the prior activation. Do not use that field as exact checkout provenance; its retained logs reproduce the queued load failure. Final browser source hashes and current test HEAD are recorded separately.",
+  "compilation_tooling": "A preparation invocation omitted the checkout argument; no Cypress cases ran in that preparation. The argument was corrected before attempt-18.",
+  "reviewer_request_matcher": "The exact slash-suffixed interceptor failed to match the core API proxy normalized request path (web/libs/core/src/lib/api-proxy/index.ts:367 strips trailing slashes). The final matcher allows the actual optional slash form. Matching actor title, loaded preference, PATCH response and stored readback are explicit test premises. Default login and the other 46 same-image cases remain unchanged."
+}
