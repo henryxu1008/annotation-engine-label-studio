@@ -48,7 +48,7 @@ Cypress.Commands.add('loginAs', (email: string, password: string, nextPath = '/'
       cy.get('[data-testid="menu-language-select"]')
         .should('have.value', body.preference ?? 'auto').and('not.be.disabled').then(($select) => {
           if ($select.val() !== loginLocale) {
-            cy.intercept('PATCH', '/api/current-user/locale/').as('loginLocaleSaved');
+            cy.intercept({ method: 'PATCH', pathname: /^\/api\/current-user\/locale\/?$/ }).as('loginLocaleSaved');
             cy.wrap($select).select(loginLocale);
             cy.wait('@loginLocaleSaved').then(({ response }) => {
               expect(response?.statusCode).to.eq(200);
