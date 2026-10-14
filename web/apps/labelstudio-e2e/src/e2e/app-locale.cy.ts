@@ -452,7 +452,8 @@ describe('main application display locale', () => {
     cy.get('[data-testid="menu-language-select"]').should('be.visible').select('zh-CN');
     cy.get('html').should('have.attr', 'lang', 'zh-CN');
     cy.get('[data-testid="user-menu-trigger"]').click();
-    cy.get('[data-testid="menu-language-select"]').should('not.be.visible');
+    // A settled close unmounts the menu; do not require a hidden control to exist.
+    cy.get('[data-testid="menu-language-select"]').should('not.exist');
     cy.get('[data-testid="user-menu-trigger"]').click();
     cy.get('[data-testid="menu-language-select"]').should('be.visible').select('en-US');
     cy.get('html').should('have.attr', 'lang', 'en-US');
