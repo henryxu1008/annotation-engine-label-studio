@@ -628,6 +628,7 @@ export default types
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
+      if (!entity || entity.isReadOnly()) return;
       const event = entity.exists ? "updateAnnotation" : "submitAnnotation";
 
       entity.beforeSend();
@@ -660,6 +661,7 @@ export default types
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
+      if (!entity || entity.isReadOnly()) return;
 
       entity.beforeSend();
 
@@ -686,7 +688,7 @@ export default types
     }
 
     function skipTask(extraData) {
-      if (self.isSubmitting) return;
+      if (self.isSubmitting || self.annotationStore.selected?.isReadOnly()) return;
       const isEnterprise = window.APP_SETTINGS?.billing?.enterprise;
 
       // Manager roles that can force-skip unskippable tasks (OW=Owner, AD=Admin, MA=Manager)
@@ -707,7 +709,7 @@ export default types
     }
 
     function unskipTask() {
-      if (self.isSubmitting) return;
+      if (self.isSubmitting || self.annotationStore.selected?.isReadOnly()) return;
       handleSubmittingFlag(() => {
         getEnv(self).events.invoke("unskipTask", self);
       }, "Error during cancel skipping task, try again");

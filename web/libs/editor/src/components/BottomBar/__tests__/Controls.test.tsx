@@ -6,6 +6,7 @@ import { Controls } from "../Controls";
 jest.mock("@humansignal/ui", () => {
   const { forwardRef } = jest.requireActual("react");
   return {
+    ButtonGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     Button: forwardRef(({ children, ...props }: { children: React.ReactNode }) => {
       return (
         <button data-testid="button" {...props}>
@@ -83,6 +84,35 @@ const setupAppSettings = (options: { role?: string; enterprise?: boolean } = {})
 };
 
 describe("Controls", () => {
+  test("keeps review acceptance separate from readonly result editing", () => {
+    const readonlyReview = { ...mockAnnotation, history: mockHistory, canBeReviewed: true, isReadOnly: () => true };
+    const reviewStore = { ...mockStore, hasInterface: (name: string) => name === "review",
+      annotationStore: { ...mockStore.annotationStore, selected: readonlyReview } };
+    const { getByTestId } = render(<Provider store={reviewStore}>
+      <Controls history={mockHistory} annotation={readonlyReview} />
+    </Provider>);
+    expect(getByTestId("bottombar-accept-button")).not.toBeDisabled();
+  });
+
+  test.each([true, false])("disables readonly annotation writes even when empty results are allowed: new=%s", (userGenerate) => {
+    const readonlyStore = {
+      ...mockStore,
+      hasInterface: (name: string) => ["submit", "update", "skip"].includes(name),
+      submitAnnotation: jest.fn(),
+      updateAnnotation: jest.fn(),
+    };
+    const readonlyAnnotation = { ...mockAnnotation, userGenerate, isReadOnly: () => true };
+    const { getByTestId } = render(<Provider store={readonlyStore}>
+      <Controls history={mockHistory} annotation={readonlyAnnotation} />
+    </Provider>);
+    const save = getByTestId(userGenerate ? "bottombar-submit-button" : "bottombar-update-button");
+    expect(save).toBeDisabled();
+    expect(getByTestId("bottombar-skip-button")).toBeDisabled();
+    fireEvent.click(save);
+    expect(readonlyStore.submitAnnotation).not.toHaveBeenCalled();
+    expect(readonlyStore.updateAnnotation).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset APP_SETTINGS before each test

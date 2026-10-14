@@ -85,6 +85,8 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
 
     const [isInProgress, setIsInProgress] = useState(false);
     const disabled = !annotationEditable || store.isSubmitting || historySelected || isInProgress;
+    // Reviewing an immutable annotation is separate from editing its results.
+    const writeDisabled = disabled || annotation.isReadOnly?.() === true;
     const submitDisabled = store.hasInterface("annotations:deny-empty") && results.length === 0;
     const hasIncompleteRegions = annotation.hasIncompletePolygons;
 
@@ -193,19 +195,19 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
           <IconBan /> {t("wasSkipped")}
         </div>,
       );
-      buttons.push(<UnskipButton key="unskip" disabled={disabled} store={store} />);
+      buttons.push(<UnskipButton key="unskip" disabled={writeDisabled} store={store} />);
     } else {
       if (store.hasInterface("skip")) {
         const onSkipWithComment = (e: React.MouseEvent, action: () => any) => {
           handleActionWithComments(e, action, t("commentBeforeSkip"));
         };
 
-        buttons.push(<SkipButton key="skip" disabled={disabled} store={store} onSkipWithComment={onSkipWithComment} />);
+        buttons.push(<SkipButton key="skip" disabled={writeDisabled} store={store} onSkipWithComment={onSkipWithComment} />);
       }
 
       // Also disable when overlap is reached (only when feature flag is enabled)
       const overlapDisabled = isFF(FF_FIT_1304_STRICT_OVERLAP) && store.overlapReached === true;
-      const isDisabled = disabled || submitDisabled || overlapDisabled || hasIncompleteRegions;
+      const isDisabled = writeDisabled || submitDisabled || overlapDisabled || hasIncompleteRegions;
 
       const useExitOption = !isDisabled && isNotQuickView;
 

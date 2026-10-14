@@ -481,3 +481,9 @@ DraftGuard also depends on ToastProvider's stable `show` callback rather than
 the context value object, which changes when feedback is rendered. Controlled
 context-replacement regressions keep failed and pending saves blocked, including
 a locale change during the request; successful saves release navigation once.
+
+Readonly annotation results also disable submit/update/skip/unskip controls,
+including projects that permit empty annotations. AppStore rejects these editing
+actions before dispatch when called through keyboard/action paths. Review
+accept/reject keeps its separate existing controls and authorization boundary;
+readonly results do not themselves remove a Reviewer's decision authority.

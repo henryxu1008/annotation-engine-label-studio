@@ -89,6 +89,19 @@ function createStore(snapshot = {}, envOverrides) {
 }
 
 describe("AppStore", () => {
+  it.each(["submitAnnotation", "updateAnnotation", "skipTask", "unskipTask"])("does not dispatch %s for a readonly selection through keyboard/action calls", (action) => {
+    const store = createStore({ queueTotal: 5, queuePosition: 1 });
+    store.initializeStore({ annotations: [{ result: [] }] });
+    const selected = store.annotationStore.selected;
+    selected.setReadonly(true);
+    const position = store.queuePosition;
+    mockInvoke.mockClear();
+    store[action]();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(store.queuePosition).toBe(position);
+    expect(selected.readonly).toBe(true);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockHasEvent.mockReturnValue(false);
