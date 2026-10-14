@@ -79,6 +79,92 @@ class TestTaskAssignmentAuthorization(APITestCase):
         assert response.status_code == 201, response.json()
         return Annotation.objects.get(pk=response.json()['id'])
 
+    def _next_toolbar_task(self, user, *, project=None, selected=None, actor_fields=None):
+        self.client.force_authenticate(user=user)
+        data = {'selectedItems': selected or {'all': True, 'excluded': []}}
+        data.update(actor_fields or {})
+        return self.client.post(
+            f'/api/dm/actions/?project={(project or self.project).id}&id=next_task',
+            data=data,
+            format='json',
+        )
+
+    def test_labeling_toolbar_next_task_uses_annotator_assignment_scope(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200, response.data
+        assert response.data['id'] == self.shared_task.id
+
+    def test_labeling_toolbar_next_task_preserves_manager_access(self):
+        response = self._next_toolbar_task(self.manager)
+        assert response.status_code == 200, response.data
+        assert response.data['id'] in (self.shared_task.id, self.other_task.id)
+
+    def test_labeling_toolbar_selected_ids_cannot_include_another_annotators_task(self):
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [self.other_task.id]},
+        )
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_selected_ids_cannot_include_unassigned_task(self):
+        unassigned = TaskFactory(project=self.project)
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [unassigned.id]},
+        )
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_next_task_does_not_trust_actor_fields(self):
+        response = self._next_toolbar_task(
+            self.annotator_a,
+            actor_fields={'user_id': self.manager.id, 'actor_id': self.annotator_b.id, 'assignee_id': self.annotator_b.id},
+        )
+        assert response.status_code == 200, response.data
+        assert response.data['id'] == self.shared_task.id
+
+    def test_labeling_toolbar_reviewer_cannot_enter_annotation_queue(self):
+        response = self._next_toolbar_task(self.reviewer)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_next_task_rechecks_revoked_membership(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200
+        ProjectMember.objects.filter(project=self.project, user=self.annotator_a).update(enabled=False)
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_next_task_rechecks_cancelled_assignment_after_lock(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.delete(f'/api/task-assignments/{self.assignment_a.id}/').status_code == 204
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_next_task_cannot_cross_project_scope(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_b)
+        other_project_task = TaskFactory(project=other_project)
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [other_project_task.id]},
+        )
+        assert response.status_code == 404
+        response = self._next_toolbar_task(self.annotator_a, project=other_project)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_rechecks_object_access_after_sampling(self):
+        def revoke_after_sampling(*args):
+            ProjectMember.objects.filter(project=self.project, user=self.annotator_a).update(enabled=False)
+            return self.shared_task, {}
+
+        with patch('data_manager.actions.next_task.get_next_task', side_effect=revoke_after_sampling):
+            response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_rejects_out_of_project_sampler_result(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_a)
+        other_task = TaskFactory(project=other_project)
+        with patch('data_manager.actions.next_task.get_next_task', return_value=(other_task, {})):
+            response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
+
 
     def test_cancelled_assignment_blocks_annotation_update_and_delete(self):
         annotation = self._create_annotation(self.annotator_a, self.shared_task)

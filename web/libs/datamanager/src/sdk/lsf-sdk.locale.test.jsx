@@ -2,6 +2,68 @@ import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { createLocaleRuntime } from "@humansignal/i18n";
 import { LSFWrapper } from "./lsf-sdk";
+import { Modal } from "../components/Common/Modal/Modal";
+
+it.each(["en-US", "zh-CN"])("does not show completed work when a %s labeling queue request fails", async (locale) => {
+  const runtime = createLocaleRuntime(locale);
+  const confirm = jest.spyOn(Modal, "confirm").mockImplementation(() => {});
+  const lsf = { setFlags: jest.fn() };
+  const store = {
+    taskStore: { loadNextTask: jest.fn().mockResolvedValue(false) },
+    closeLabeling: jest.fn(),
+  };
+  const wrapper = {
+    destroyed: false,
+    lsf,
+    labelStream: true,
+    datamanager: { store, localeRuntime: runtime },
+    withinLoadingState: async (callback) => callback(),
+    selectTask: jest.fn(),
+    loadTask: jest.fn().mockResolvedValue(undefined),
+  };
+
+  try {
+    await LSFWrapper.prototype.loadTask.call(wrapper);
+    expect(lsf.setFlags).toHaveBeenCalledWith({ noTask: false });
+    expect(wrapper.selectTask).not.toHaveBeenCalled();
+    const options = confirm.mock.lastCall[0];
+    expect(options.title).toBe(locale === "zh-CN" ? "无法读取标注任务" : "Unable to load labeling tasks");
+    expect(options.okText).toBe(locale === "zh-CN" ? "重试" : "Retry");
+    expect(options.cancelText).toBe(locale === "zh-CN" ? "返回任务列表" : "Back to task list");
+    await options.onOk();
+    options.onCancel();
+    expect(wrapper.loadTask).toHaveBeenCalledTimes(1);
+    expect(store.closeLabeling).toHaveBeenCalledTimes(1);
+    wrapper.destroyed = true;
+    await options.onOk();
+    options.onCancel();
+    expect(wrapper.loadTask).toHaveBeenCalledTimes(1);
+    expect(store.closeLabeling).toHaveBeenCalledTimes(1);
+  } finally {
+    confirm.mockRestore();
+    runtime.destroy();
+  }
+});
+
+it("keeps the completed state for a genuinely exhausted labeling queue", async () => {
+  const confirm = jest.spyOn(Modal, "confirm").mockImplementation(() => {});
+  const lsf = { setFlags: jest.fn() };
+  const wrapper = {
+    destroyed: false,
+    lsf,
+    labelStream: true,
+    datamanager: { store: { taskStore: { loadNextTask: jest.fn().mockResolvedValue(null) } } },
+    withinLoadingState: async (callback) => callback(),
+    selectTask: jest.fn(),
+  };
+  try {
+    await LSFWrapper.prototype.loadTask.call(wrapper);
+    expect(lsf.setFlags).toHaveBeenCalledWith({ noTask: true });
+    expect(confirm).not.toHaveBeenCalled();
+  } finally {
+    confirm.mockRestore();
+  }
+});
 
 it("renders SDK operation feedback in the current locale while keeping the support link", () => {
   const runtime = createLocaleRuntime("en-US");

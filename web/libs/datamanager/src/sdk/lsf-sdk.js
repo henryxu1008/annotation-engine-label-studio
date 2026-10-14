@@ -345,10 +345,26 @@ export class LSFWrapper {
          * If we're in label stream and there's no task – end the stream
          * Otherwise allow user to continue exploring tasks after finished labelling
          */
-        const noTask = this.labelStream && !nextTask;
+        const noTask = this.labelStream && nextTask === null;
 
         if (this.destroyed || this.lsf !== lsf) return;
         lsf.setFlags({ noTask });
+
+        if (this.labelStream && nextTask === false) {
+          const t = (key) => this.datamanager.localeRuntime.t(`datamanager:${key}`);
+          Modal.confirm({
+            title: t("labelQueueLoadFailed"),
+            body: t("labelQueueLoadFailedDescription"),
+            okText: t("retryQueue"),
+            cancelText: t("backToTaskList"),
+            onOk: () => {
+              if (!this.destroyed && this.lsf === lsf) return this.loadTask();
+            },
+            onCancel: () => {
+              if (!this.destroyed && this.lsf === lsf) this.datamanager.store?.closeLabeling();
+            },
+          });
+        }
 
         return nextTask;
       });

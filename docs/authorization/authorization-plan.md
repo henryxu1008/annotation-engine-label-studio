@@ -119,6 +119,16 @@ Exit criteria:
 
 ## Negative authorization matrix
 
+The labeling toolbar uses the hidden Data Manager `next_task` action. That read
+must accept effective Annotators as well as Managers, and intersect prepared
+filters/selected IDs with the authenticated user's existing task-assignment
+queryset before sampling. Reviewer, revoked membership, cancelled assignment,
+unassigned and cross-project task IDs remain denied. Submitted actor fields do
+not select the queue owner. Task locks do not replace this assignment check.
+All other Data Manager actions retain the Manager mutation gate. Queue request
+errors are displayed as recoverable errors in the chosen language; only an
+actual exhausted queue is presented as completed work.
+
 PostgreSQL candidate validation must include the existing submission/review,
 assignment and composed collaboration tests as well as session tests. #76
 reproduced PostgreSQL rejecting `FOR UPDATE` over nullable annotation and

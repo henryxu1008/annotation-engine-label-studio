@@ -214,7 +214,9 @@ export const create = (columns) => {
         const responseStatus = taskData?.$meta?.status;
 
         if (!taskData || taskData.error || (responseStatus && responseStatus >= 400)) {
-          return null;
+          // null is reserved for an exhausted queue (404). A request failure
+          // must not render "all tasks completed" in the labeling editor.
+          return false;
         }
 
         const labelStreamModeChanged =

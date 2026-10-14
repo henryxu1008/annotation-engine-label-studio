@@ -722,10 +722,19 @@ class ProjectActionsAPI(APIView):
     def post(self, request):
         pk = int_from_request(request.GET, 'project', 0)
         project = get_visible_project_or_404(request, pk)
-        require_project_manager(request, project)
+        action_id = request.GET.get('id', None)
+        # The labeling toolbar reads its queue through this action endpoint.
+        # Keep mutation actions manager-only; next_task uses the existing
+        # labeling role and server-side assignment scope instead.
+        if action_id == 'next_task':
+            authorization.require(
+                authorization.project_role(resolve_principal(request), project) in ('manager', 'annotator'),
+                'A project labeling role is required for this operation.',
+            )
+        else:
+            require_project_manager(request, project)
 
         # keep ordering only when needed, otherwise drop to avoid expensive sorts/annotations
-        action_id = request.GET.get('id', None)
         prepare_params = get_prepare_params(request, project)
         if not flag_set(
             'fflag_root_223_optimize_delete_predictions', organization=project.organization
@@ -735,6 +744,10 @@ class ProjectActionsAPI(APIView):
             prepare_params.ordering = []
             queryset = Task.prepared.only_filtered(prepare_params=prepare_params)
             queryset = queryset.order_by()
+
+        if action_id == 'next_task':
+            allowed_task_ids = Task.objects.for_user(request.user).filter(project=project).values_list('id', flat=True)
+            queryset = queryset.filter(id__in=allowed_task_ids)
 
         # wrong action id
         if action_id is None:
