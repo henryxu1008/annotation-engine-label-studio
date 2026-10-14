@@ -536,7 +536,7 @@ export class LSFWrapper {
         id: "task-assignment-read-only",
         message: this.datamanager.localeRuntime.t("datamanager:taskAssignmentReadOnly"),
         type: "info",
-        duration: -1,
+        duration: Number.POSITIVE_INFINITY,
       });
     } else {
       this.datamanager.invoke("toast:dismiss", { id: "task-assignment-read-only" });
