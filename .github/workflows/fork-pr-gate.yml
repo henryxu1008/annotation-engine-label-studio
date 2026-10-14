@@ -63,6 +63,9 @@ jobs:
           python-version: "3.11"
           cache: poetry
 
+      - name: Verify isolated candidate build and archive contracts
+        run: python -m unittest discover -s scripts -p 'test_candidate_*.py' -v
+
       - name: Install OS dependencies
         run: |
           sudo apt-get update

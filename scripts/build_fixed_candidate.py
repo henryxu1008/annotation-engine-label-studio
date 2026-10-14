@@ -23,6 +23,9 @@ def sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+RECIPE_PATH = "deploy/candidate/Dockerfile.debian"
+
+
 def main():
     if not __debug__:
         raise SystemExit("Git object assertions require Python without optimization")
@@ -43,6 +46,11 @@ def main():
         parser.error("Output must be outside the repository")
     if run(["git", "rev-parse", args.source + "^{commit}"], repo) != args.source:
         parser.error("Source object does not resolve to the supplied SHA")
+    try:
+        recipe_bytes = subprocess.check_output(["git", "show", args.source + ":" + RECIPE_PATH],
+                                               cwd=repo, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError:
+        parser.error("Source commit does not contain the admitted candidate recipe: " + RECIPE_PATH)
     root.mkdir(parents=True, exist_ok=False)
     evidence = root / "evidence"
     evidence.mkdir()
@@ -59,8 +67,8 @@ def main():
     installer_url = "https://install.python-poetry.org"
     with urllib.request.urlopen(installer_url, timeout=60) as response:
         installer.write_bytes(response.read())
-    recipe = Path(__file__).resolve().parents[1] / "deploy/candidate/Dockerfile.debian"
-    (root / "Dockerfile.debian").write_bytes(recipe.read_bytes())
+    recipe = root / "Dockerfile.debian"
+    recipe.write_bytes(recipe_bytes)
     bases = {}
     for name, ref in (("node", args.node_image), ("python", args.python_image)):
         manifest = json.loads(run(["docker", "buildx", "imagetools", "inspect", ref,
@@ -108,7 +116,8 @@ def main():
     inputs = {"source_commit": args.source, "source_tree": run(["git", "rev-parse", "HEAD^{tree}"], source),
               "version": args.version, "platform": "linux/amd64", "tag": args.tag, "branch": args.branch,
               "source_archive_sha256": sha(archive), "context_sha256": sha(context),
-              "dockerfile_sha256": sha(recipe), "installer": {"url": installer_url, "sha256": sha(installer)},
+              "dockerfile_git_path": RECIPE_PATH, "dockerfile_sha256": sha(recipe),
+              "installer": {"url": installer_url, "sha256": sha(installer)},
               "bases": bases, "verified_git_blob_count": verified, "executable_file_count": executables,
               "git_tracked_links": links, "frontend_history": "depth-1 source snapshot; candidate identity",
               "lockfiles": {name: hashlib.sha256(subprocess.check_output(["git", "show", args.source + ":" + name], cwd=source)).hexdigest()
