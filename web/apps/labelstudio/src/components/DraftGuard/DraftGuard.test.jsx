@@ -25,9 +25,13 @@ it.each([200, 400])("keeps navigation blocked across a locale change until draft
   const confirmNavigation = jest.fn();
   draftGuardCallback.current = confirmNavigation;
   act(() => { runtime.updateLocale("zh-CN"); });
+  // The real ToastProvider replaces its context value when a toast is shown.
+  // Its show callback remains stable and must not release pending navigation.
+  view.rerender(<Provider><ToastContext.Provider value={{ ...toast }}><DraftGuard /></ToastContext.Provider></Provider>);
   expect(confirmNavigation).not.toHaveBeenCalled();
   expect(unsubscribe).not.toHaveBeenCalled();
   await act(async () => { complete({ $meta: { status } }); });
+  view.rerender(<Provider><ToastContext.Provider value={{ ...toast }}><DraftGuard /></ToastContext.Provider></Provider>);
   expect(toast.show).toHaveBeenCalledWith({
     message: status === 200 ? "草稿已保存" : "草稿未能保存，请重试后再离开此页。",
     type: status === 200 ? "info" : "error",

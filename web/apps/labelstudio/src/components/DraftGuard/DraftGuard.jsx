@@ -11,7 +11,7 @@ export const draftGuardCallback = {
 };
 
 export const DraftGuard = () => {
-  const toast = useContext(ToastContext);
+  const { show: showToast } = useContext(ToastContext);
   const history = useHistory();
   const runtime = useLocaleRuntime();
 
@@ -43,10 +43,10 @@ export const DraftGuard = () => {
           const status = res?.$meta?.status;
 
           if (status === 200 || status === 201) {
-            toast.show({ message: runtime.t("datamanager:draftSaved"), type: "info" });
+            showToast({ message: runtime.t("datamanager:draftSaved"), type: "info" });
             unblock();
           } else if (status !== undefined) {
-            toast.show({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
+            showToast({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
           } else {
             unblock();
           }
@@ -60,7 +60,7 @@ export const DraftGuard = () => {
       unblock();
       unsubscribe();
     };
-  }, [history, runtime, toast]);
+  }, [history, runtime, showToast]);
 
   return <></>;
 };

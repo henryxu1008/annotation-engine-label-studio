@@ -476,3 +476,8 @@ The shared ToastProvider maps its documented `duration=-1` contract to Radix's
 supported `Infinity` duration. Passing -1 through previously closed permanent
 guidance immediately. Mounted-provider tests retain the normal timed-close
 control and verify that dismissing another toast ID cannot remove this guidance.
+
+DraftGuard also depends on ToastProvider's stable `show` callback rather than
+the context value object, which changes when feedback is rendered. Controlled
+context-replacement regressions keep failed and pending saves blocked, including
+a locale change during the request; successful saves release navigation once.

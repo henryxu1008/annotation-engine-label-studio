@@ -23,8 +23,8 @@ describe("Annotator labeling entry and queue failures", () => {
   for (const locale of ["en-US", "zh-CN"] as const) {
     it(`explains the unassigned Manager's read-only editor in ${locale}`, () => {
       enterProject(locale, "manager");
-      cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" } }).as("managerTask");
-      cy.get('[data-testid="dm-label-all-toolbar"]').click();
+      cy.intercept({ method: "GET", pathname: `/api/tasks/${fixture.tasks.a.id}` }).as("managerTask");
+      cy.visit(`/projects/${fixture.project_id}/data?task=${fixture.tasks.a.id}`);
       cy.wait("@managerTask").then(({ response }) => {
         expect(response?.statusCode).to.eq(200);
         expect(response?.body.can_label).to.eq(false);
