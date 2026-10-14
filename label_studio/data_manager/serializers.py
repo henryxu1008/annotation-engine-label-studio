@@ -464,6 +464,7 @@ class DataManagerTaskSerializer(TaskSerializer):
     state = FSMStateField(read_only=True)  # FSM state - automatically uses annotation if present
     assignment_id = serializers.SerializerMethodField(required=False, read_only=True)
     assignment_version = serializers.SerializerMethodField(required=False, read_only=True)
+    can_label = serializers.SerializerMethodField(read_only=True)
 
     CHAR_LIMITS = 500
 
@@ -540,6 +541,10 @@ class DataManagerTaskSerializer(TaskSerializer):
     def get_assignment_version(self, task):
         assignment = self._get_current_assignment(task)
         return assignment.version if assignment else None
+
+    def get_can_label(self, task):
+        request = self.context.get('request')
+        return request is not None and authorization.can_label_task(resolve_principal(request), task)
 
     def _pretty_results(self, task, field, unique=False):
         if not hasattr(task, field) or getattr(task, field) is None:
