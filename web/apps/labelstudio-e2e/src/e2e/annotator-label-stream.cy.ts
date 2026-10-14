@@ -3,7 +3,8 @@
 type StreamFixture = {
   password: string;
   users: { annotator_a: { email: string } };
-  full_flow: { project_id: number; tasks: { a: { id: number }; stale: { id: number } } };
+  project_id: number;
+  tasks: { a: { id: number } };
 };
 
 describe("Annotator labeling entry and queue failures", () => {
@@ -15,7 +16,7 @@ describe("Annotator labeling entry and queue failures", () => {
     cy.get('[data-testid="language-preference-select"]').select(locale);
     cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
     cy.request("/api/current-user/locale/").its("body.preference").should("eq", locale);
-    cy.visit(`/projects/${fixture.full_flow.project_id}/data`);
+    cy.visit(`/projects/${fixture.project_id}/data`);
     cy.get('[data-testid="dm-label-all-toolbar"]', { timeout: 30000 }).should("be.visible");
   };
 
@@ -27,7 +28,7 @@ describe("Annotator labeling entry and queue failures", () => {
       cy.get('[data-testid="dm-label-all-toolbar"]').click();
       cy.wait("@nextTask").then(({ response }) => {
         expect(response?.statusCode).to.eq(200);
-        expect(response?.body.id).to.be.oneOf([fixture.full_flow.tasks.a.id, fixture.full_flow.tasks.stale.id]);
+        expect(response?.body.id).to.eq(fixture.tasks.a.id);
       });
       cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible")
         .and("contain.text", locale === "zh-CN" ? "提交" : "Submit");
