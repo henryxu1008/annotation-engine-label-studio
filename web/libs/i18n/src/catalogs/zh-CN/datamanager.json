@@ -287,5 +287,11 @@
   "decreaseColumns": "减少列数",
   "increaseColumns": "增加列数",
   "fitImagesToWidth": "图片适应宽度",
-  "gridSettings": "网格设置"
+  "gridSettings": "网格设置",
+  "draftSaveError": "草稿未能保存，请重试后再离开此页。",
+  "taskAssignmentReadOnly": "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。",
+  "exportImmutableTitle": "请通过“发布”导出已获批提交",
+  "exportImmutableDescription": "此项目已有正式提交，传统项目导出已停用。请使用“发布”下载已获批的不可变提交；待审核提交不能发布。",
+  "exportFormatsLoading": "正在读取导出格式…",
+  "exportFormatsUnavailable": "无法读取导出格式。请关闭此窗口后重试。"
 }

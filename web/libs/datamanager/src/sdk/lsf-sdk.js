@@ -217,6 +217,7 @@ export class LSFWrapper {
     const queueLeft = dm.store.project.queue_left;
     const queuePosition = queueDone ? queueDone + 1 : queueLeft ? queueTotal - queueLeft + 1 : 1;
     const commentClassificationConfig = dm.store.project.comment_classification_config;
+    this.editorInterfaces = [...interfaces];
 
     const lsfProperties = {
       user: options.user,
@@ -484,6 +485,7 @@ export class LSFWrapper {
 
     await this.setAnnotation(annotationID, fromHistory || isRejectedQueue, selectPrediction);
     if (this.destroyed || !this.lsf) return;
+    this.applyTaskAccess();
     this.setLoading(false);
 
     if (isFF(FF_FIT_1304_STRICT_OVERLAP) && this.overlapReached) {
@@ -520,6 +522,25 @@ export class LSFWrapper {
       type: "info",
       duration: -1,
     });
+  }
+
+  applyTaskAccess() {
+    const readOnly = this.task?.can_label === false;
+    for (const name of ["submit", "update", "skip", "annotations:add-new", "annotations:delete", "ground-truth"]) {
+      this.lsf.toggleInterface(name, !readOnly && (this.editorInterfaces ?? []).includes(name));
+    }
+    if (readOnly) {
+      for (const annotation of this.annotations) annotation.setReadonly(true);
+      this.currentAnnotation?.setReadonly(true);
+      this.datamanager.invoke("toast", {
+        id: "task-assignment-read-only",
+        message: this.datamanager.localeRuntime.t("datamanager:taskAssignmentReadOnly"),
+        type: "info",
+        duration: -1,
+      });
+    } else {
+      this.datamanager.invoke("toast:dismiss", { id: "task-assignment-read-only" });
+    }
   }
 
   /**
@@ -681,6 +702,7 @@ export class LSFWrapper {
     }
 
     if (annotation) {
+      if (this.task?.can_label === false) annotation.setReadonly(true);
       // We want to be sure this is explicitly understood to be a prediction and the
       // user wants to select it directly
       if (selectPrediction && annotation.type === "prediction") {
@@ -1211,6 +1233,7 @@ export class LSFWrapper {
   _selectAnnotationTimeout = null;
   _debouncedFirstOldSelection = undefined;
   onSelectAnnotation = (prevAnnotation, nextAnnotation, options) => {
+    if (this.task?.can_label === false) prevAnnotation?.setReadonly(true);
     // NOTE on parameter naming: LSF fires selectAnnotation(newAnnotation, oldAnnotation).
     // Despite the names here, prevAnnotation = the NEWLY selected annotation,
     // nextAnnotation = the PREVIOUSLY selected annotation (before this selection).
@@ -1510,6 +1533,7 @@ export class LSFWrapper {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.datamanager.invoke("toast:dismiss", { id: "task-assignment-read-only" });
     // Clean up overlap error event listeners and dismiss toast (only when feature flag is enabled)
     if (isFF(FF_FIT_1304_STRICT_OVERLAP)) {
       window.removeEventListener("overlap-error-next-task", this.handleOverlapNextTask);

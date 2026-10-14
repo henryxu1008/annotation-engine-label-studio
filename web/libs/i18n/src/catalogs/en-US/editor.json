@@ -159,5 +159,10 @@
   "validationParentTag": "Tag {{value}} must be a child of one of these tags: {{validType}}.",
   "validationBadType": "Attribute {{field}} of tag {{modelName}} has an invalid type. Valid types: {{validType}}.",
   "validationInternal": "Internal error. See the browser console for more information. Try again or contact support.",
-  "validationUnknown": "The configuration could not be validated."
+  "validationUnknown": "The configuration could not be validated.",
+  "createRelation": "Create Relation",
+  "editRegionMeta": "Edit region's meta",
+  "showSelectedRegion": "Show selected region",
+  "hideSelectedRegion": "Hide selected region",
+  "deleteSelectedRegion": "Delete selected region"
 }

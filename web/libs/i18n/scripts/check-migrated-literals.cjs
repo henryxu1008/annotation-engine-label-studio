@@ -20,8 +20,8 @@ const allowed = {
     { text: "Members", line: 523, reason: "Static route metadata; settings menu and breadcrumb translate by fixed child path." },
   ],
   "apps/labelstudio/src/pages/ExportPage/ExportPage.jsx": [
-    { text: "label-studio export", line: 322, reason: "Executable CLI syntax shown verbatim in timeout guidance." },
-    { text: "--export-path=<output-path>", line: 322, reason: "Executable CLI argument syntax shown verbatim in timeout guidance." },
+    { text: "label-studio export", line: 345, reason: "Executable CLI syntax shown verbatim in timeout guidance." },
+    { text: "--export-path=<output-path>", line: 345, reason: "Executable CLI argument syntax shown verbatim in timeout guidance." },
   ],
   "apps/labelstudio/src/pages/Settings/index.jsx": [
     { text: "Settings", line: 90, reason: "Static route metadata; RoutesProvider translates the settings breadcrumb by route path." },

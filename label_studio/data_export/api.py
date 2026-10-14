@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 def require_immutable_release_boundary(project):
     """Prevent mutable project exports once formal submissions exist."""
     if Submission.objects.filter(assignment__project=project).exists():
-        raise ValidationError(
+        error = ValidationError(
             {
                 'detail': (
                     'Project exports are disabled after formal submissions exist. '
@@ -53,6 +53,8 @@ def require_immutable_release_boundary(project):
                 )
             }
         )
+        error.display_context = {'reason': 'IMMUTABLE_RELEASE_REQUIRED'}
+        raise error
     return project
 
 
@@ -99,11 +101,10 @@ class ExportFormatsListAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.projects_view
 
     def get_queryset(self):
-        projects = managed_projects_for_user(self.request)
-        return projects.exclude(task_assignments__submissions__isnull=False).distinct()
+        return managed_projects_for_user(self.request)
 
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
+        project = require_immutable_release_boundary(self.get_object())
         formats = DataExport.get_export_formats(project)
         return Response(formats)
 

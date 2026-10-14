@@ -79,6 +79,26 @@ class TestTaskAssignmentAuthorization(APITestCase):
         assert response.status_code == 201, response.json()
         return Annotation.objects.get(pk=response.json()['id'])
 
+    def test_task_editor_capability_requires_the_current_actors_active_assignment(self):
+        self.client.force_authenticate(user=self.manager)
+        manager_view = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert manager_view.status_code == 200
+        assert manager_view.json()['can_label'] is False
+        denied = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {'result': []}, format='json')
+        assert denied.status_code == 403
+
+        self.client.force_authenticate(user=self.annotator_a)
+        assigned_view = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert assigned_view.status_code == 200
+        assert assigned_view.json()['can_label'] is True
+        assert assigned_view.json()['assignment_id'] == self.assignment_a.pk
+
+        TaskAssignment.objects.filter(pk=self.assignment_a.pk).update(status=TaskAssignment.Status.CANCELLED)
+        revoked = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert revoked.status_code == 404
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.get(f'/api/tasks/{self.shared_task.pk}/').json()['can_label'] is False
+
     def _next_toolbar_task(self, user, *, project=None, selected=None, actor_fields=None):
         self.client.force_authenticate(user=user)
         data = {'selectedItems': selected or {'all': True, 'excluded': []}}

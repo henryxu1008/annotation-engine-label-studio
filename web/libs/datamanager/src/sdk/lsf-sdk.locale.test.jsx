@@ -4,6 +4,35 @@ import { createLocaleRuntime } from "@humansignal/i18n";
 import { LSFWrapper } from "./lsf-sdk";
 import { Modal } from "../components/Common/Modal/Modal";
 
+it.each(["en-US", "zh-CN"])("makes an unassigned manager task read-only with %s guidance", (locale) => {
+  const runtime = createLocaleRuntime(locale);
+  const selected = { setReadonly: jest.fn() };
+  const prior = { setReadonly: jest.fn() };
+  const wrapper = {
+    task: { can_label: false },
+    editorInterfaces: ["submit", "update", "skip", "annotations:add-new", "annotations:delete", "ground-truth"],
+    lsf: { toggleInterface: jest.fn() },
+    annotations: [prior],
+    currentAnnotation: selected,
+    datamanager: { localeRuntime: runtime, invoke: jest.fn() },
+  };
+  LSFWrapper.prototype.applyTaskAccess.call(wrapper);
+  expect(selected.setReadonly).toHaveBeenCalledWith(true);
+  expect(prior.setReadonly).toHaveBeenCalledWith(true);
+  expect(wrapper.lsf.toggleInterface.mock.calls.every(([, enabled]) => enabled === false)).toBe(true);
+  expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("toast", expect.objectContaining({
+    message: locale === "zh-CN" ? "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。"
+      : "This task is read-only. Ask a project manager to assign it to you before labeling.",
+    duration: -1,
+  }));
+  wrapper.task.can_label = true;
+  wrapper.lsf.toggleInterface.mockClear();
+  LSFWrapper.prototype.applyTaskAccess.call(wrapper);
+  expect(wrapper.lsf.toggleInterface).toHaveBeenCalledWith("submit", true);
+  expect(wrapper.datamanager.invoke).toHaveBeenLastCalledWith("toast:dismiss", { id: "task-assignment-read-only" });
+  runtime.destroy();
+});
+
 it.each(["en-US", "zh-CN"])("does not show completed work when a %s labeling queue request fails", async (locale) => {
   const runtime = createLocaleRuntime(locale);
   const confirm = jest.spyOn(Modal, "confirm").mockImplementation(() => {});

@@ -3,6 +3,9 @@ from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.test import APITestCase
 from users.tests.factories import UserFactory
+from tasks.tests.factories import TaskFactory
+from tasks.models import Task
+from unittest.mock import patch
 
 
 class TestProjectAuthorization(APITestCase):
@@ -110,3 +113,19 @@ class TestProjectAuthorization(APITestCase):
         membership = ProjectMember.objects.get(project_id=project_id, user=self.manager)
         assert membership.enabled is True
         assert membership.role == ProjectMember.Role.MANAGER
+
+    def test_finished_tasks_are_not_multiplied_by_project_members(self):
+        finished = TaskFactory(project=self.assigned_project)
+        TaskFactory(project=self.assigned_project)
+        Task.objects.filter(pk=finished.pk).update(is_labeled=True)
+        self.client.force_authenticate(user=self.manager)
+
+        for optimized in (True, False):
+            for endpoint in ('/api/projects/', '/api/projects/counts/'):
+                with self.subTest(optimized=optimized, endpoint=endpoint):
+                    with patch('projects.functions.flag_set', return_value=optimized):
+                        response = self.client.get(endpoint)
+                    assert response.status_code == 200
+                    project = next(p for p in response.json()['results'] if p['id'] == self.assigned_project.pk)
+                    assert project['task_number'] == 2
+                    assert project['finished_task_number'] == 1

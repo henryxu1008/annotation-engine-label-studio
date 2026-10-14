@@ -149,6 +149,7 @@ class TestSubmissionReviewWorkflow(APITestCase):
         self.client.force_authenticate(user=self.manager)
 
         sync_export = self.client.get(f'/api/projects/{self.project.id}/export')
+        formats = self.client.get(f'/api/projects/{self.project.id}/export/formats')
         snapshot_list = self.client.get(f'/api/projects/{self.project.id}/exports/')
         snapshot_detail = self.client.get(f'/api/projects/{self.project.id}/exports/{snapshot.id}')
         snapshot_convert = self.client.post(
@@ -163,6 +164,9 @@ class TestSubmissionReviewWorkflow(APITestCase):
         )
 
         assert sync_export.status_code == 400
+        assert formats.status_code == 400
+        assert formats.json()['display_context']['reason'] == 'IMMUTABLE_RELEASE_REQUIRED'
+        assert sync_export.json()['display_context']['reason'] == 'IMMUTABLE_RELEASE_REQUIRED'
         assert snapshot_list.status_code == 400
         assert snapshot_detail.status_code == 400
         assert snapshot_convert.status_code == 400
@@ -171,6 +175,15 @@ class TestSubmissionReviewWorkflow(APITestCase):
 
         release_pending = self.client.get(f'/api/submissions/{submission.id}/release/')
         assert release_pending.status_code == 400
+
+    def test_formats_rejection_does_not_disclose_formal_submissions_to_non_managers(self):
+        self._submit_new_annotation()
+        for user in (self.other_user, self.annotator, self.reviewer):
+            with self.subTest(user=user.pk):
+                self.client.force_authenticate(user=user)
+                response = self.client.get(f'/api/projects/{self.project.id}/export/formats')
+                assert response.status_code in (403, 404)
+                assert 'IMMUTABLE_RELEASE_REQUIRED' not in response.content.decode()
 
 
     def test_submission_rejects_annotation_relation_swap_and_rolls_back(self):

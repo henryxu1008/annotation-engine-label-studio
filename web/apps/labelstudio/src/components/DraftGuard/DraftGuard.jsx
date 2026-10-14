@@ -1,6 +1,8 @@
 import { useContext, useEffect } from "react";
 import { useHistory } from "react-router-dom";
 import { ToastContext } from "@humansignal/ui";
+import { useLocaleRuntime } from "@humansignal/i18n";
+import { isAlive, isStateTreeNode } from "mobx-state-tree";
 
 export const DRAFT_GUARD_KEY = "DRAFT_GUARD";
 
@@ -11,6 +13,7 @@ export const draftGuardCallback = {
 export const DraftGuard = () => {
   const toast = useContext(ToastContext);
   const history = useHistory();
+  const runtime = useLocaleRuntime();
 
   useEffect(() => {
     const unblock = () => {
@@ -28,7 +31,10 @@ export const DraftGuard = () => {
      * unsuccessful draft saves.
      */
     const unsubscribe = history.block(() => {
-      const selected = window.Htx?.annotationStore?.selected;
+      const editor = window.Htx;
+      if (isStateTreeNode(editor) && !isAlive(editor)) return;
+      const selected = editor?.annotationStore?.selected;
+      if (isStateTreeNode(selected) && !isAlive(selected)) return;
       const submissionInProgress = !!selected?.submissionStarted;
       const hasChanges = !!selected?.history.undoIdx && !submissionInProgress;
 
@@ -37,10 +43,10 @@ export const DraftGuard = () => {
           const status = res?.$meta?.status;
 
           if (status === 200 || status === 201) {
-            toast.show({ message: "Draft saved successfully", type: "info" });
+            toast.show({ message: runtime.t("datamanager:draftSaved"), type: "info" });
             unblock();
           } else if (status !== undefined) {
-            toast.show({ message: "There was an error saving your draft", type: "error" });
+            toast.show({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
           } else {
             unblock();
           }
@@ -54,7 +60,7 @@ export const DraftGuard = () => {
       unblock();
       unsubscribe();
     };
-  }, []);
+  }, [history, runtime, toast]);
 
   return <></>;
 };

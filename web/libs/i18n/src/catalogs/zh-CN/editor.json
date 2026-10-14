@@ -158,5 +158,10 @@
   "validationParentTag": "标签 {{value}} 必须位于以下标签之一内部：{{validType}}。",
   "validationBadType": "标签 {{modelName}} 的属性 {{field}} 类型无效。有效类型：{{validType}}。",
   "validationInternal": "发生内部错误。请查看浏览器控制台并重试，或联系支持人员。",
-  "validationUnknown": "无法验证配置。"
+  "validationUnknown": "无法验证配置。",
+  "createRelation": "创建关系",
+  "editRegionMeta": "编辑区域元数据",
+  "showSelectedRegion": "显示选中区域",
+  "hideSelectedRegion": "隐藏选中区域",
+  "deleteSelectedRegion": "删除选中区域"
 }

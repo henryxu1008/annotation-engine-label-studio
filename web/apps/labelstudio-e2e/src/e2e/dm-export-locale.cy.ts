@@ -135,7 +135,29 @@ describe("Data Manager export locale", () => {
     }).as("formatsUnavailable");
     cy.visit(`/projects/${fixture.project_id}/data/export`);
     cy.wait("@formatsUnavailable");
-    cy.get('[aria-label="导出数据"]').should("exist");
+    cy.get('[aria-label="导出数据"]').should("be.disabled");
+    cy.get('[role="status"]').should("contain.text", "无法读取导出格式");
     cy.get('[data-testid^="export-format-"]').should("not.exist");
   });
+
+  for (const [locale, title, guidance] of [
+    ["en-US", "Export data", "Export approved submissions through Release"],
+    ["zh-CN", "导出数据", "请通过“发布”导出已获批提交"],
+  ] as const) {
+    it(`explains immutable export protection in ${locale} without requesting raw export`, () => {
+      chooseLocale(locale);
+      let rawRequests = 0;
+      cy.intercept({ method: "GET", pathname: `/api/projects/${fixture.project_id}/export` }, () => { rawRequests++; });
+      cy.intercept({ method: "GET", pathname: `/api/projects/${fixture.project_id}/export/formats` }, {
+        statusCode: 400,
+        body: { status_code: 400, detail: "Validation error", display_context: { reason: "IMMUTABLE_RELEASE_REQUIRED" } },
+      }).as("immutableFormats");
+      cy.visit(`/projects/${fixture.project_id}/data/export`);
+      cy.wait("@immutableFormats");
+      cy.get('[role="status"]').should("contain.text", guidance);
+      cy.get(`[aria-label="${title}"]`).should("be.disabled");
+      cy.get('[data-testid^="export-format-"]').should("not.exist");
+      cy.then(() => { expect(rawRequests).to.eq(0); });
+    });
+  }
 });

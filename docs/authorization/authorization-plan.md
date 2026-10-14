@@ -451,3 +451,23 @@ The E2E submission fixture must lock its assignment without joining the nullable
 annotation relation. Lazy annotation access inside the transaction keeps the
 fixture compatible with PostgreSQL; the actual submission service retains its
 own authoritative locks and checks.
+
+### Issue #76 annotation usability, 2026-10-14
+
+Interactive task responses expose `can_label` from the existing server-side
+assignment policy. An unassigned Manager retains task/annotation read access;
+Data Manager makes this editor read-only and explains how to request assignment.
+This projection does not replace the annotation/draft endpoint guards or grant
+Managers authority to edit another actor's assigned annotations. Revocation
+still denies API writes and stale task access on the server.
+
+Export-format discovery now applies the same immutable-release guard as raw
+exports after checking Manager scope. `IMMUTABLE_RELEASE_REQUIRED` distinguishes
+this expected rejection from format-load failure. Both display locales explain
+the existing Release route; pending formal submissions remain unreleasable.
+No Core review authority, approval rule or export-storage boundary is changed.
+
+The optimized finished-task aggregate counts distinct task IDs so project
+membership joins cannot inflate completion. Draft navigation feedback uses the
+stable locale runtime; changing locale does not re-register or release a pending
+navigation guard. Selected-region action labels retain the original behavior.

@@ -35,6 +35,7 @@ export const create = (columns) => {
     assigned_task: false,
     assignment_id: types.optional(types.maybeNull(types.number), null),
     assignment_version: types.optional(types.maybeNull(types.number), null),
+    can_label: types.maybe(types.boolean),
     queue: types.optional(types.maybeNull(types.string), null),
     // annotation to select on rejected queue
     default_selected_annotation: types.maybeNull(types.number),

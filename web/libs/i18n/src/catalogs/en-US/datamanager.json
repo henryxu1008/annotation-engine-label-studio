@@ -291,5 +291,11 @@
   "decreaseColumns": "Decrease columns number",
   "increaseColumns": "Increase columns number",
   "fitImagesToWidth": "Fit images to width",
-  "gridSettings": "Grid settings"
+  "gridSettings": "Grid settings",
+  "draftSaveError": "There was an error saving your draft",
+  "taskAssignmentReadOnly": "This task is read-only. Ask a project manager to assign it to you before labeling.",
+  "exportImmutableTitle": "Export approved submissions through Release",
+  "exportImmutableDescription": "This project has formal submissions, so traditional project export is disabled. Use Release to download approved immutable submissions. Pending submissions cannot be released.",
+  "exportFormatsLoading": "Loading export formats…",
+  "exportFormatsUnavailable": "Export formats could not be loaded. Close this dialog and try again."
 }

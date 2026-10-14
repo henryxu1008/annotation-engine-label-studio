@@ -4,6 +4,8 @@ import logging
 from collections.abc import MutableMapping
 
 import ujson as json
+from access_control.authorization import authorization
+from access_control.identity import resolve_principal
 from core.current_request import CurrentContext, get_current_request
 from core.feature_flags import flag_set
 from core.label_config import replace_task_data_undefined_with_config_field
@@ -994,6 +996,7 @@ class AnnotationDraftSerializer(ModelSerializer):
 
 
 class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
+    can_label = serializers.SerializerMethodField(read_only=True)
     predictions = serializers.SerializerMethodField(default=[], read_only=True)
     assignment_id = serializers.SerializerMethodField(read_only=True)
     assignment_version = serializers.SerializerMethodField(read_only=True)
@@ -1003,6 +1006,10 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
 
     def get_updated_by(self, task):
         return [{'user_id': task.updated_by_id}] if task.updated_by_id else []
+
+    def get_can_label(self, task):
+        request = self.context.get('request')
+        return request is not None and authorization.can_label_task(resolve_principal(request), task)
 
     def _get_assignment(self, task):
         user = self._get_user()

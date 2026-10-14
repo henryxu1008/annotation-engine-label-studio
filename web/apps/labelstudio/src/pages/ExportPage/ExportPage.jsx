@@ -58,11 +58,13 @@ export const ExportPage = () => {
   const [currentFormat, setCurrentFormat] = useState("JSON");
   const [projectTaskNumber, setProjectTaskNumber] = useState(null);
   const [exportIssue, setExportIssue] = useState(null);
+  const [formatIssue, setFormatIssue] = useState("loading");
 
   /** @type {import('react').RefObject<Form>} */
   const form = useRef();
 
   const proceedExport = async () => {
+    if (formatIssue || !availableFormats.some((format) => format.name === currentFormat && !format.disabled)) return;
     setExportIssue(null);
     setDownloading(true);
 
@@ -103,6 +105,13 @@ export const ExportPage = () => {
         return;
       }
 
+      const error = await response.clone().json().catch(() => null);
+      if (error?.display_context?.reason === "IMMUTABLE_RELEASE_REQUIRED") {
+        setFormatIssue("immutable");
+        setAvailableFormats([]);
+        return;
+      }
+
       api.handleError(response);
     } finally {
       window.clearTimeout(messageTimer);
@@ -114,18 +123,23 @@ export const ExportPage = () => {
   useEffect(() => {
     if (isDefined(pageParams.id)) {
       let cancelled = false;
+      setFormatIssue("loading");
+      setAvailableFormats([]);
 
       api
         .callApi("exportFormats", {
           params: {
             pk: pageParams.id,
           },
+          errorFilter: () => true,
         })
         .then((formats) => {
           if (cancelled) return;
           const available = Array.isArray(formats) ? formats : [];
+          setFormatIssue(formats?.response?.display_context?.reason === "IMMUTABLE_RELEASE_REQUIRED"
+            ? "immutable" : available.some((format) => !format.disabled) ? null : "unavailable");
           setAvailableFormats(available);
-          setCurrentFormat(available[0]?.name ?? "JSON");
+          setCurrentFormat(available.find((format) => !format.disabled)?.name ?? "JSON");
         });
 
       // Fetch project metadata to show a proactive warning for large exports.
@@ -162,13 +176,22 @@ export const ExportPage = () => {
       visible
     >
       <div className={cn("export-page").toClassName()}>
-        <FormatInfo
+        {!formatIssue && <FormatInfo
           availableFormats={availableFormats}
           selected={currentFormat}
           onClick={(format) => setCurrentFormat(format.name)}
-        />
+        />}
 
-        <ExportLargeProjectWarning taskCount={projectTaskNumber} />
+        {formatIssue && (
+          <div className={cn("export-page").elem("warning").toClassName()} role="status">
+            {formatIssue === "immutable" ? <>
+              <strong>{t("exportImmutableTitle")}</strong>
+              <p>{t("exportImmutableDescription")}</p>
+            </> : formatIssue === "loading" ? t("exportFormatsLoading") : t("exportFormatsUnavailable")}
+          </div>
+        )}
+
+        {!formatIssue && <ExportLargeProjectWarning taskCount={projectTaskNumber} />}
         {exportIssue === "timeout" && <ExportTimeoutGuidance projectId={pageParams.id} exportType={currentFormat} />}
 
         <Form ref={form}>
@@ -188,7 +211,7 @@ export const ExportPage = () => {
               </a>
             </div>
             <div className={cn("export-page").elem("actions").toClassName()}>
-              <Button className="w-[135px]" onClick={proceedExport} waiting={downloading} aria-label={t("exportData")}>
+              <Button className="w-[135px]" onClick={proceedExport} waiting={downloading} disabled={Boolean(formatIssue)} aria-label={t("exportData")}>
                 {t("export")}
               </Button>
             </div>
