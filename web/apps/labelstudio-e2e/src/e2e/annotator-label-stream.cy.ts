@@ -128,7 +128,7 @@ describe("Annotator labeling entry and queue failures", () => {
       cy.get('[data-testid="bottombar-unskip-button"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled").click();
       cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
       cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
-      cy.then(() => cy.intercept({ method: "POST", pathname: `/api/tasks/${taskId}/annotations/` }).as("resumedSubmission"));
+      cy.then(() => cy.intercept({ method: "POST", pathname: new RegExp(`^/api/tasks/${taskId}/annotations/?$`) }).as("resumedSubmission"));
       cy.get('[data-testid="bottombar-submit-button"]').click();
       cy.wait("@resumedSubmission").then(({ response }) => {
         expect(response?.statusCode).to.eq(201);
