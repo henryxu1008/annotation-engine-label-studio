@@ -206,7 +206,7 @@ export const create = (columns) => {
           reload: false,
         });
 
-        if (taskData?.$meta?.status === 404) {
+        if (taskData?.$meta?.status === 404 && taskData?.response?.display_context?.reason === "QUEUE_EXHAUSTED") {
           getRoot(self).SDK.invoke("labelStreamFinished");
           return null;
         }
@@ -214,7 +214,8 @@ export const create = (columns) => {
         const responseStatus = taskData?.$meta?.status;
 
         if (!taskData || taskData.error || (responseStatus && responseStatus >= 400)) {
-          // null is reserved for an exhausted queue (404). A request failure
+          // null is reserved for an explicitly exhausted queue. A project or
+          // view may also return 404 after revocation; that is a request failure.
           // must not render "all tasks completed" in the labeling editor.
           return false;
         }

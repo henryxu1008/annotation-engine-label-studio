@@ -99,6 +99,17 @@ class TestTaskAssignmentAuthorization(APITestCase):
         assert response.status_code == 200, response.data
         assert response.data['id'] in (self.shared_task.id, self.other_task.id)
 
+    def test_labeling_toolbar_empty_queue_has_explicit_reason(self):
+        response = self._next_toolbar_task(self.annotator_a, selected={'all': False, 'included': []})
+        assert response.status_code == 404
+        assert response.data['display_context']['reason'] == 'QUEUE_EXHAUSTED'
+
+    def test_labeling_toolbar_invisible_project_is_not_an_empty_queue(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_b)
+        response = self._next_toolbar_task(self.annotator_a, project=other_project)
+        assert response.status_code == 404
+        assert response.data.get('display_context', {}).get('reason') != 'QUEUE_EXHAUSTED'
+
     def test_labeling_toolbar_selected_ids_cannot_include_another_annotators_task(self):
         response = self._next_toolbar_task(
             self.annotator_a, selected={'all': False, 'included': [self.other_task.id]},

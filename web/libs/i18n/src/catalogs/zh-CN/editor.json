@@ -102,7 +102,7 @@
   "noMoreAnnotations": "没有更多标注",
   "noMoreTasks": "队列中没有更多任务",
   "noTaskAccess": "你无权访问此任务",
-  "allQueueTasksCompleted": "队列中的所有任务均已完成",
+  "allQueueTasksCompleted": "当前队列中没有可标注的任务。",
   "goToPreviousTask": "返回上一个任务",
   "accept": "通过",
   "fixAndAccept": "修正并通过",

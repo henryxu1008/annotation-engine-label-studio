@@ -127,7 +127,9 @@ unassigned and cross-project task IDs remain denied. Submitted actor fields do
 not select the queue owner. Task locks do not replace this assignment check.
 All other Data Manager actions retain the Manager mutation gate. Queue request
 errors are displayed as recoverable errors in the chosen language; only an
-actual exhausted queue is presented as completed work.
+explicit `404` with `display_context.reason=QUEUE_EXHAUSTED` is presented as
+"no tasks currently available". A project/view 404 after revocation is an error,
+and unavailable work or locks must not be reported as all tasks completed.
 
 PostgreSQL candidate validation must include the existing submission/review,
 assignment and composed collaboration tests as well as session tests. #76

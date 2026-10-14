@@ -37,7 +37,7 @@ describe("Annotator labeling entry and queue failures", () => {
       cy.get("body").should("not.contain.text", "Project manager role is required for this operation.");
     });
 
-    for (const statusCode of [403, 500]) {
+    for (const statusCode of [403, 404, 500]) {
       it(`shows ${locale} recovery controls instead of completion after queue HTTP ${statusCode}`, () => {
         enterProject(locale);
         cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" } }).as("retryTask");
@@ -47,7 +47,7 @@ describe("Annotator labeling entry and queue failures", () => {
         cy.get('[data-testid="dm-label-all-toolbar"]').click();
         cy.wait("@queueFailure");
         cy.get("body").should("contain.text", locale === "zh-CN" ? "无法读取标注任务" : "Unable to load labeling tasks")
-          .and("not.contain.text", locale === "zh-CN" ? "队列中的所有任务均已完成" : "All tasks in the queue have been completed");
+          .and("not.contain.text", locale === "zh-CN" ? "当前队列中没有可标注的任务。" : "No tasks are currently available in this queue.");
         cy.contains("button", locale === "zh-CN" ? "重试" : "Retry").should("be.visible");
         cy.contains("button", locale === "zh-CN" ? "返回任务列表" : "Back to task list").should("be.visible");
         if (statusCode === 500) {

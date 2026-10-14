@@ -103,7 +103,7 @@
   "noMoreAnnotations": "No more annotations",
   "noMoreTasks": "No More Tasks Left in Queue",
   "noTaskAccess": "You don't have access to this task",
-  "allQueueTasksCompleted": "All tasks in the queue have been completed",
+  "allQueueTasksCompleted": "No tasks are currently available in this queue.",
   "goToPreviousTask": "Go to Previous Task",
   "accept": "Accept",
   "fixAndAccept": "Fix + Accept",

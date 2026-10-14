@@ -12,7 +12,11 @@ Its 403 response then appeared as "All tasks in the queue have been completed".
 Fix `next_task` as an assigned-queue read without opening other management actions:
 check the authenticated role, intersect collection queries with `Task.objects.for_user`,
 and recheck the sampled object's project and authorization. HTTP failures use the
-existing bilingual modal with Retry and Back to task list; only 404 exhausts the queue.
+existing bilingual modal with Retry and Back to task list. Reuse the existing
+`display_context.reason` contract: only 404 with `QUEUE_EXHAUSTED` means no tasks
+are currently available. A project/view 404 after revocation remains a failure.
+Availability wording does not claim all work was completed: locks, cancellation
+or filters can also leave no eligible tasks.
 Also translate task statistics and their tooltips with the existing locale runtime.
 
 The actual retained Edge context exposed another failure after installing the
@@ -33,13 +37,17 @@ patches and must remain covered by real artifact and returning-browser acceptanc
 
 ## Evidence boundaries
 
-- Data Manager: 692 tests across 23 suites pass; before/after error-recovery controls
-  show two failures before the fix and nine passing cases after it.
-- Eleven new server regressions cover role/scope, forged IDs and actor fields,
+- Data Manager: 697 tests across 24 suites pass; before/after error-recovery controls
+  show two failures before the fix and nine passing cases after it. The queue
+  response contract separately reproduces two generic-404 failures with three
+  passing controls before correction; all five then pass.
+- Thirteen new server regressions cover role/scope, forged IDs and actor fields,
   revocation, existing locks and object revalidation during sampling. SQLite and
   PostgreSQL runs are required through current-head PR CI.
-- Six new browser cases use the actual assigned project fixture and real toolbar;
-  they cover both locales, 403 return-to-list and transient 500 retry with a real 200.
+- Eight new browser cases use the actual assigned project fixture and real toolbar;
+  they cover both locales, 403/generic-404 return-to-list and transient 500 retry
+  with a real 200. The two 404 server regressions check that invisible projects
+  do not emit the explicit exhaustion marker.
 - Selection preservation, translated keyboard help and Escape were observed working;
   no editor shortcut defect was confirmed. Annotation content/label values are user
   configuration and are not automatically translated.
