@@ -40,7 +40,8 @@ describe("Annotator labeling entry and queue failures", () => {
     for (const statusCode of [403, 500]) {
       it(`shows ${locale} recovery controls instead of completion after queue HTTP ${statusCode}`, () => {
         enterProject(locale);
-        cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" } }, {
+        cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" } }).as("retryTask");
+        cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" }, times: 1 }, {
           statusCode, body: { detail: "Synthetic labeling queue unavailable" },
         }).as("queueFailure");
         cy.get('[data-testid="dm-label-all-toolbar"]').click();
@@ -48,9 +49,20 @@ describe("Annotator labeling entry and queue failures", () => {
         cy.get("body").should("contain.text", locale === "zh-CN" ? "无法读取标注任务" : "Unable to load labeling tasks")
           .and("not.contain.text", locale === "zh-CN" ? "队列中的所有任务均已完成" : "All tasks in the queue have been completed");
         cy.contains("button", locale === "zh-CN" ? "重试" : "Retry").should("be.visible");
-        cy.contains("button", locale === "zh-CN" ? "返回任务列表" : "Back to task list").should("be.visible").click();
-        cy.location("search").should("not.contain", "labeling=1");
-        cy.get('[data-testid="dm-label-all-toolbar"]').should("be.visible");
+        cy.contains("button", locale === "zh-CN" ? "返回任务列表" : "Back to task list").should("be.visible");
+        if (statusCode === 500) {
+          cy.contains("button", locale === "zh-CN" ? "重试" : "Retry").click();
+          cy.wait("@retryTask").then(({ response }) => {
+            expect(response?.statusCode).to.eq(200);
+            expect(response?.body.id).to.eq(fixture.tasks.a.id);
+          });
+          cy.get('[data-testid="bottombar-submit-button"]').should("be.visible");
+          cy.get("body").should("not.contain.text", locale === "zh-CN" ? "无法读取标注任务" : "Unable to load labeling tasks");
+        } else {
+          cy.contains("button", locale === "zh-CN" ? "返回任务列表" : "Back to task list").click();
+          cy.location("search").should("not.contain", "labeling=1");
+          cy.get('[data-testid="dm-label-all-toolbar"]').should("be.visible");
+        }
       });
     }
   }
