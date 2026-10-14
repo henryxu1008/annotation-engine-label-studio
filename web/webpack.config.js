@@ -98,6 +98,9 @@ module.exports = composePlugins(
       config.output = {
         ...config.output,
         uniqueName: "labelstudio",
+        // Stable entrypoint URLs are versioned by Django. Lazy chunks need
+        // content-based URLs so a returning browser cannot reuse another build.
+        ...(!isDevelopment ? { chunkFilename: "[name].[contenthash:8].js" } : {}),
         publicPath:
           isDevelopment && FRONTEND_HOSTNAME
             ? `${FRONTEND_HOSTNAME}/react-app/`
@@ -106,6 +109,14 @@ module.exports = composePlugins(
               : "auto",
         scriptType: "text/javascript",
       };
+
+      if (!isDevelopment) {
+        for (const plugin of config.plugins ?? []) {
+          if (plugin.constructor.name === "MiniCssExtractPlugin") {
+            plugin.options.chunkFilename = "[name].[contenthash:8].css";
+          }
+        }
+      }
 
       config.optimization = {
         runtimeChunk: "single",
