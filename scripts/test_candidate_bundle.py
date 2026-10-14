@@ -47,6 +47,31 @@ def fixture():
 
 
 class ArchiveContracts(unittest.TestCase):
+    def append_attestation(self, parts, expected):
+        def blob(value, media_type):
+            raw = value if isinstance(value, bytes) else encoded(value)
+            digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            parts["blobs/sha256/" + digest.split(":")[1]] = raw
+            return {"digest": digest, "size": len(raw), "mediaType": media_type}
+
+        config = blob({"os": "unknown", "architecture": "unknown", "rootfs": {"type": "layers", "diff_ids": []},
+                       "config": {}}, "application/vnd.oci.image.config.v1+json")
+        layer = blob(b"synthetic-attestation", "application/vnd.in-toto+json")
+        attestation = blob({"schemaVersion": 2, "config": config, "layers": [layer]},
+                           "application/vnd.oci.image.manifest.v1+json")
+        attestation["platform"] = {"os": "unknown", "architecture": "unknown"}
+        attestation["annotations"] = {"vnd.docker.reference.type": "attestation-manifest",
+                                      "vnd.docker.reference.digest": expected["platform_manifest_digest"]}
+        root_index = json.loads(parts["index.json"])
+        root = root_index["manifests"][0]
+        image_index = json.loads(parts["blobs/sha256/" + root["digest"].split(":")[1]])
+        image_index["manifests"].append(attestation)
+        new_root = blob(image_index, "application/vnd.oci.image.index.v1+json")
+        root["digest"], root["size"] = new_root["digest"], new_root["size"]
+        expected["oci_index_digest"] = new_root["digest"]
+        parts["index.json"] = encoded(root_index)
+        return "blobs/sha256/" + layer["digest"].split(":")[1]
+
     def append_platform(self, parts, expected, architecture):
         root_index = json.loads(parts["index.json"])
         root = root_index["manifests"][0]
@@ -76,6 +101,18 @@ class ArchiveContracts(unittest.TestCase):
 
     def test_consistent_docker_and_oci_candidate(self):
         self.assertEqual(self.check(*fixture())["result"], "PASS")
+
+    def test_linked_buildkit_attestation_is_accepted(self):
+        parts, expected = fixture()
+        self.append_attestation(parts, expected)
+        self.assertEqual(self.check(parts, expected)["result"], "PASS")
+
+    def test_missing_linked_attestation_layer_is_rejected(self):
+        parts, expected = fixture()
+        layer_path = self.append_attestation(parts, expected)
+        del parts[layer_path]
+        with self.assertRaises(ValueError):
+            self.check(parts, expected)
 
     def test_missing_layout_cannot_select_a_different_docker_config(self):
         parts, expected = fixture()
@@ -171,6 +208,24 @@ class ArchiveContracts(unittest.TestCase):
     def test_path_alias_cannot_hide_another_index(self):
         parts, expected = fixture()
         parts["./index.json"] = parts["index.json"]
+        with self.assertRaises(ValueError):
+            self.check(parts, expected)
+
+    def test_leading_parent_directory_is_rejected(self):
+        parts, expected = fixture()
+        parts["../payload"] = b"synthetic-extra"
+        with self.assertRaises(ValueError):
+            self.check(parts, expected)
+
+    def test_parent_directory_entry_is_rejected(self):
+        parts, expected = fixture()
+        parts[".."] = b"synthetic-extra"
+        with self.assertRaises(ValueError):
+            self.check(parts, expected)
+
+    def test_current_directory_entry_is_rejected(self):
+        parts, expected = fixture()
+        parts["."] = b"synthetic-extra"
         with self.assertRaises(ValueError):
             self.check(parts, expected)
 

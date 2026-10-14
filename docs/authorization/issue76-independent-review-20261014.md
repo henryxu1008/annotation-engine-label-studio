@@ -22,6 +22,14 @@ The reviewer found two P1 candidate-delivery contract defects:
   conflicting aliases and archive links are rejected. BuildKit attestations
   linked to the selected platform remain supported.
 
+Follow-up review confirmed both P1 fixes and found one P2 path-admission gap:
+`normpath` leaves leading `../payload` and `..` unchanged. The verifier now
+explicitly rejects parent-directory components and root pseudoentries. Three
+negative tests cover `../payload`, `..` and `.`. This was a malformed-input
+admission defect; no Docker extraction escape or existing artifact pollution
+was demonstrated. Linked-attestation positive and missing-layer negative cases
+are also retained as contract tests.
+
 The two consumption paths are based on the upstream implementations:
 [containerd ImportIndex](https://github.com/containerd/containerd/blob/main/core/images/archive/importer.go#L119-L171)
 selects Docker format when OCI layout is absent;
@@ -29,8 +37,9 @@ selects Docker format when OCI layout is absent;
 reads `manifest.json`. These checks compare package contents to the admitted
 manifest; they are not signatures or independent proof of provenance.
 
-All **18 isolated contract tests pass** after the fixes. On the original review
-HEAD the same suite has **16 failures and two passing controls**. Build tests
+All **23 isolated contract tests pass** after the fixes. On the original review
+HEAD the same suite has **20 failures and three passing controls**, with no
+fixture errors. The earlier 18-test result remains separately retained. Build tests
 use small temporary Git repositories and mock only network/Docker calls; they
 do not build or load images. Archive tests recompute the approved package SHA
 after each controlled mutation, so the negative cases test internal consumption

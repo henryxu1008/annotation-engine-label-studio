@@ -12,7 +12,7 @@ import json
 import posixpath
 import sys
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def verify(archive, expected):
@@ -25,7 +25,8 @@ def verify(archive, expected):
         if len(members) != len(contents.getmembers()):
             raise ValueError("Duplicate archive entries")
         for name, member in members.items():
-            if name.startswith("/") or "\\" in name or posixpath.normpath(name) != name:
+            if (name in {"", "."} or name.startswith("/") or "\\" in name
+                    or ".." in PurePosixPath(name).parts or posixpath.normpath(name) != name):
                 raise ValueError("Noncanonical archive entry: " + name)
             if not (member.isfile() or member.isdir()):
                 raise ValueError("Archive links and special entries are not admitted: " + name)
