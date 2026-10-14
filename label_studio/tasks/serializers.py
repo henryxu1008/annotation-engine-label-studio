@@ -1072,16 +1072,30 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
         if not isinstance(task, Task):
             return AnnotationDraftSerializer(many=True)
 
-        drafts = task.drafts
-        if 'request' in self.context and hasattr(self.context['request'], 'user'):
-            user = self.context['request'].user
-            drafts = drafts.filter(user=user)
+        assignment = self._get_assignment(task)
+        drafts = task.drafts.filter(user=self._get_user(), assignment=assignment) if assignment else task.drafts.none()
 
         return AnnotationDraftSerializer(drafts, many=True, read_only=True, default=[], context=self.context).data
 
 
 class NextTaskSerializer(TaskWithAnnotationsAndPredictionsAndDraftsSerializer):
     unique_lock_id = serializers.SerializerMethodField()
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        assignment = self._get_assignment(instance)
+        annotation = assignment.annotation if assignment and assignment.annotation_id else None
+        if (
+            annotation is not None
+            and annotation.was_cancelled
+            and annotation.task_id == instance.id
+            and annotation.completed_by_id == assignment.assignee_id
+        ):
+            # Resume the current owner's skipped annotation through the editor's
+            # existing selection/Unskip path, rather than create a second one.
+            ret['annotations'] = [AnnotationSerializer(annotation, context=self.context).data]
+            ret['default_selected_annotation'] = annotation.id
+        return ret
 
     def get_unique_lock_id(self, task):
         user = self.context['request'].user

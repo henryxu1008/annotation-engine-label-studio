@@ -60,7 +60,7 @@ class TestTaskAssignmentAuthorization(APITestCase):
             assigned_by=cls.manager,
         )
 
-    def _create_annotation(self, user, task):
+    def _create_annotation(self, user, task, *, draft=None):
         assignment = TaskAssignment.objects.get(
             task=task,
             assignee=user,
@@ -73,6 +73,7 @@ class TestTaskAssignmentAuthorization(APITestCase):
                 'result': [],
                 'assignment_id': assignment.id,
                 'assignment_version': assignment.version,
+                **({'draft_id': draft.id} if draft is not None else {}),
             },
             format='json',
         )
@@ -113,6 +114,124 @@ class TestTaskAssignmentAuthorization(APITestCase):
         response = self._next_toolbar_task(self.annotator_a)
         assert response.status_code == 200, response.data
         assert response.data['id'] == self.shared_task.id
+
+    def _assert_assignment_in_both_queues(self, user, task):
+        toolbar = self._next_toolbar_task(user, selected={'all': False, 'included': [task.id]})
+        assert toolbar.status_code == 200, toolbar.data
+        assert toolbar.data['id'] == task.id
+        assert toolbar.data['can_label'] is True
+        self.client.force_authenticate(user=user)
+        legacy = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert legacy.status_code == 200, legacy.data
+        assert legacy.data['id'] == task.id
+        return toolbar, legacy
+
+    def test_assigned_queue_keeps_peer_completed_task_available(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.shared_task.refresh_from_db()
+        assert self.shared_task.is_labeled is True
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_assigned_queue_does_not_use_another_assignees_task_lock(self):
+        self.shared_task.set_lock(self.annotator_a)
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_assigned_queue_keeps_postponed_draft_after_peer_completion(self):
+        AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_b, assignment=self.assignment_b,
+            result=[], was_postponed=True,
+        )
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.client.force_authenticate(user=self.annotator_b)
+        fresh = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert fresh.status_code == 200 and fresh.data['id'] == self.other_task.id
+        self.other_assignment.cancel()
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_task_and_queue_restore_only_current_assignment_drafts(self):
+        stale = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[], was_postponed=True,
+        )
+        self.assignment_a.cancel()
+        assignment = TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.annotator_a, assigned_by=self.manager,
+        )
+        unbound = AnnotationDraft.objects.create(task=self.shared_task, user=self.annotator_a, result=[])
+        current = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=assignment, result=[],
+        )
+        peer = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_b, assignment=self.assignment_b, result=[],
+        )
+        toolbar, legacy = self._assert_assignment_in_both_queues(self.annotator_a, self.shared_task)
+        direct = self.client.get(f'/api/tasks/{self.shared_task.id}/')
+        assert direct.status_code == 200
+        for response in (toolbar, legacy, direct):
+            assert [draft['id'] for draft in response.data['drafts']] == [current.id]
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.get(f'/api/tasks/{self.shared_task.id}/').data['drafts'] == []
+        self._create_annotation(self.annotator_a, self.shared_task, draft=current)
+        assert AnnotationDraft.objects.filter(pk__in=[stale.id, unbound.id, peer.id]).count() == 3
+
+    def test_assigned_queue_requeues_current_skip_after_peer_completion(self):
+        self.project.skip_queue = self.project.SkipQueue.REQUEUE_FOR_ME
+        self.project.save(update_fields=['skip_queue'])
+        skipped = self._create_annotation(self.annotator_b, self.shared_task)
+        skipped.was_cancelled = True
+        skipped.save(update_fields=['was_cancelled'])
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.client.force_authenticate(user=self.annotator_b)
+        fresh = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert fresh.status_code == 200 and fresh.data['id'] == self.other_task.id
+        self.other_assignment.cancel()
+        toolbar, legacy = self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+        for response in (toolbar, legacy):
+            assert response.data['default_selected_annotation'] == skipped.id
+            assert [annotation['id'] for annotation in response.data['annotations']] == [skipped.id]
+            assert response.data['annotations'][0]['was_cancelled'] is True
+        converted = self.client.post(f'/api/annotations/{skipped.id}/convert-to-draft', data={}, format='json')
+        assert converted.status_code == 201, converted.data
+        draft = AnnotationDraft.objects.get(pk=converted.data['id'])
+        assert draft.assignment_id == self.assignment_b.id
+        self._create_annotation(self.annotator_b, self.shared_task, draft=draft)
+
+    def test_assigned_queue_reassignment_ignores_old_annotation_and_postponed_draft(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[], was_postponed=True,
+        )
+        self.assignment_a.cancel()
+        new_assignment = TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.annotator_a, assigned_by=self.manager,
+        )
+        self._assert_assignment_in_both_queues(self.annotator_a, self.shared_task)
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.data['assignment_id'] == new_assignment.id
+
+    def test_manager_assigned_queue_precedes_unassigned_readonly_fallback(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.manager, assigned_by=self.manager,
+        )
+        self._assert_assignment_in_both_queues(self.manager, self.shared_task)
+        self._create_annotation(self.manager, self.shared_task)
+        fallback = self._next_toolbar_task(self.manager)
+        assert fallback.status_code == 200, fallback.data
+        assert fallback.data['id'] == self.other_task.id
+        assert fallback.data['can_label'] is False
+
+    def test_assignment_queue_preserves_selected_exclusions_and_current_completion(self):
+        excluded = self._next_toolbar_task(
+            self.annotator_a, selected={'all': True, 'excluded': [self.shared_task.id]},
+        )
+        assert excluded.status_code == 404
+        self._create_annotation(self.annotator_a, self.shared_task)
+        completed = self._next_toolbar_task(self.annotator_a)
+        assert completed.status_code == 404
+        self.client.force_authenticate(user=self.annotator_a)
+        assert self.client.get(f'/api/projects/{self.project.id}/next/').status_code == 404
 
     def test_labeling_toolbar_next_task_preserves_manager_access(self):
         response = self._next_toolbar_task(self.manager)

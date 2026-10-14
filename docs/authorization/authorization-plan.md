@@ -493,3 +493,24 @@ runtime changes. This refresh only replaces or dismisses its own toast ID; it
 does not reapply annotation access, recreate stores, save drafts or submit work.
 Destroyed editors cannot show stale guidance. Browser regressions switch both
 languages in the same readonly task while retaining disabled editing controls.
+
+Both existing next-task entry points now prioritize the authenticated actor's
+active TaskAssignments within the prepared filter/selection. The existing
+upstream assigned-mode sampler handles those tasks, so another assignee's
+completion or task lock cannot exhaust the actor's queue. Unassigned Managers
+retain the original automatic read-only exploration fallback; no client field
+selects assigned mode or expands the permitted task scope.
+
+Assigned completion, skipped annotations and postponed drafts are tied to the
+current active assignment. Historical cancelled assignments do not complete or
+postpone a new assignment to the same actor. Assigned skipped/postponed queues
+remain available after another actor completes the task. The existing unassigned
+completion/overlap filters and server-side write/revocation guards remain
+authoritative. Preserve these two-entry-point regressions on upstream upgrades.
+
+Interactive task and queue payloads restore only the current actor's active
+assignment drafts. Cancelled/unbound historical drafts remain stored but cannot
+be carried into a new assignment's save or submission. A requeued skipped task
+returns only its current assignment's owned skipped annotation and selects it
+with the editor's existing `default_selected_annotation`/Unskip mechanism. Keep
+the resume, draft-submit and historical-record retention controls as regressions.

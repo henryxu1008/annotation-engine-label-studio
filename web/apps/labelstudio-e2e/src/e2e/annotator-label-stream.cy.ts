@@ -2,7 +2,7 @@
 
 type StreamFixture = {
   password: string;
-  users: { annotator_a: { email: string }; manager: { email: string } };
+  users: { annotator_a: { id: number; email: string }; annotator_b: { id: number; email: string }; manager: { email: string } };
   project_id: number;
   tasks: { a: { id: number } };
 };
@@ -11,12 +11,12 @@ describe("Annotator labeling entry and queue failures", () => {
   let fixture: StreamFixture;
   before(() => cy.readFile(".enterprise-e2e.json").then((value) => { fixture = value as StreamFixture; }));
 
-  const enterProject = (locale: "en-US" | "zh-CN", actor: "annotator_a" | "manager" = "annotator_a") => {
+  const enterProject = (locale: "en-US" | "zh-CN", actor: "annotator_a" | "manager" = "annotator_a", projectId = fixture.project_id) => {
     cy.loginAs(fixture.users[actor].email, fixture.password, "/user/account/personal-info");
     cy.get('[data-testid="language-preference-select"]').select(locale);
     cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
     cy.request("/api/current-user/locale/").its("body.preference").should("eq", locale);
-    cy.visit(`/projects/${fixture.project_id}/data`);
+    cy.visit(`/projects/${projectId}/data`);
     cy.get('[data-testid="dm-label-all-toolbar"]', { timeout: 30000 }).should("be.visible");
   };
 
@@ -87,5 +87,54 @@ describe("Annotator labeling entry and queue failures", () => {
         }
       });
     }
+  }
+
+  for (const locale of ["en-US", "zh-CN"] as const) {
+    it(`resumes and submits a shared assignment after peer completion and Unskip in ${locale}`, () => {
+      let projectId: number;
+      let taskId: number;
+      const post = (url: string, body: Record<string, unknown>) => cy.getCookie("csrftoken").then((cookie) =>
+        cy.request({ method: "POST", url, body, headers: { "X-CSRFToken": cookie?.value ?? "" } }));
+
+      cy.loginAs(fixture.users.manager.email, fixture.password, "/projects/");
+      post("/api/projects/", {
+        title: `Assigned queue resume ${locale} ${Date.now()}`,
+        label_config: '<View><Text name="text" value="$text"/><Choices name="sentiment" toName="text"><Choice value="Positive"/><Choice value="Negative"/></Choices></View>',
+        maximum_annotations: 1, skip_queue: "REQUEUE_FOR_ME", is_published: true,
+      }).then(({ body }) => { projectId = body.id; });
+      cy.then(() => post(`/api/projects/${projectId}/members/`, { user_id: fixture.users.annotator_a.id, role: "annotator" }));
+      cy.then(() => post(`/api/projects/${projectId}/members/`, { user_id: fixture.users.annotator_b.id, role: "annotator" }));
+      cy.then(() => post("/api/tasks/", { project: projectId, data: { text: "Synthetic shared assignment" } }))
+        .then(({ body }) => { taskId = body.id; });
+      cy.then(() => post("/api/task-assignments/", { task: taskId, assignee: fixture.users.annotator_a.id }));
+      cy.then(() => post("/api/task-assignments/", { task: taskId, assignee: fixture.users.annotator_b.id }));
+      cy.loginAs(fixture.users.annotator_b.email, fixture.password, "/projects/");
+      cy.then(() => cy.request(`/api/tasks/${taskId}/`)).then(({ body }) => post(`/api/tasks/${taskId}/annotations/`, {
+        result: [{ from_name: "sentiment", to_name: "text", type: "choices", value: { choices: ["Positive"] } }],
+        assignment_id: body.assignment_id, assignment_version: body.assignment_version,
+      })).its("status").should("eq", 201);
+
+      cy.then(() => enterProject(locale, "annotator_a", projectId));
+      cy.intercept({ method: "POST", pathname: /\/api\/dm\/actions\/?$/, query: { id: "next_task" } }).as("sharedNext");
+      cy.get('[data-testid="dm-label-all-toolbar"]').click();
+      cy.wait("@sharedNext").then(({ response }) => {
+        expect(response?.statusCode).to.eq(200);
+        expect(response?.body.id).to.eq(taskId);
+        expect(response?.body.can_label).to.eq(true);
+        expect(response?.body.is_labeled).to.eq(true);
+      });
+      cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("not.be.disabled").check();
+      cy.get('[data-testid="bottombar-skip-button"]').should("not.be.disabled").click();
+      cy.get('[data-testid="bottombar-unskip-button"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled").click();
+      cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
+      cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
+      cy.then(() => cy.intercept({ method: "POST", pathname: `/api/tasks/${taskId}/annotations/` }).as("resumedSubmission"));
+      cy.get('[data-testid="bottombar-submit-button"]').click();
+      cy.wait("@resumedSubmission").then(({ response }) => {
+        expect(response?.statusCode).to.eq(201);
+        expect(response?.body.was_cancelled).to.eq(false);
+        expect(response?.body.result[0].value.choices).to.deep.eq(["Positive"]);
+      });
+    });
   }
 });
