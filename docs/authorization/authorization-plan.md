@@ -487,3 +487,9 @@ including projects that permit empty annotations. AppStore rejects these editing
 actions before dispatch when called through keyboard/action paths. Review
 accept/reject keeps its separate existing controls and authorization boundary;
 readonly results do not themselves remove a Reviewer's decision authority.
+
+Data Manager refreshes persistent task-access guidance when its existing locale
+runtime changes. This refresh only replaces or dismisses its own toast ID; it
+does not reapply annotation access, recreate stores, save drafts or submit work.
+Destroyed editors cannot show stale guidance. Browser regressions switch both
+languages in the same readonly task while retaining disabled editing controls.

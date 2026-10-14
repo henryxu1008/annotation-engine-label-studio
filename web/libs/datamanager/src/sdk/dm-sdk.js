@@ -515,6 +515,7 @@ export class DataManager {
     if (this.isDestroyed) return false;
     if (!this.localeRuntime.updateLocale(locale)) return false;
     this.lsf?.lsfInstance?.setLocale?.(this.localeRuntime.locale);
+    this.lsf?.refreshTaskAccessGuidance?.();
     return true;
   }
 

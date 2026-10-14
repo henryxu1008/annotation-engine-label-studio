@@ -15,6 +15,7 @@ it.each(["en-US", "zh-CN"])("makes an unassigned manager task read-only with %s 
     annotations: [prior],
     currentAnnotation: selected,
     datamanager: { localeRuntime: runtime, invoke: jest.fn() },
+    refreshTaskAccessGuidance: LSFWrapper.prototype.refreshTaskAccessGuidance,
   };
   LSFWrapper.prototype.applyTaskAccess.call(wrapper);
   expect(selected.setReadonly).toHaveBeenCalledWith(true);

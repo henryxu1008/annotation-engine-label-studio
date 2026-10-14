@@ -33,6 +33,14 @@ describe("Annotator labeling entry and queue failures", () => {
         : "This task is read-only. Ask a project manager to assign it to you before labeling.").should("be.visible");
       cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("be.disabled");
       cy.get('[data-testid="bottombar-submit-button"]').should("be.disabled");
+      const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
+      cy.get('[data-testid="user-menu-trigger"]').click();
+      cy.get("#menu-display-language").select(nextLocale).should("have.value", nextLocale).and("not.be.disabled");
+      cy.contains(nextLocale === "zh-CN" ? "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。"
+        : "This task is read-only. Ask a project manager to assign it to you before labeling.").should("be.visible");
+      cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("be.disabled");
+      cy.get('[data-testid="bottombar-submit-button"]').should("be.disabled");
+      cy.location("search").should("contain", `task=${fixture.tasks.a.id}`);
     });
 
     it(`opens a real assigned task through the ${locale} labeling toolbar`, () => {

@@ -532,6 +532,13 @@ export class LSFWrapper {
     if (readOnly) {
       for (const annotation of this.annotations) annotation.setReadonly(true);
       this.currentAnnotation?.setReadonly(true);
+    }
+    this.refreshTaskAccessGuidance();
+  }
+
+  refreshTaskAccessGuidance() {
+    if (this.destroyed) return;
+    if (this.task?.can_label === false) {
       this.datamanager.invoke("toast", {
         id: "task-assignment-read-only",
         message: this.datamanager.localeRuntime.t("datamanager:taskAssignmentReadOnly"),
