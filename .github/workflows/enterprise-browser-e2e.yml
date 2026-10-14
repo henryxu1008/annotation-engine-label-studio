@@ -114,7 +114,8 @@ jobs:
           yarn nx run app-common:unit
           yarn jest --config libs/ui/jest.config.ts --runInBand --runTestsByPath \
             libs/ui/src/lib/dropdown/dropdown.test.tsx \
-            libs/ui/src/lib/dropdown/dropdown-transition.test.tsx
+            libs/ui/src/lib/dropdown/dropdown-transition.test.tsx \
+            libs/ui/src/lib/toast/toast.test.tsx
           yarn dm:unit
           yarn lsf:unit
 

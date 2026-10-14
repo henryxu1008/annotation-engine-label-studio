@@ -471,3 +471,8 @@ The optimized finished-task aggregate counts distinct task IDs so project
 membership joins cannot inflate completion. Draft navigation feedback uses the
 stable locale runtime; changing locale does not re-register or release a pending
 navigation guard. Selected-region action labels retain the original behavior.
+
+The shared ToastProvider maps its documented `duration=-1` contract to Radix's
+supported `Infinity` duration. Passing -1 through previously closed permanent
+guidance immediately. Mounted-provider tests retain the normal timed-close
+control and verify that dismissing another toast ID cannot remove this guidance.

@@ -121,7 +121,8 @@ export const ToastProvider: FC<ToastProviderWithTypes> = ({ swipeDirection = "do
   const [toastMessage, setToastMessage] = useState<ToastShowArgs | null>();
 
   const defaultDuration = 4000;
-  const duration = toastMessage?.duration ?? defaultDuration;
+  // Adapt the public -1 sentinel to Radix's supported no-timeout value.
+  const duration = toastMessage?.duration === -1 ? Number.POSITIVE_INFINITY : toastMessage?.duration ?? defaultDuration;
 
   const dismiss = useCallback((id?: string) => {
     setToastMessage((current) => {

@@ -23,7 +23,7 @@ it.each(["en-US", "zh-CN"])("makes an unassigned manager task read-only with %s 
   expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("toast", expect.objectContaining({
     message: locale === "zh-CN" ? "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。"
       : "This task is read-only. Ask a project manager to assign it to you before labeling.",
-    duration: Number.POSITIVE_INFINITY,
+    duration: -1,
   }));
   wrapper.task.can_label = true;
   wrapper.lsf.toggleInterface.mockClear();
