@@ -16,46 +16,50 @@ describe("Data Manager and editor display locale", () => {
 
   for (const locale of ["en-US", "zh-CN"]) {
     it(`persists undo to the initial result before leaving in ${locale}`, () => {
-      const path = `/projects/${fixture.project_id}/data?task=${fixture.tasks.a.id}`;
-      cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
-      cy.get('[data-testid="language-preference-select"]').select(locale);
-      cy.visit(path);
-      cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
-      cy.window().should((win: any) => {
-        expect(win.Htx?.isLoading).to.eq(false);
-        expect(win.dataManager.store.loadingData).to.eq(false);
-        expect(win.Htx.annotationStore.selected.history.isFrozen).to.eq(false);
-        expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
-        expect(win.Htx.annotationStore.selected.autosave.paused).not.to.eq(true);
-      });
-      let initial: any[];
-      cy.window().then((win: any) => {
-        initial = win.Htx.annotationStore.selected.serializeAnnotation();
-        expect(win.Htx.annotationStore.selected.history.undoIdx).to.eq(0);
-      });
-      const drafts = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ };
-      cy.intercept(drafts).as("savedEdit");
-      cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
-      cy.wait("@savedEdit", { timeout: 20000 }).then(({ request, response }) => {
-        expect(response?.statusCode).to.be.oneOf([200, 201]);
-        expect(request.body.result).not.to.deep.eq(initial);
-      });
-      cy.intercept(drafts).as("savedUndo");
-      cy.get(`button[aria-label="${locale === "zh-CN" ? "撤销" : "Undo"}"]`).click();
-      cy.window().should((win: any) => {
-        expect(win.Htx.annotationStore.selected.history.undoIdx).to.eq(0);
-        expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq(initial);
-      });
-      cy.get('a[href="/projects"]').click();
-      cy.wait("@savedUndo").then(({ request, response }) => {
-        expect(request.body.result).to.deep.eq(initial);
-        expect(response?.statusCode).to.be.oneOf([200, 201]);
-      });
-      cy.location("pathname").should("eq", "/projects");
-      cy.visit(path);
-      cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
-      cy.window().should((win: any) => {
-        expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq(initial);
+      // Backend data is not reset by Cypress browser isolation. Each regression
+      // owns its project/task, preserving the existing cold-bootstrap fixture.
+      cy.task("createEnterpriseE2EUndoScope").then((scope: any) => {
+        const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;
+        cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        cy.window().should((win: any) => {
+          expect(win.Htx?.isLoading).to.eq(false);
+          expect(win.dataManager.store.loadingData).to.eq(false);
+          expect(win.Htx.annotationStore.selected.history.isFrozen).to.eq(false);
+          expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
+          expect(win.Htx.annotationStore.selected.autosave.paused).not.to.eq(true);
+        });
+        let initial: any[];
+        cy.window().then((win: any) => {
+          initial = JSON.parse(JSON.stringify(win.Htx.annotationStore.selected.serializeAnnotation()));
+          expect(win.Htx.annotationStore.selected.history.undoIdx).to.eq(0);
+        });
+        const drafts = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ };
+        cy.intercept(drafts).as("savedEdit");
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
+        cy.wait("@savedEdit", { timeout: 20000 }).then(({ request, response }) => {
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+          expect(request.body.result).not.to.deep.eq(initial);
+        });
+        cy.intercept(drafts).as("savedUndo");
+        cy.get(`button[aria-label="${locale === "zh-CN" ? "撤销" : "Undo"}"]`).click();
+        cy.window().should((win: any) => {
+          expect(win.Htx.annotationStore.selected.history.undoIdx).to.eq(0);
+          expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq(initial);
+        });
+        cy.get('a[href="/projects"]').click();
+        cy.wait("@savedUndo").then(({ request, response }) => {
+          expect(request.body.result).to.deep.eq(initial);
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+        });
+        cy.location("pathname").should("eq", "/projects");
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        cy.window().should((win: any) => {
+          expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq(initial);
+        });
       });
     });
   }
