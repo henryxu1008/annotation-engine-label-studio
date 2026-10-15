@@ -59,7 +59,9 @@ describe("Data Manager and editor display locale", () => {
         cy.then(() => { holdImage = true; });
         cy.contains('[data-testid="table-row"]', "Independent undo regression.").click();
         cy.location("search").should("contain", `task=${scope.task_id}`);
-        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
+        // Ant Design makes the native input transparent; its enclosing label
+        // is the visible user control. Keep the input enabled/actionable check.
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("not.be.disabled").closest("label").should("be.visible");
         waitForEditableTask(scope.task_id);
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check().should("be.checked");
