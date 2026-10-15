@@ -21,6 +21,35 @@ describe("Annotator labeling entry and queue failures", () => {
   };
 
   for (const locale of ["en-US", "zh-CN"] as const) {
+    it(`leaves a completed single-task queue without an obsolete draft save in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope").then((scope: any) => {
+        enterProject(locale, "annotator_a", scope.project_id);
+        cy.get('[data-testid="dm-label-all-toolbar"]').click();
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        let submitted = false;
+        let obsoleteDraftWrites = 0;
+        cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }, (request) => {
+          if (submitted) obsoleteDraftWrites += 1;
+        }).as("queueDraft");
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
+        cy.wait("@queueDraft", { timeout: 20000 }).its("response.statusCode").should("be.oneOf", [200, 201]);
+        cy.intercept({ method: "POST", pathname: new RegExp(`^/api/tasks/${scope.task_id}/annotations/?$`) }).as("queueSubmit");
+        cy.get('[data-testid="bottombar-submit-button"]').click();
+        cy.wait("@queueSubmit").its("response.statusCode").should("eq", 201);
+        cy.contains(locale === "zh-CN" ? "当前队列中没有可标注的任务。" : "No tasks are currently available in this queue.").should("be.visible");
+        cy.window().should((win: any) => {
+          const annotation = win.Htx.annotationStore.selected;
+          expect(annotation.submissionStarted).to.eq(0);
+          expect(annotation.history.hasChanges).to.eq(true);
+          expect(annotation.hasUnsavedDraft).to.eq(false);
+        });
+        cy.then(() => { submitted = true; });
+        cy.get('a[href="/projects"]').click();
+        cy.location("pathname").should("eq", "/projects");
+        cy.then(() => expect(obsoleteDraftWrites).to.eq(0));
+      });
+    });
+
     it(`explains the unassigned Manager's read-only editor in ${locale}`, () => {
       enterProject(locale, "manager");
       cy.intercept({ method: "GET", pathname: `/api/tasks/${fixture.tasks.a.id}` }).as("managerTask");

@@ -520,3 +520,20 @@ be carried into a new assignment's save or submission. A requeued skipped task
 returns only its current assignment's owned skipped annotation and selects it
 with the editor's existing `default_selected_annotation`/Unskip mechanism. Keep
 the resume, draft-submit and historical-record retention controls as regressions.
+
+### Issue #76 persisted draft confirmation, 2026-10-15
+
+Refresh/close protection and Data Manager navigation use the annotation's
+server-confirmed snapshot rather than Undo history or timestamps. Initial server
+results, restored drafts, lazy server hydration and successful saves explicitly
+confirm that snapshot. An older draft response confirms only its sent snapshot;
+later edits, undo/redo and failures remain protected until their own save succeeds.
+Image/layout history resets must neither confirm user edits nor cancel a pending
+dirty autosave. Keep the delayed-image and completed-queue browser regressions in
+both display languages when upgrading upstream.
+
+After submitting the last assigned task, the selected annotation may remain alive
+on the queue-completion screen. Confirming that successful submission prevents
+Projects/navigation from sending a redundant draft with an obsolete assignment
+version. The server must still reject stale assignment tokens; no authorization
+policy, Core review authority or IAM operations are changed by this UI fix.

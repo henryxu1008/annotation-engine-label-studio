@@ -373,18 +373,19 @@ const _Annotation = types
     get hasUnsavedDraft() {
       if (self.isReadOnly() || !getEnv(self).events.hasEvent("submitDraft")) return false;
       if (self.isDraftSaving || self.submissionStarted || self.draftSaveError) return true;
-      const confirmed = self.savedDraftSnapshot ?? self.history.history[0];
-      return !!confirmed && !deepEqual(getSnapshot(self.trackedState), confirmed, { strict: true });
+      return !deepEqual(getSnapshot(self.trackedState), self.savedDraftSnapshot, { strict: true });
     },
   }))
-  .volatile(() => ({
+  .volatile((self) => ({
     hidden: false,
     draftId: 0,
     draftSelected: false,
     autosaveDelay: 5000,
     isDraftSaving: false,
     draftSavePromise: null,
-    savedDraftSnapshot: null,
+    // Image/layout initialization can reset Undo history without persisting edits.
+    // Only server hydration and acknowledged saves may advance this baseline.
+    savedDraftSnapshot: getSnapshot(self.trackedState),
     draftSaveError: false,
     // This flag indicates that we are accepting suggestions right now (an accepting is started and not finished yet)
     isSuggestionsAccepting: false,
@@ -425,8 +426,14 @@ const _Annotation = types
   .actions((self) => ({
     reinitHistory(force = true) {
       self.history.reinit(force);
-      self.autosave?.cancel();
+      if (!self.hasUnsavedDraft) self.autosave?.cancel();
       if (self.type === "annotation") self.setInitialValues();
+    },
+
+    confirmSavedState(snapshot = getSnapshot(self.trackedState)) {
+      self.savedDraftSnapshot = snapshot;
+      self.draftSaveError = false;
+      if (!self.hasUnsavedDraft) self.autosave?.cancel();
     },
 
     setEditable(val) {
@@ -841,8 +848,7 @@ const _Annotation = types
         // Standalone editor integrations may return no HTTP metadata.
         if (isAlive(self)) {
           if (res === undefined || status === 200 || status === 201) {
-            self.setDraftSaved(savedAt);
-            self.savedDraftSnapshot = snapshot;
+            self.setDraftSaved(savedAt, snapshot);
           } else {
             self.draftSaveError = true;
           }
@@ -909,22 +915,21 @@ const _Annotation = types
     },
 
     dropDraft() {
-      if (!self.autosave) return;
-      self.autosave.cancel();
+      self.autosave?.cancel();
       self.draftId = 0;
       self.draftSelected = false;
       self.draftSaved = undefined;
       self.versions.draft = undefined;
-      self.savedDraftSnapshot = getSnapshot(self.trackedState);
-      self.draftSaveError = false;
+      self.confirmSavedState();
     },
 
     setDraftSaving(saving = false) {
       self.isDraftSaving = saving;
     },
 
-    setDraftSaved(date) {
+    setDraftSaved(date, snapshot = getSnapshot(self.trackedState)) {
       self.draftSaved = date;
+      self.confirmSavedState(snapshot);
     },
 
     afterAttach() {

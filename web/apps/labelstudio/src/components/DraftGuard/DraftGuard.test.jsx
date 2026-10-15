@@ -33,7 +33,7 @@ it.each(["en-US", "zh-CN"])("protects browser refresh/close only while the curre
 it.each([200, 400])("keeps navigation blocked across a locale change until draft response %i", async (status) => {
   let complete;
   const save = jest.fn(() => new Promise((resolve) => { complete = resolve; }));
-  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
+  window.Htx = { annotationStore: { selected: { hasUnsavedDraft: true, history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
   const runtime = createLocaleRuntime("en-US");
   const Provider = runtime.provider;
   const toast = { show: jest.fn() };
@@ -79,7 +79,7 @@ it.each(["rejected", "unconfirmed"])("keeps edits on %s save and allows an expli
   if (failure === "rejected") save.mockRejectedValueOnce(new Error("offline"));
   else save.mockResolvedValueOnce({});
   save.mockResolvedValueOnce({ $meta: { status: 200 } });
-  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
+  window.Htx = { annotationStore: { selected: { hasUnsavedDraft: true, history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
   const runtime = createLocaleRuntime("zh-CN");
   const Provider = runtime.provider;
   const toast = { show: jest.fn() };
@@ -99,7 +99,7 @@ it.each(["rejected", "unconfirmed"])("keeps edits on %s save and allows an expli
 it.each(["en-US", "zh-CN"])("saves an undo back to index zero before leaving in %s", async (locale) => {
   let complete;
   const save = jest.fn(() => new Promise((resolve) => { complete = resolve; }));
-  window.Htx = { annotationStore: { selected: { history: { undoIdx: 0, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
+  window.Htx = { annotationStore: { selected: { hasUnsavedDraft: true, history: { undoIdx: 0, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
   const runtime = createLocaleRuntime(locale);
   const Provider = runtime.provider;
   const toast = { show: jest.fn() };
@@ -112,6 +112,32 @@ it.each(["en-US", "zh-CN"])("saves an undo back to index zero before leaving in 
   expect(navigate).not.toHaveBeenCalled();
   await act(async () => { complete({ $meta: { status: 200 } }); });
   expect(navigate).toHaveBeenCalledTimes(1);
+  view.unmount();
+  runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("leaves the completed queue without resaving confirmed history in %s", (locale) => {
+  const save = jest.fn().mockResolvedValue({ $meta: { status: 409 } });
+  window.Htx = { annotationStore: { selected: { hasUnsavedDraft: false, submissionStarted: 0, history: { hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={{ show: jest.fn() }}><DraftGuard /></ToastContext.Provider></Provider>);
+  expect(mockBlock.mock.calls[0][0]()).toBeUndefined();
+  expect(save).not.toHaveBeenCalled();
+  view.unmount();
+  runtime.destroy();
+});
+
+it("saves pending media edits even after Undo history was reset", async () => {
+  const save = jest.fn().mockResolvedValue({ $meta: { status: 200 } });
+  window.Htx = { annotationStore: { selected: { hasUnsavedDraft: true, history: { hasChanges: false }, saveDraftImmediatelyWithResults: save } } };
+  const runtime = createLocaleRuntime("en-US");
+  const Provider = runtime.provider;
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={{ show: jest.fn() }}><DraftGuard /></ToastContext.Provider></Provider>);
+  await act(async () => { expect(mockBlock.mock.calls[0][0]()).toBe(DRAFT_GUARD_KEY); });
+  expect(save).toHaveBeenCalledTimes(1);
   view.unmount();
   runtime.destroy();
 });

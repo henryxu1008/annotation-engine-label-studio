@@ -914,6 +914,7 @@ export default types
           const obj = as.addAnnotation(c);
 
           obj.deserializeResults(c.draft || c.result, { hidden: true });
+          obj.confirmSavedState();
         });
 
         window.STORE_INIT_OK = true;
@@ -932,6 +933,7 @@ export default types
           // looks like we still need it anyway, but it's fast and harmless,
           // and we only call it once on already visible annotation
           current.reinitHistory();
+          current.confirmSavedState();
         } else if (currentPrediction) {
           as.selectPrediction(currentPrediction.id);
         }
@@ -957,6 +959,7 @@ export default types
           as.selectAnnotation(obj.id);
           obj.deserializeResults(c.draft || c.result);
           obj.reinitHistory();
+          obj.confirmSavedState();
         });
 
         const current = as.annotations.at(-1);

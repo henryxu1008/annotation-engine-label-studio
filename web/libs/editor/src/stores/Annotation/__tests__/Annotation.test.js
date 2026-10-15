@@ -63,9 +63,65 @@ describe("Annotation model", () => {
       const annotation = store.annotationStore.addAnnotation({ result: [{ from_name: "rect", to_name: "img", type: "rectangle", value: { x: 0, y: 0, width: 20, height: 20 } }] });
       annotation.deserializeResults(annotation.versions.result);
       annotation.reinitHistory(false);
+      annotation.confirmSavedState();
       env.events.hasEvent.mockReturnValue(true);
       return { annotation, env, region: annotation.regions[0] };
     };
+
+    it("does not confirm unsaved edits when media initialization resets Undo", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.reinitHistory(false);
+      expect(annotation.history.hasChanges).toBe(false);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+    });
+
+    it("keeps a pending autosave through the actual image-load callback", async () => {
+      jest.useFakeTimers();
+      try {
+        const env = createTestEnv();
+        env.events.hasEvent.mockReturnValue(true);
+        env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 201 } });
+        const store = AppStore.create({ config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>', task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) }, interfaces: ["basic"] }, env);
+        store.initializeStore({ annotations: [{ result: [{ from_name: "rect", to_name: "img", type: "rectangle", value: { x: 0, y: 0, width: 20, height: 20 } }] }] });
+        const annotation = store.annotationStore.selected;
+        await jest.advanceTimersByTimeAsync(0);
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.regions[0].setProperty("width", 22);
+        const image = annotation.names.get("img");
+        image.setContainerRef({ offsetWidth: 600, offsetHeight: 400 });
+        image.updateImageSize({ target: { naturalWidth: 600, naturalHeight: 400 } });
+        await jest.advanceTimersByTimeAsync(1);
+        expect(annotation.hasUnsavedDraft).toBe(true);
+        expect(env.events.invokeFirst).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(5000);
+        expect(env.events.invokeFirst).toHaveBeenCalledTimes(1);
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.autosave.cancel();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("uses a restored server draft as the baseline without confirming later media edits", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      annotation.setDraftSaved("2026-10-15T00:00:00Z");
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.setProperty("width", 23);
+      annotation.reinitHistory(false);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+    });
+
+    it("confirms a formal save even without an autosave handler", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.dropDraft();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      expect(annotation.history.hasChanges).toBe(true);
+    });
 
     it("does not treat an older successful save as confirmation of newer edits", async () => {
       const { annotation, env, region } = createDraft();

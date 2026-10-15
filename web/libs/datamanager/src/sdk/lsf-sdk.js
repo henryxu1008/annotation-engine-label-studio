@@ -613,6 +613,7 @@ export class LSFWrapper {
           lsfAnnotation.updateObjects();
           lsfAnnotation.history.safeUnfreeze();
           lsfAnnotation.history.reinit();
+          lsfAnnotation.confirmSavedState?.();
         }
 
         return fullAnnotation;
@@ -1050,13 +1051,7 @@ export class LSFWrapper {
   };
 
   needsDraftSave = (annotation) => {
-    if (annotation.history?.hasChanges && !annotation.draftSaved) return true;
-    if (
-      annotation.history?.hasChanges &&
-      new Date(annotation.history.lastAdditionTime) > new Date(annotation.draftSaved)
-    )
-      return true;
-    return false;
+    return !!annotation.hasUnsavedDraft;
   };
 
   saveDraft = async (target = null) => {
@@ -1291,7 +1286,7 @@ export class LSFWrapper {
     // Invoke the DataManager callback first so that history fetch can start immediately.
     // The history endpoint only needs the annotation pk (available on stubs).
     // Hydration (which fetches full annotation data) runs in parallel afterwards.
-    if (nextAnnotation?.history?.hasChanges) {
+    if (nextAnnotation && this.needsDraftSave(nextAnnotation)) {
       this.saveDraft(nextAnnotation).then((saved) => {
         if (saved !== false) this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
       });
@@ -1377,9 +1372,8 @@ export class LSFWrapper {
         // Unfreeze history
         freshAnnotation.history?.safeUnfreeze?.();
 
-        // reinitHistory cancels autosave and sets initial values so LSF knows this is the base state
-        // This prevents the hydration from being treated as a user modification
         freshAnnotation.reinitHistory?.();
+        freshAnnotation.confirmSavedState?.();
       }
     } catch {
       // Failed to hydrate annotation - will show stub state

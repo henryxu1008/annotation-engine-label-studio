@@ -76,10 +76,24 @@ it("saves an annotation undone to index zero before publishing its selection", a
   const wrapper = createDraftWrapper();
   wrapper.datamanager.invoke = jest.fn();
   wrapper.saveDraft = jest.fn().mockResolvedValue(true);
-  const outgoing = { history: { undoIdx: 0, hasChanges: true } };
+  const outgoing = { hasUnsavedDraft: true, history: { undoIdx: 0, hasChanges: true } };
   await wrapper._invokeSelectAnnotation(null, outgoing, {});
   expect(wrapper.saveDraft).toHaveBeenCalledWith(outgoing);
   expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("onSelectAnnotation", null, outgoing, {}, wrapper);
+});
+
+it.each([true, false])("uses persisted confirmation, rather than reset/stale Undo history, for draft navigation: %s", async (dirty) => {
+  const wrapper = createDraftWrapper();
+  const annotation = { hasUnsavedDraft: dirty, history: { hasChanges: !dirty }, saveDraftImmediatelyWithResults: jest.fn().mockResolvedValue({ $meta: { status: 200 } }) };
+  wrapper.lsf = { annotationStore: { selected: annotation } };
+  wrapper.draftToast = jest.fn();
+  expect(await wrapper.saveDraft()).toBe(true);
+  expect(annotation.saveDraftImmediatelyWithResults).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.saveDraft = jest.fn().mockResolvedValue(true);
+  await wrapper._invokeSelectAnnotation(null, annotation, {});
+  expect(wrapper.saveDraft).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("onSelectAnnotation", null, annotation, {}, wrapper);
 });
 
 it.each([200, 403, "offline"])("uses the actual in-flight draft result %s instead of inventing success", async (status) => {

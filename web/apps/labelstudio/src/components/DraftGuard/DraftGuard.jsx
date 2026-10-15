@@ -48,7 +48,7 @@ export const DraftGuard = () => {
       const selected = editor?.annotationStore?.selected;
       if (isStateTreeNode(selected) && !isAlive(selected)) return;
       const submissionInProgress = !!selected?.submissionStarted;
-      const hasChanges = !!selected?.history?.hasChanges && !submissionInProgress;
+      const hasChanges = !!selected?.hasUnsavedDraft && !submissionInProgress;
 
       if (hasChanges) {
         const showSaveError = () => showToast({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
