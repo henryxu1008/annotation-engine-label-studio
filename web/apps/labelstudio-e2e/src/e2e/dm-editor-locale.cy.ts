@@ -41,18 +41,28 @@ describe("Data Manager and editor display locale", () => {
         // The controlled response spans editor bootstrap, which can exceed
         // Cypress's default 4s response-handler budget on a cold CI browser.
         const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; releasePendingImage = resolve; });
-        let holdImage = true;
+        let holdImage = false;
         cy.readFile("../../libs/editor/public/images/logo.png", null).then((image) => {
           cy.intercept("GET", "**/ls76-delayed-image.png", (request) => {
-            if (holdImage) request.on("before:response", () => imageGate);
-            request.reply({ statusCode: 200, headers: { "content-type": "image/png" }, body: image });
-          }).as("delayedImage");
+            if (holdImage) {
+              request.alias = "delayedImage";
+              request.on("before:response", () => imageGate);
+            }
+            request.reply({ statusCode: 200, headers: { "content-type": "image/png", "cache-control": "no-store" }, body: image });
+          });
         });
-        cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
+        // The list's direct <img> thumbnail blocks window.load if held during
+        // cy.visit. Finish that navigation first, then open the editor through
+        // the real SPA task-row action so editing can release the image gate.
+        cy.visit(`/projects/${scope.project_id}/data`);
+        cy.contains('[data-testid="table-row"]', "Independent undo regression.").should("be.visible");
+        cy.then(() => { holdImage = true; });
+        cy.contains('[data-testid="table-row"]', "Independent undo regression.").click();
+        cy.location("search").should("contain", `task=${scope.task_id}`);
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
         waitForEditableTask(scope.task_id);
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
-        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check().should("be.checked");
         cy.then(() => { holdImage = false; releaseImage(); releasePendingImage = null; });
         cy.wait("@delayedImage");
         // ImageCache renders the fetched resource through a blob URL.
