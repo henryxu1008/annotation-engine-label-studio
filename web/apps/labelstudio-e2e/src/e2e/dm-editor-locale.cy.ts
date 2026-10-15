@@ -31,12 +31,13 @@ describe("Data Manager and editor display locale", () => {
         });
         cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
-        cy.clock(Date.now(), ["setTimeout", "clearTimeout"]);
+        cy.clock(Date.now(), ["Date", "setTimeout", "clearTimeout"]);
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
         cy.then(() => { holdImage = false; releaseImage(); });
         cy.wait("@delayedImage");
-        cy.get('img[src="/ls76-delayed-image.jpg"]').should(($image) => expect(($image[0] as HTMLImageElement).naturalWidth).to.be.greaterThan(0));
+        // ImageCache renders the fetched resource through a blob URL.
+        cy.get('#label-studio-dm img[alt="image"]').should(($image) => expect(($image[0] as HTMLImageElement).naturalWidth).to.be.greaterThan(0));
         cy.tick(1);
         cy.window().should((win: any) => {
           expect(win.Htx.annotationStore.selected.history.hasChanges).to.eq(false);
