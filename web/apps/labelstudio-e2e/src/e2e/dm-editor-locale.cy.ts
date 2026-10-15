@@ -22,6 +22,10 @@ describe("Data Manager and editor display locale", () => {
         const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').select(locale);
+        // The provider applies locale after the server acknowledges the save.
+        // A full cy.visit before that response can unload the pending change.
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
         cy.visit(path);
         cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
         cy.window().should((win: any) => {
