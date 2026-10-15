@@ -880,7 +880,8 @@ describe("AppStore", () => {
       try {
         const store = createStore({ queueTotal: 5 });
         store.initializeStore({ annotations: [] });
-        const entity = store.annotationStore.selected;
+        const entity = store.annotationStore.addAnnotation({ userGenerate: true });
+        store.annotationStore.selectAnnotation(entity.id);
         entity.beforeSend = jest.fn();
         entity.validate = jest.fn().mockReturnValue(true);
         mockInvoke.mockResolvedValueOnce([{ $meta: { status: 503 } }]);
