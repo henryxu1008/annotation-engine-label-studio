@@ -15,6 +15,8 @@ jest.mock("keymaster", () => {
 
 import "../../../tags/visual/View";
 import "../../../tags/object/RichText";
+import "../../../tags/object/Image/Image.js";
+import "../../../tags/control/Rectangle.js";
 import Tree from "../../../core/Tree";
 import Registry from "../../../core/Registry";
 import AppStore from "../../AppStore";
@@ -54,6 +56,46 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 
 describe("Annotation model", () => {
   describe("draft failure recovery", () => {
+    it.each([200, 403, "offline"])("flushes edits made during an explicit save, with follow-up result %s", async (status) => {
+      const env = createTestEnv();
+      const store = AppStore.create({
+        config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>',
+        task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) },
+        interfaces: ["basic"],
+      }, env);
+      store.initializeStore({});
+      const annotation = store.annotationStore.addAnnotation({ result: [{
+        from_name: "rect", to_name: "img", type: "rectangle",
+        value: { x: 0, y: 0, width: 20, height: 20 },
+      }] });
+      annotation.deserializeResults(annotation.versions.result);
+      const region = annotation.regions[0];
+      const pending = [];
+      const sent = [];
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn(() => {
+        sent.push(annotation.serializeAnnotation({ fast: true }));
+        return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+      });
+      const flush = annotation.saveDraftImmediatelyWithResults();
+      const settled = jest.fn();
+      // Observe rejection immediately, including the follow-up offline case.
+      const outcome = flush.then((res) => ({ res }), (error) => ({ error })).then((value) => { settled(); return value; });
+      region.setProperty("width", 22);
+      pending[0].resolve({ $meta: { status: 200 } });
+      // Drain the real MST flow and promise continuations without running timers.
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      expect(sent.map((result) => result[0].value.width)).toEqual([20, 22]);
+      if (status === "offline") pending[1].reject(new Error("offline"));
+      else pending[1].resolve({ $meta: { status } });
+      const result = await outcome;
+      if (status === "offline") expect(result.error.message).toBe("offline");
+      else expect(result.res.$meta.status).toBe(status);
+      expect(region.width).toBe(22);
+      expect(annotation.isDraftSaving).toBe(false);
+    });
+
     it("propagates a network failure, releases saving, and retries without marking the failed draft saved", async () => {
       const { annotation, env } = createStoreWithAnnotation();
       env.events.hasEvent.mockReturnValue(true);

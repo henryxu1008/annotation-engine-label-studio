@@ -1,5 +1,5 @@
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
-import { destroy, detach, flow, getEnv, getParent, getRoot, isAlive, onSnapshot, types } from "mobx-state-tree";
+import { destroy, detach, flow, getEnv, getParent, getRoot, getSnapshot, isAlive, onSnapshot, types } from "mobx-state-tree";
 import { ff } from "@humansignal/core";
 import { errorBuilder } from "../../core/DataValidator/ConfigValidator";
 import { guidGenerator } from "../../core/Helpers";
@@ -846,9 +846,17 @@ const _Annotation = types
     },
 
     async saveDraftImmediatelyWithResults(params) {
-      // There is no draft to save as it was already saved as an annotation
-      if (self.submissionStarted) return {};
-      return self.saveDraft(params);
+      // A successful older request must not release navigation while newer edits
+      // are still only in memory. MST snapshots also detect undo/redo and edits
+      // within the same millisecond, without adding another revision counter.
+      while (isAlive(self) && !self.submissionStarted) {
+        const snapshot = getSnapshot(self.trackedState);
+        const res = await self.saveDraft(params);
+        const status = res?.$meta?.status;
+        if (status !== undefined && status !== 200 && status !== 201) return res;
+        if (!isAlive(self) || getSnapshot(self.trackedState) === snapshot) return res;
+      }
+      return {};
     },
 
     pauseAutosave() {

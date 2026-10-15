@@ -15,6 +15,58 @@ describe("Data Manager and editor display locale", () => {
   });
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`saves edits made while a departure save is pending in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope").then((scope: any) => {
+        const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;
+        cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        cy.window().should((win: any) => {
+          expect(win.Htx?.isLoading).to.eq(false);
+          expect(win.dataManager.store.loadingData).to.eq(false);
+          expect(win.Htx.annotationStore.selected.history.isFrozen).to.eq(false);
+          expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
+        });
+        // Keep the five-second autosave from becoming the first request. This
+        // scenario must edit after the explicit departure flush has started.
+        cy.clock(Date.now(), ["setTimeout", "clearTimeout"]).as("autosaveClock");
+        let release: () => void;
+        const heldResponse = new Cypress.Promise<void>((resolve) => { release = resolve; });
+        let requests = 0;
+        let latest: any[];
+        cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }, (request) => {
+          requests += 1;
+          request.alias = requests === 1 ? "departureSave" : "latestSave";
+          if (requests === 1) request.on("before:response", () => heldResponse);
+        });
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
+        cy.get('a[href="/projects"]').click();
+        cy.wrap(null).should(() => expect(requests).to.eq(1));
+        cy.location("pathname").should("eq", `/projects/${scope.project_id}/data`);
+        cy.get('#label-studio-dm input[type="checkbox"][name="Negative"]').then(($input) => $input[0].click());
+        cy.window().then((win: any) => {
+          latest = JSON.parse(JSON.stringify(win.Htx.annotationStore.selected.serializeAnnotation()));
+          expect(latest[0].value.choices).to.deep.eq(["Negative"]);
+        });
+        cy.get("@autosaveClock").invoke("restore");
+        cy.then(() => release());
+        cy.wait("@departureSave").its("response.statusCode").should("be.oneOf", [200, 201]);
+        cy.wait("@latestSave").then(({ request, response }) => {
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+          expect(request.body.result).to.deep.eq(latest);
+        });
+        cy.location("pathname").should("eq", "/projects");
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        cy.window().should((win: any) => {
+          expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq(latest);
+        });
+      });
+    });
+
     it(`persists undo to the initial result before leaving in ${locale}`, () => {
       // Backend data is not reset by Cypress browser isolation. Each regression
       // owns its project/task, preserving the existing cold-bootstrap fixture.
