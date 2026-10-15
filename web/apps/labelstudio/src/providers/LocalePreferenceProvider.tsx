@@ -32,7 +32,9 @@ function csrfToken(): string | null {
 export const LocalePreferenceProvider = ({ children }: PropsWithChildren) => {
   const runtime = useLocaleRuntime();
   const { user, isLoading } = useAuth();
-  const ready = Boolean(user?.id && !isLoading);
+  // AuthProvider exposes a user only after the actor query succeeds. Its
+  // loading flag also covers background refreshes of that confirmed actor.
+  const ready = Boolean(user?.id);
   const { callApi } = useAPI();
   const stableCallApi = useRef(callApi).current;
   const [state, setState] = useState(initialState);

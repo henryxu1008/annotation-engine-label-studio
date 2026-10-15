@@ -132,4 +132,25 @@ describe("main app locale preference", () => {
     unmount();
     runtime.destroy();
   });
+
+  it("keeps confirmed actor language controls usable during background account refresh", async () => {
+    mockCallApi.mockResolvedValueOnce(response(null, "en-US", "fallback"));
+    const { runtime, unmount, rerenderApp } = mount();
+    await waitFor(() => expect(mockCallApi).toHaveBeenCalledTimes(1));
+    mockAuthState = { user: { id: 7 }, isLoading: true };
+    rerenderApp();
+    const menu = screen.getByTestId("menu-language-select") as HTMLSelectElement;
+    const account = screen.getByTestId("language-preference-select") as HTMLSelectElement;
+    expect(menu.disabled).toBe(false);
+    expect(account.disabled).toBe(false);
+    mockCallApi.mockResolvedValueOnce(response("zh-CN", "zh-CN"));
+    fireEvent.change(account, { target: { value: "zh-CN" } });
+    await waitFor(() => expect(runtime.locale).toBe("zh-CN"));
+    expect(mockCallApi).toHaveBeenCalledWith("updateCurrentUserLocale", expect.objectContaining({
+      body: { preference: "zh-CN" }, headers: { "X-CSRFToken": "test-csrf" },
+    }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    unmount();
+    runtime.destroy();
+  });
 });

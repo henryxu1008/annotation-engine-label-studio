@@ -387,7 +387,8 @@ freshness. The handoff does not establish production or trusted-browser acceptan
 ## Display locale remains outside authorization
 
 The main app's language controls wait for AuthProvider to confirm the actor;
-an SSR avatar is not authenticated authority. Pending Whoami cannot trigger a
+an SSR avatar is not authenticated authority. Background refresh of an already
+confirmed actor does not disable the language controls. Pending initial Whoami cannot trigger a
 locale write or a misleading save failure. Imperative collaboration modals
 retain their existing provider boundary and open only after actor readiness.
 

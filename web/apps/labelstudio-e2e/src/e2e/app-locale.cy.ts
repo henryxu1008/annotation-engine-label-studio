@@ -108,6 +108,34 @@ describe('main application display locale', () => {
       cy.get('[data-testid="menu-language-preference"] [role="alert"]').should('not.exist');
       cy.then(() => expect(writes, 'one confirmed language save').to.eq(1));
     });
+
+    it(`saves language ${locale} while a confirmed actor refresh is pending`, () => {
+      cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
+      ensureAccountLocale('auto');
+      let releaseRefresh!: () => void;
+      let refreshSeen = false;
+      const gate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+      cy.intercept('GET', '**/api/current-user/whoami', (request) => {
+        refreshSeen = true;
+        return gate.then(() => { request.continue(); });
+      }).as('actorRefresh');
+      cy.intercept('PATCH', '**/api/current-user/locale*').as('saveDuringRefresh');
+      // The real profile Save invalidates the existing actor query. Hold that
+      // background refresh, rather than replacing the authenticated response.
+      cy.get('input[name="first_name"]').closest('form').find('button').click();
+      cy.wrap(null).should(() => { expect(refreshSeen, 'real actor refresh started').to.eq(true); });
+      cy.get('[data-testid="language-preference-select"]').should('be.enabled').select(locale);
+      cy.wait('@saveDuringRefresh').then(({ request, response }) => {
+        expect(request.body).to.deep.equal({ preference: locale });
+        expect(response?.statusCode).to.eq(200);
+      });
+      cy.get('html').should('have.attr', 'lang', locale);
+      cy.get('[data-testid="account-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => { releaseRefresh(); });
+      cy.wait('@actorRefresh').its('response.statusCode').should('eq', 200);
+      cy.get('[data-testid="language-preference-select"]').should('have.value', locale);
+      cy.get('html').should('have.attr', 'lang', locale);
+    });
   }
 
   it('saves a confirmed account preference and preserves unsaved profile values', () => {

@@ -72,8 +72,8 @@ const CollaborationModalTitle = ({ kind, taskId }) => {
 
 const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
   const { t } = useLocaleTranslation("app");
-  const { user, isLoading } = useAuth();
-  const ready = Boolean(user?.id && !isLoading);
+  const { user } = useAuth();
+  const ready = Boolean(user?.id);
   const [preference, setLocalPreference] = useState(initialPreference ?? "auto");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
