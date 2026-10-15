@@ -43,12 +43,14 @@ describe("Data Manager and editor display locale", () => {
         const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; releasePendingImage = resolve; });
         let holdImage = false;
         cy.readFile("../../libs/editor/public/images/logo.png", null).then((image) => {
+          // StaticResponse serializes other objects (including Buffer) as JSON.
+          const imageBody = Uint8Array.from(image).buffer;
           cy.intercept("GET", "**/ls76-delayed-image.png", (request) => {
             if (holdImage) {
               request.alias = "delayedImage";
               request.on("before:response", () => imageGate);
             }
-            request.reply({ statusCode: 200, headers: { "content-type": "image/png", "cache-control": "no-store" }, body: image });
+            request.reply({ statusCode: 200, headers: { "content-type": "image/png", "cache-control": "no-store" }, body: imageBody });
           });
         });
         // The list's direct <img> thumbnail blocks window.load if held during
