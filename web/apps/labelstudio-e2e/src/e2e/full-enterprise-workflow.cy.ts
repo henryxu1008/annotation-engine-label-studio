@@ -56,7 +56,7 @@ describe("full enterprise collaboration browser workflow", () => {
   const loginActor = (email: string, nextPath: string) => {
     cy.loginAs(email, fixture.password, nextPath);
     cy.get('[data-testid="user-menu-trigger"]', { timeout: 30000 }).click();
-    cy.get('[data-testid="menu-language-select"]').then(($select) => {
+    cy.get('[data-testid="menu-language-select"]').should('be.enabled').then(($select) => {
       if ($select.val() !== locale) cy.wrap($select).select(locale);
     });
     cy.get("html").should("have.attr", "lang", locale);

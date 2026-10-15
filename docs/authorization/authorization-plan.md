@@ -386,6 +386,11 @@ freshness. The handoff does not establish production or trusted-browser acceptan
 
 ## Display locale remains outside authorization
 
+The main app's language controls wait for AuthProvider to confirm the actor;
+an SSR avatar is not authenticated authority. Pending Whoami cannot trigger a
+locale write or a misleading save failure. Imperative collaboration modals
+retain their existing provider boundary and open only after actor readiness.
+
 The request-locale middleware runs after Django session authentication and
 wraps JWT middleware and DRF views. A successful JWT or legacy API-token
 authentication may update only the active display locale for that request.

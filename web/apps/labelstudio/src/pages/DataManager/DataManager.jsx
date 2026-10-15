@@ -6,6 +6,7 @@ import { Spinner } from "../../components";
 import { modal } from "../../components/Modal/Modal";
 import { Space } from "../../components/Space/Space";
 import { useAPI } from "../../providers/ApiProvider";
+import { useAuth } from "@humansignal/core/providers/AuthProvider";
 import { useProject } from "../../providers/ProjectProvider";
 import { useContextProps, useParams } from "../../providers/RoutesProvider";
 import { addCrumb, deleteCrumb } from "../../services/breadrumbs";
@@ -71,11 +72,14 @@ const CollaborationModalTitle = ({ kind, taskId }) => {
 
 const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
   const { t } = useLocaleTranslation("app");
+  const { user, isLoading } = useAuth();
+  const ready = Boolean(user?.id && !isLoading);
   const [preference, setLocalPreference] = useState(initialPreference ?? "auto");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
 
   const change = async (event) => {
+    if (!ready) return;
     const next = event.target.value;
     if (next !== "auto" && !isDisplayLocale(next)) return;
     setSaving(true);
@@ -93,7 +97,7 @@ const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
       data-testid="collaboration-language-select"
       aria-label={t("displayLanguage")}
       value={preference}
-      disabled={saving}
+      disabled={!ready || saving}
       onChange={change}
     >
       <option value="auto">{t("languageAutomatic")}</option>
@@ -366,6 +370,7 @@ DataManagerPage.context = ({ dmRef }) => {
   }, [project?.id]);
 
   const openAssignments = () => {
+    if (!localePreference.ready) return;
     const taskId = dmRef?.store?.taskStore?.selected?.id;
 
     if (!taskId) {
@@ -385,6 +390,7 @@ DataManagerPage.context = ({ dmRef }) => {
   };
 
   const openReviews = () => {
+    if (!localePreference.ready) return;
     modal({
       title: <CollaborationModalTitle kind="reviews" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
@@ -394,6 +400,7 @@ DataManagerPage.context = ({ dmRef }) => {
   };
 
   const openReleases = () => {
+    if (!localePreference.ready) return;
     modal({
       title: <CollaborationModalTitle kind="releases" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
@@ -455,7 +462,7 @@ DataManagerPage.context = ({ dmRef }) => {
         <Button
           size="small"
           look="outlined"
-          disabled={mode === "explorer"}
+          disabled={mode === "explorer" || !localePreference.ready}
           onClick={openAssignments}
           data-testid="manage-task-assignments"
         >
@@ -468,6 +475,7 @@ DataManagerPage.context = ({ dmRef }) => {
           size="small"
           look="outlined"
           onClick={openReleases}
+          disabled={!localePreference.ready}
           data-testid="open-release-workspace"
         >
           {tc("releases")}
@@ -479,6 +487,7 @@ DataManagerPage.context = ({ dmRef }) => {
           size="small"
           look="outlined"
           onClick={openReviews}
+          disabled={!localePreference.ready}
           data-testid="open-review-workspace"
         >
           {tc("reviews")}

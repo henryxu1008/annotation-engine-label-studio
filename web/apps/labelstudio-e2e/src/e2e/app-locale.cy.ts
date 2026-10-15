@@ -22,7 +22,7 @@ describe('main application display locale', () => {
   };
 
   const ensureAccountLocale = (value: 'auto' | 'en-US' | 'zh-CN') => {
-    cy.get('[data-testid="language-preference-select"]').then(($select) => {
+    cy.get('[data-testid="language-preference-select"]').should('be.enabled').then(($select) => {
       if ($select.val() !== value) chooseAccountLocale(value);
     });
     cy.get('[data-testid="language-preference-select"]').should('have.value', value);
@@ -77,6 +77,38 @@ describe('main application display locale', () => {
     // The authenticated preference or Accept-Language takes over after login.
     cy.get('body').should('contain.text', 'Enterprise Browser E2E');
   });
+
+  for (const locale of ['en-US', 'zh-CN'] as const) {
+    it(`waits for Whoami before saving menu language ${locale}`, () => {
+      cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
+      ensureAccountLocale('auto');
+      let releaseWhoami!: () => void;
+      const gate = new Promise<void>((resolve) => { releaseWhoami = resolve; });
+      let writes = 0;
+      cy.intercept({ method: 'GET', url: '**/api/current-user/whoami', times: 1 }, (request) =>
+        gate.then(() => { request.continue(); }),
+      ).as('pendingActor');
+      cy.intercept('PATCH', '**/api/current-user/locale*', () => { writes += 1; }).as('confirmedLocale');
+      cy.visit('/projects');
+      cy.get('[data-testid="user-menu-trigger"]').click();
+      cy.get('[data-testid="menu-language-select"]').should('be.disabled');
+      cy.get('[data-testid="menu-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => {
+        expect(writes, 'no language write before authenticated actor').to.eq(0);
+        releaseWhoami();
+      });
+      cy.wait('@pendingActor').its('response.statusCode').should('eq', 200);
+      cy.get('[data-testid="menu-language-select"]').should('be.enabled').select(locale);
+      cy.wait('@confirmedLocale').then(({ request, response }) => {
+        expect(request.body).to.deep.equal({ preference: locale });
+        expect(response?.statusCode).to.eq(200);
+      });
+      cy.get('html').should('have.attr', 'lang', locale);
+      cy.get('[data-testid="menu-language-select"]').should('have.value', locale);
+      cy.get('[data-testid="menu-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => expect(writes, 'one confirmed language save').to.eq(1));
+    });
+  }
 
   it('saves a confirmed account preference and preserves unsaved profile values', () => {
     cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
