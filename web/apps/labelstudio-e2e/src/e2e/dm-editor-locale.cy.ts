@@ -9,19 +9,38 @@ type Fixture = {
 
 describe("Data Manager and editor display locale", () => {
   let fixture: Fixture;
+  let releasePendingImage: (() => void) | null = null;
+
+  afterEach(() => {
+    // A failed readiness assertion must not leave response promises in flight
+    // when Cypress restores the next test's default timeout and page.
+    releasePendingImage?.();
+    releasePendingImage = null;
+  });
+
+  const waitForEditableTask = (taskId: number) => cy.window({ timeout: 30000 }).should((win: any) => {
+    expect(Number(win.Htx?.task?.id)).to.eq(taskId);
+    expect(win.Htx.isLoading).to.eq(false);
+    expect(win.dataManager.store.loadingData).to.eq(false);
+    expect(win.Htx.annotationStore.selected.history.isFrozen).to.eq(false);
+    expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
+    expect(win.Htx.annotationStore.selected.autosave.paused).not.to.eq(true);
+  });
 
   before(() => {
     cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data as Fixture; });
   });
 
   for (const locale of ["en-US", "zh-CN"]) {
-    it(`preserves edits and their pending autosave when an image finishes loading in ${locale}`, () => {
+    it(`preserves edits and their pending autosave when an image finishes loading in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
       cy.task("createEnterpriseE2EUndoScope", { delayedImage: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').select(locale);
         cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
         let releaseImage: () => void;
-        const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; });
+        // The controlled response spans editor bootstrap, which can exceed
+        // Cypress's default 4s response-handler budget on a cold CI browser.
+        const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; releasePendingImage = resolve; });
         let holdImage = true;
         cy.readFile("../../libs/editor/public/images/logo.png", null).then((image) => {
           cy.intercept("GET", "**/ls76-delayed-image.png", (request) => {
@@ -31,15 +50,10 @@ describe("Data Manager and editor display locale", () => {
         });
         cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
-        cy.window().should((win: any) => {
-          expect(win.Htx.isLoading).to.eq(false);
-          expect(win.dataManager.store.loadingData).to.eq(false);
-          expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
-          expect(win.Htx.annotationStore.selected.autosave.paused).not.to.eq(true);
-        });
+        waitForEditableTask(scope.task_id);
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
-        cy.then(() => { holdImage = false; releaseImage(); });
+        cy.then(() => { holdImage = false; releaseImage(); releasePendingImage = null; });
         cy.wait("@delayedImage");
         // ImageCache renders the fetched resource through a blob URL.
         cy.get('#label-studio-dm img[alt="image"]').should(($image) => expect(($image[0] as HTMLImageElement).naturalWidth).to.be.greaterThan(0));
@@ -68,12 +82,13 @@ describe("Data Manager and editor display locale", () => {
         cy.get("html").should("have.attr", "lang", locale);
         cy.visit(path);
         cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        waitForEditableTask(scope.task_id);
         let offline = true;
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }, (request) => {
           request.alias = offline ? "unloadSaveFailed" : "unloadSaveRetry";
           if (offline) request.reply({ forceNetworkError: true });
         });
-        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("not.be.checked").check();
         cy.wait("@unloadSaveFailed", { timeout: 20000 });
         cy.get('[data-testid="draft-save-status"]').should("contain.text", locale === "zh-CN" ? "草稿保存失败" : "Draft not saved");
         // Cypress accepts native unload dialogs automatically. Test the event
