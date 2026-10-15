@@ -136,7 +136,7 @@ export class LabelStudio {
   // This is a temporary solution that allows React 17 to work in the meantime.
   // and we can update our other usages of LabelStudio to use createRoot, namely tests will likely be affected.
   async createAppV17() {
-    const { store } = await configureStore(this.options, this.events);
+    const { store } = await configureStore(this.options, this.events, this.localeRuntime);
     if (this.isDestroyed) {
       destroy(store);
       return;
@@ -217,7 +217,7 @@ export class LabelStudio {
   // To support React 18 properly, we need to use createRoot
   // and render the app with it, and properly unmount it and cleanup all references
   async createAppV18() {
-    const { store } = await configureStore(this.options, this.events);
+    const { store } = await configureStore(this.options, this.events, this.localeRuntime);
     if (this.isDestroyed) {
       destroy(store);
       return;

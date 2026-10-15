@@ -15,6 +15,56 @@ describe("Data Manager and editor display locale", () => {
   });
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`recovers drafts, departure protection and submit retry after failures in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope", { required: true }).then((scope: any) => {
+        const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;
+        cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible").click();
+        cy.contains(locale === "zh-CN" ? '提交前请为“sentiment”选择一个选项。' : 'Select an option for "sentiment" before submitting.').should("be.visible");
+        cy.get(".ant-modal-confirm .ant-btn-primary").click();
+        cy.window().should((win: any) => expect(win.Htx.annotationStore.selected.submissionStarted).to.eq(0));
+        const drafts = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ };
+        cy.intercept(drafts).as("initialRecoveryDraft");
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
+        cy.wait("@initialRecoveryDraft", { timeout: 20000 }).its("response.statusCode").should("be.oneOf", [200, 201]);
+        cy.intercept({ method: "POST", url: `**/api/tasks/${scope.task_id}/annotations*`, times: 1 }, { statusCode: 503, body: { detail: "Synthetic submission failure" } }).as("failedSubmit");
+        cy.get('[data-testid="bottombar-submit-button"]').click();
+        cy.wait("@failedSubmit");
+        cy.contains(locale === "zh-CN" ? "标注未能保存" : "Annotation is not saved").should("be.visible");
+        cy.window().should((win: any) => {
+          expect(win.Htx.isSubmitting).to.eq(false);
+          expect(win.Htx.annotationStore.selected.submissionStarted).to.eq(0);
+          expect(win.Htx.annotationStore.selected.draftId).to.be.greaterThan(0);
+        });
+        cy.intercept({ ...drafts, times: 1 }, { forceNetworkError: true }).as("failedRecoveryDraft");
+        cy.get('#label-studio-dm input[type="checkbox"][name="Negative"]').then(($input) => $input[0].click());
+        cy.get('a[href="/projects"]').click();
+        cy.wait("@failedRecoveryDraft");
+        cy.contains(locale === "zh-CN" ? "草稿未能保存，请重试后再离开此页。" : "There was an error saving your draft").should("be.visible");
+        cy.location("pathname").should("eq", `/projects/${scope.project_id}/data`);
+        cy.intercept(drafts).as("retryRecoveryDraft");
+        cy.get('a[href="/projects"]').click();
+        cy.wait("@retryRecoveryDraft").then(({ request, response }) => {
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+          expect(request.body.result[0].value.choices).to.deep.eq(["Negative"]);
+        });
+        cy.location("pathname").should("eq", "/projects");
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        cy.get('#label-studio-dm input[type="checkbox"][name="Negative"]').should("be.checked");
+        cy.intercept("POST", `**/api/tasks/${scope.task_id}/annotations*`).as("submitRecoveryRetry");
+        cy.get('[data-testid="bottombar-submit-button"]').click();
+        cy.wait("@submitRecoveryRetry").then(({ request, response }) => {
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+          expect(request.body.result[0].value.choices).to.deep.eq(["Negative"]);
+        });
+      });
+    });
+
     it(`saves edits made while a departure save is pending in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope").then((scope: any) => {
         const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;

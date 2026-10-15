@@ -222,10 +222,6 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
               onClick={async (event) => {
                 event.preventDefault();
 
-                const selected = store.annotationStore?.selected;
-
-                selected?.submissionInProgress();
-
                 if ("URLSearchParams" in window) {
                   const searchParams = new URLSearchParams(window.location.search);
 
@@ -266,9 +262,6 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
                   disabled={isDisabled}
                   onClick={async (event) => {
                     if ((event.target as HTMLButtonElement).classList.contains(dropdownTrigger)) return;
-                    const selected = store.annotationStore?.selected;
-
-                    selected?.submissionInProgress();
                     await store.commentStore.commentFormSubmit();
                     store.submitAnnotation();
                   }}
@@ -321,9 +314,6 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
                   disabled={isUpdateDisabled}
                   onClick={async (event) => {
                     if ((event.target as HTMLButtonElement).classList.contains(dropdownTrigger)) return;
-                    const selected = store.annotationStore?.selected;
-
-                    selected?.submissionInProgress();
                     await store.commentStore.commentFormSubmit();
                     store.updateAnnotation();
                   }}

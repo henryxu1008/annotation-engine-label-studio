@@ -841,6 +841,10 @@ const _Annotation = types
       self.submissionStarted = Date.now();
     },
 
+    submissionFinished() {
+      self.submissionStarted = 0;
+    },
+
     saveDraftImmediately() {
       if (self.autosave) self.autosave.flush();
     },

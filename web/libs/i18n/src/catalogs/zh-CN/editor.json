@@ -169,5 +169,8 @@
   "zoomIn": "放大",
   "zoomOut": "缩小",
   "zoomToFit": "适应窗口",
-  "zoomToActualSize": "原始尺寸"
+  "zoomToActualSize": "原始尺寸",
+  "warningTitle": "提示",
+  "requiredChoice": "提交前请为“{{name}}”选择一个选项。",
+  "submissionFailed": "标注未能保存，当前编辑仍保留在页面中，请重试。"
 }

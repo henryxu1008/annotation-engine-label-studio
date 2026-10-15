@@ -13,7 +13,7 @@ export class LabelStudio extends Component {
 
   componentDidMount() {
     const initialTask = this.props.task;
-    configureStore(this.props).then(({ store }) => {
+    configureStore(this.props, undefined, this.localeRuntime).then(({ store }) => {
       if (this.unmounted) {
         destroy(store);
         return;

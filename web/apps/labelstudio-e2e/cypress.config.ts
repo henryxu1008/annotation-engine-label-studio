@@ -23,7 +23,7 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope() {
+        createEnterpriseE2EUndoScope(options: { required?: boolean } = {}) {
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
           const ids = { project: fixture.project_id, manager: fixture.users.manager.id, annotator: fixture.users.annotator_a.id };
           if (!Object.values(ids).every((id) => Number.isSafeInteger(id) && Number(id) > 0)) throw new Error('Fixture IDs required');
@@ -36,7 +36,10 @@ ids = ${JSON.stringify(ids)}
 with transaction.atomic():
     original = Project.objects.get(pk=ids['project'], created_by_id=ids['manager'], organization__title='Enterprise E2E Organization')
     assert original.members.filter(user_id=ids['annotator'], role=ProjectMember.Role.ANNOTATOR, enabled=True).exists()
-    project = Project.objects.create(title='Isolated Undo browser regression', organization=original.organization, created_by_id=ids['manager'], is_published=True, enable_empty_annotation=True, label_config=original.label_config)
+    config = original.label_config
+    if ${options.required === true ? 'True' : 'False'}:
+        config = config.replace('<Choices ', '<Choices required="true" ', 1)
+    project = Project.objects.create(title='Isolated editor browser regression', organization=original.organization, created_by_id=ids['manager'], is_published=True, enable_empty_annotation=True, label_config=config)
     ProjectMember.objects.create(project=project, user_id=ids['manager'], role=ProjectMember.Role.MANAGER)
     ProjectMember.objects.create(project=project, user_id=ids['annotator'], role=ProjectMember.Role.ANNOTATOR)
     task = Task.objects.create(project=project, data={'text': 'Independent undo regression.'}, overlap=1)

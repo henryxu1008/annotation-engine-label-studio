@@ -912,7 +912,7 @@ export class LSFWrapper {
     // Prevent submission if overlap is reached (only when feature flag is enabled)
     if (isFF(FF_FIT_1304_STRICT_OVERLAP) && this.overlapReached) {
       this.showOverlapReachedMessage();
-      return;
+      return { $meta: { status: 409 } };
     }
 
     const exitStream = this.shouldExitStream();
@@ -936,7 +936,7 @@ export class LSFWrapper {
     this.showOperationToast(status, "annotationSaved", "annotationSaveFailed", result);
 
     // FIT-720: Invalidate caches after successful submit
-    if (status < 400) {
+    if (status === 200 || status === 201) {
       // Invalidate specific annotation if ID is in result
       if (result?.id) {
         invalidateAnnotationCache(result.id);
@@ -945,7 +945,8 @@ export class LSFWrapper {
       invalidateDistributionCache(this.task?.id);
     }
 
-    if (exitStream) return this.exitStream();
+    if (exitStream && (status === 200 || status === 201)) this.exitStream();
+    return result;
   };
 
   /** @private */
@@ -979,15 +980,16 @@ export class LSFWrapper {
     this.datamanager.invoke("updateAnnotation", ls, annotation, result);
 
     // FIT-720: Invalidate annotation cache after successful update
-    if (status < 400 && annotation.pk) {
+    if ((status === 200 || status === 201) && annotation.pk) {
       invalidateAnnotationCache(annotation.pk);
       invalidateDistributionCache(task.id);
     }
 
-    if (exitStream) return this.exitStream();
+    if (status !== undefined && status !== 200 && status !== 201) return result;
 
-    if (status >= 400) {
-      return;
+    if (exitStream) {
+      this.exitStream();
+      return result;
     }
 
     const isRejectedQueue = isDefined(task.default_selected_annotation);
@@ -998,6 +1000,7 @@ export class LSFWrapper {
     } else {
       await this.loadTask(this.task.id, annotation.pk, true);
     }
+    return result;
   };
 
   deleteDraft = async (id) => {
@@ -1400,11 +1403,8 @@ export class LSFWrapper {
       serializedAnnotation.unique_id = unique_id;
     }
 
-    this.setLoading(true);
-
-    await this.saveUserLabels();
-
     const result = await this.withinLoadingState(async () => {
+      await this.saveUserLabels();
       const result = await submit(taskID, serializedAnnotation);
 
       return result;
@@ -1429,8 +1429,8 @@ export class LSFWrapper {
       }
     }
 
-    this.setLoading(false);
-    if (result?.$meta?.status >= 400) {
+    const status = result?.$meta?.status;
+    if (status !== undefined && status !== 200 && status !== 201) {
       // don't reload the task on error to avoid losing the user's changes
       return result;
     }

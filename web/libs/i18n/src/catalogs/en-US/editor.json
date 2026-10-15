@@ -170,5 +170,8 @@
   "zoomIn": "Zoom In",
   "zoomOut": "Zoom Out",
   "zoomToFit": "Zoom to fit",
-  "zoomToActualSize": "Zoom to actual size"
+  "zoomToActualSize": "Zoom to actual size",
+  "warningTitle": "Warning",
+  "requiredChoice": "Select an option for \"{{name}}\" before submitting.",
+  "submissionFailed": "Annotation could not be saved. Your edits are still here. Please retry."
 }

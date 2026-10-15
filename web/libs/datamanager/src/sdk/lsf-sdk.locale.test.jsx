@@ -16,6 +16,51 @@ function createDraftWrapper() {
   }
 }
 
+it.each([0, 503, 201])("returns the real submit response %s and exits only after success", async (status) => {
+  const wrapper = createDraftWrapper();
+  const result = { $meta: { status } };
+  wrapper.shouldExitStream = () => true;
+  wrapper.submitCurrentAnnotation = jest.fn().mockResolvedValue(result);
+  wrapper.showOperationToast = jest.fn();
+  wrapper.exitStream = jest.fn();
+  expect(await wrapper.onSubmitAnnotation()).toBe(result);
+  expect(wrapper.exitStream).toHaveBeenCalledTimes(status === 201 ? 1 : 0);
+});
+
+it.each([0, 503, 200])("returns the real update response %s and keeps failed edits on the same task", async (status) => {
+  const wrapper = createDraftWrapper();
+  const result = { $meta: { status } };
+  wrapper.task = { id: 42 };
+  wrapper.prepareData = jest.fn().mockReturnValue({});
+  wrapper.shouldExitStream = () => true;
+  wrapper.saveUserLabels = jest.fn();
+  wrapper.lsf = { setFlags: jest.fn() };
+  wrapper.datamanager.apiCall = jest.fn().mockResolvedValue(result);
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.showOperationToast = jest.fn();
+  wrapper.exitStream = jest.fn();
+  wrapper.loadTask = jest.fn();
+  expect(await wrapper.onUpdateAnnotation({}, { pk: 17 })).toBe(result);
+  expect(wrapper.exitStream).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+  expect(wrapper.loadTask).not.toHaveBeenCalled();
+});
+
+it.each([0, 503, "offline"])("does not reload or remain loading when submit fails: %s", async (status) => {
+  const wrapper = createDraftWrapper();
+  wrapper.task = { id: 42 };
+  wrapper.lsf = { annotationStore: { selected: {} }, setFlags: jest.fn() };
+  wrapper.prepareData = jest.fn().mockReturnValue({});
+  wrapper.saveUserLabels = jest.fn();
+  wrapper.loadTask = jest.fn();
+  const result = { $meta: { status } };
+  const submit = status === "offline" ? jest.fn().mockRejectedValue(new Error("offline")) : jest.fn().mockResolvedValue(result);
+  const pending = wrapper.submitCurrentAnnotation("submitAnnotation", submit);
+  if (status === "offline") await expect(pending).rejects.toThrow("offline");
+  else expect(await pending).toBe(result);
+  expect(wrapper.loadTask).not.toHaveBeenCalled();
+  expect(wrapper.lsf.setFlags).toHaveBeenLastCalledWith({ isLoading: false });
+});
+
 it.each(["next", "prev"])("keeps the current task when %s navigation cannot save edits", async (direction) => {
   const wrapper = createDraftWrapper();
   wrapper.saveDraft = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
