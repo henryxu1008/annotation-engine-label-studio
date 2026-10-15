@@ -53,6 +53,54 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 }
 
 describe("Annotation model", () => {
+  describe("draft failure recovery", () => {
+    it("propagates a network failure, releases saving, and retries without marking the failed draft saved", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn().mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValueOnce({ $meta: { status: 200 } });
+      await expect(annotation.saveDraftImmediatelyWithResults()).rejects.toThrow("offline");
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeUndefined();
+      await expect(annotation.saveDraftImmediatelyWithResults()).resolves.toMatchObject({ $meta: { status: 200 } });
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeDefined();
+    });
+
+    it("does not mark a rejected HTTP response as saved", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 403 } });
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeUndefined();
+    });
+
+    it("waits for an autosave then serializes the latest edits before confirming navigation", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      let complete;
+      const sent = [];
+      let value = "before";
+      annotation.serializeAnnotation = jest.fn(() => [value]);
+      env.events.invokeFirst = jest.fn(() => {
+        sent.push(value);
+        return sent.length === 1 ? new Promise((resolve) => { complete = resolve; }) : Promise.resolve({ $meta: { status: 200 } });
+      });
+      const first = annotation.saveDraft();
+      value = "latest";
+      const leave = annotation.saveDraftImmediatelyWithResults();
+      let left = false;
+      leave.then(() => { left = true; });
+      await Promise.resolve();
+      expect(left).toBe(false);
+      complete({ $meta: { status: 200 } });
+      await first;
+      await leave;
+      expect(sent).toEqual(["before", "latest"]);
+      expect(annotation.isDraftSaving).toBe(false);
+    });
+  });
   describe("creation and snapshot", () => {
     it("creates annotation with default type and editable", () => {
       const { annotation } = createStoreWithAnnotation();

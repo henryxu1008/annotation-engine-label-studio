@@ -1,5 +1,6 @@
 import { observer } from "mobx-react";
 import { types } from "mobx-state-tree";
+import { useLocaleTranslation } from "@humansignal/i18n";
 
 import { IconMoveTool } from "@humansignal/icons";
 import { Tool } from "../components/Toolbar/Tool";
@@ -9,12 +10,13 @@ import { FF_LSDV_4930, isFF } from "../utils/feature-flags";
 import BaseTool from "./Base";
 
 const ToolView = observer(({ item }) => {
+  const { t } = useLocaleTranslation("editor");
   return (
     <Tool
       ariaLabel="move-tool"
       active={item.selected}
       icon={<IconMoveTool />}
-      label="Move"
+      label={t("moveRegion")}
       shortcut={item.shortcut}
       extraShortcuts={item.extraShortcuts}
       onClick={() => {

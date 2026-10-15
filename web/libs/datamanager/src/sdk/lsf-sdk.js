@@ -14,7 +14,7 @@ import { Modal } from "../components/Common/Modal/Modal";
 import { CommentsSdk } from "./comments-sdk";
 // import { LSFHistory } from "./lsf-history";
 import { annotationToServer, taskToLSFormat } from "./lsf-utils";
-import { when, runInAction } from "mobx";
+import { runInAction } from "mobx";
 import { isAlive } from "mobx-state-tree";
 import { imageCache } from "@humansignal/core";
 import { invalidateAnnotationCache, invalidateDistributionCache } from "@humansignal/core/lib/utils/annotation-cache";
@@ -1060,14 +1060,18 @@ export class LSFWrapper {
     const selected = target || this.lsf?.annotationStore?.selected;
     const hasChanges = selected ? this.needsDraftSave(selected) : false;
 
-    if (selected?.isDraftSaving) {
-      await when(() => !selected.isDraftSaving);
-      this.draftToast(200);
-    } else if (hasChanges && selected) {
-      const res = await selected?.saveDraftImmediatelyWithResults();
-
-      this.draftToast(res.$meta?.status, res);
+    if (selected?.isDraftSaving || (hasChanges && selected)) {
+      try {
+        const res = await selected.saveDraftImmediatelyWithResults();
+        const status = res?.$meta?.status;
+        this.draftToast(status ?? 0, res);
+        return status === 200 || status === 201;
+      } catch {
+        this.draftToast(0);
+        return false;
+      }
     }
+    return true;
   };
 
   onSubmitDraft = async (_studio, annotation, params = {}) => {
@@ -1285,8 +1289,8 @@ export class LSFWrapper {
     // The history endpoint only needs the annotation pk (available on stubs).
     // Hydration (which fetches full annotation data) runs in parallel afterwards.
     if (nextAnnotation?.history?.undoIdx) {
-      this.saveDraft(nextAnnotation).then(() => {
-        this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
+      this.saveDraft(nextAnnotation).then((saved) => {
+        if (saved !== false) this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
       });
     } else {
       this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
@@ -1380,11 +1384,11 @@ export class LSFWrapper {
   };
 
   onNextTask = async (nextTaskId, nextAnnotationId) => {
-    await this.saveDraft();
+    if ((await this.saveDraft()) === false) return;
     await this.loadTask(nextTaskId, nextAnnotationId, true);
   };
   onPrevTask = async (prevTaskId, prevAnnotationId) => {
-    await this.saveDraft();
+    if ((await this.saveDraft()) === false) return;
     await this.loadTask(prevTaskId, prevAnnotationId, true);
   };
   async submitCurrentAnnotation(eventName, submit, includeId = false, loadNext = true) {

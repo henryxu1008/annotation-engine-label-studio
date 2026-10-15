@@ -163,5 +163,11 @@
   "editRegionMeta": "编辑区域元数据",
   "showSelectedRegion": "显示选中区域",
   "hideSelectedRegion": "隐藏选中区域",
-  "deleteSelectedRegion": "删除选中区域"
+  "deleteSelectedRegion": "删除选中区域",
+  "moveRegion": "移动区域",
+  "panImage": "平移图片",
+  "zoomIn": "放大",
+  "zoomOut": "缩小",
+  "zoomToFit": "适应窗口",
+  "zoomToActualSize": "原始尺寸"
 }

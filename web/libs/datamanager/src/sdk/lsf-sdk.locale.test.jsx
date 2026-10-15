@@ -4,6 +4,45 @@ import { createLocaleRuntime } from "@humansignal/i18n";
 import { LSFWrapper } from "./lsf-sdk";
 import { Modal } from "../components/Common/Modal/Modal";
 
+function createDraftWrapper() {
+  const previousSettings = window.APP_SETTINGS;
+  window.APP_SETTINGS = previousSettings ?? {};
+  const init = jest.spyOn(LSFWrapper.prototype, "initLabelStudio").mockImplementation(() => {});
+  try {
+    return new LSFWrapper({ store: { project: { id: 7 }, users: [] }, hasInterface: () => false }, document.createElement("div"), {});
+  } finally {
+    init.mockRestore();
+    window.APP_SETTINGS = previousSettings;
+  }
+}
+
+it.each(["next", "prev"])("keeps the current task when %s navigation cannot save edits", async (direction) => {
+  const wrapper = createDraftWrapper();
+  wrapper.saveDraft = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  wrapper.loadTask = jest.fn();
+  const navigate = direction === "next" ? wrapper.onNextTask : wrapper.onPrevTask;
+  await navigate(42, 17);
+  expect(wrapper.loadTask).not.toHaveBeenCalled();
+  await navigate(42, 17);
+  expect(wrapper.loadTask).toHaveBeenCalledWith(42, 17, true);
+});
+
+it.each([200, 403, "offline"])("uses the actual in-flight draft result %s instead of inventing success", async (status) => {
+  let complete;
+  const pending = new Promise((resolve, reject) => { complete = status === "offline" ? reject : resolve; });
+  const selected = { isDraftSaving: true, saveDraftImmediatelyWithResults: jest.fn(() => pending) };
+  const wrapper = createDraftWrapper();
+  wrapper.lsf = { annotationStore: { selected } };
+  wrapper.needsDraftSave = () => true;
+  wrapper.draftToast = jest.fn();
+  const saving = wrapper.saveDraft();
+  expect(wrapper.draftToast).not.toHaveBeenCalled();
+  complete(status === "offline" ? new Error("offline") : { $meta: { status } });
+  expect(await saving).toBe(status === 200);
+  if (status === "offline") expect(wrapper.draftToast).toHaveBeenCalledWith(0);
+  else expect(wrapper.draftToast).toHaveBeenCalledWith(status, { $meta: { status } });
+});
+
 it.each(["en-US", "zh-CN"])("makes an unassigned manager task read-only with %s guidance", (locale) => {
   const runtime = createLocaleRuntime(locale);
   const selected = { setReadonly: jest.fn() };

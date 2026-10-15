@@ -164,5 +164,11 @@
   "editRegionMeta": "Edit region's meta",
   "showSelectedRegion": "Show selected region",
   "hideSelectedRegion": "Hide selected region",
-  "deleteSelectedRegion": "Delete selected region"
+  "deleteSelectedRegion": "Delete selected region",
+  "moveRegion": "Move",
+  "panImage": "Pan Image",
+  "zoomIn": "Zoom In",
+  "zoomOut": "Zoom Out",
+  "zoomToFit": "Zoom to fit",
+  "zoomToActualSize": "Zoom to actual size"
 }

@@ -375,6 +375,7 @@ const _Annotation = types
     draftSelected: false,
     autosaveDelay: 5000,
     isDraftSaving: false,
+    draftSavePromise: null,
     // This flag indicates that we are accepting suggestions right now (an accepting is started and not finished yet)
     isSuggestionsAccepting: false,
     submissionStarted: 0,
@@ -795,7 +796,8 @@ const _Annotation = types
           // if autosave is paused, do nothing
           if (self.autosave.paused) return;
 
-          self.saveDraft();
+          // A failed background save must stay retryable, without an unhandled rejection.
+          self.saveDraft().catch(() => {});
         },
         self.autosaveDelay,
         { leading: false },
@@ -804,7 +806,11 @@ const _Annotation = types
       onSnapshot(self.areas, self.autosave);
     }),
 
-    async saveDraft(params) {
+    saveDraft: flow(function* (params) {
+      // Flushes must wait for autosave and then capture edits made during that request.
+      // Do not return a fabricated success while a previous request is pending.
+      while (isAlive(self) && self.draftSavePromise) yield self.draftSavePromise;
+      if (!isAlive(self)) return;
       // There is no draft to save as it was already saved as an annotation
       if (self.submissionStarted) return;
       // if this is now a history item or prediction don't save it
@@ -815,12 +821,21 @@ const _Annotation = types
       self.setDraftSelected();
       self.versions.draft = result;
       self.setDraftSaving(true);
-      return self.store.submitDraft(self, params).then((res) => {
-        self.onDraftSaved(res);
-
+      const savedAt = Utils.UDate.currentISODate();
+      try {
+        self.draftSavePromise = self.store.submitDraft(self, params);
+        const res = yield self.draftSavePromise;
+        const status = res?.$meta?.status;
+        // Standalone editor integrations may return no HTTP metadata.
+        if (isAlive(self) && (status === undefined || status === 200 || status === 201)) self.setDraftSaved(savedAt);
         return res;
-      });
-    },
+      } finally {
+        if (isAlive(self)) {
+          self.draftSavePromise = null;
+          self.setDraftSaving(false);
+        }
+      }
+    }),
 
     submissionInProgress() {
       self.submissionStarted = Date.now();
@@ -832,11 +847,8 @@ const _Annotation = types
 
     async saveDraftImmediatelyWithResults(params) {
       // There is no draft to save as it was already saved as an annotation
-      if (self.submissionStarted || self.isDraftSaving) return {};
-      self.setDraftSaving(true);
-      const res = await self.saveDraft(params);
-
-      return res;
+      if (self.submissionStarted) return {};
+      return self.saveDraft(params);
     },
 
     pauseAutosave() {

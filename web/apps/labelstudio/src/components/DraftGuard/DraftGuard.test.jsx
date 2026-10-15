@@ -54,3 +54,25 @@ it("does not read a destroyed editor while navigating outside labeling", () => {
   view.unmount();
   runtime.destroy();
 });
+
+it.each(["rejected", "unconfirmed"])("keeps edits on %s save and allows an explicit successful retry", async (failure) => {
+  const save = jest.fn();
+  if (failure === "rejected") save.mockRejectedValueOnce(new Error("offline"));
+  else save.mockResolvedValueOnce({});
+  save.mockResolvedValueOnce({ $meta: { status: 200 } });
+  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1 }, saveDraftImmediatelyWithResults: save } } };
+  const runtime = createLocaleRuntime("zh-CN");
+  const Provider = runtime.provider;
+  const toast = { show: jest.fn() };
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={toast}><DraftGuard /></ToastContext.Provider></Provider>);
+  const navigate = jest.fn();
+  draftGuardCallback.current = navigate;
+  await act(async () => { expect(mockBlock.mock.calls[0][0]()).toBe(DRAFT_GUARD_KEY); });
+  expect(navigate).not.toHaveBeenCalled();
+  expect(toast.show).toHaveBeenLastCalledWith({ message: "草稿未能保存，请重试后再离开此页。", type: "error" });
+  await act(async () => { mockBlock.mock.calls[0][0](); });
+  expect(navigate).toHaveBeenCalledTimes(1);
+  view.unmount();
+  runtime.destroy();
+});

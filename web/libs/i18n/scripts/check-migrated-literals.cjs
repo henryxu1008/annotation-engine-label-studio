@@ -7,6 +7,14 @@ const { parse } = require("@babel/parser");
 const scopedFiles = require("./migrated-files.json");
 
 const allowed = {
+  "libs/editor/src/tools/Zoom.jsx": [
+    { text: "pan", line: 19, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+    { text: "zoom-in", line: 30, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+    { text: "zoom-out", line: 58, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+  ],
+  "libs/editor/src/tools/Selection.js": [
+    { text: "move-tool", line: 16, reason: "Upstream tool identifier; visible tool guidance uses the locale catalog." },
+  ],
   "apps/labelstudio/src/pages/Home/HomePage.tsx": [
     { text: "Home", line: 220, reason: "Static route metadata; RoutesProvider translates the root breadcrumb." },
   ],

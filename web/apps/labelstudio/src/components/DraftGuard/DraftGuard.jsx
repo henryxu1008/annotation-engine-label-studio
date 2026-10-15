@@ -39,18 +39,17 @@ export const DraftGuard = () => {
       const hasChanges = !!selected?.history.undoIdx && !submissionInProgress;
 
       if (hasChanges) {
+        const showSaveError = () => showToast({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
         selected.saveDraftImmediatelyWithResults()?.then((res) => {
           const status = res?.$meta?.status;
 
           if (status === 200 || status === 201) {
             showToast({ message: runtime.t("datamanager:draftSaved"), type: "info" });
             unblock();
-          } else if (status !== undefined) {
-            showToast({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
           } else {
-            unblock();
+            showSaveError();
           }
-        });
+        }).catch(showSaveError);
 
         return DRAFT_GUARD_KEY;
       }
