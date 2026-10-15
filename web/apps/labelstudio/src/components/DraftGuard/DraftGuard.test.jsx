@@ -11,6 +11,25 @@ jest.mock("@humansignal/ui", () => ({ ToastContext: require("react").createConte
 
 afterEach(() => { window.Htx = undefined; draftGuardCallback.current = null; mockBlock.mockReset(); });
 
+it.each(["en-US", "zh-CN"])("protects browser refresh/close only while the current %s draft is unconfirmed", (locale) => {
+  const selected = { hasUnsavedDraft: true };
+  window.Htx = { annotationStore: { selected } };
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={{ show: jest.fn() }}><DraftGuard /></ToastContext.Provider></Provider>);
+  act(() => runtime.updateLocale(locale === "en-US" ? "zh-CN" : "en-US"));
+  const pending = new Event("beforeunload", { cancelable: true });
+  expect(window.dispatchEvent(pending)).toBe(false);
+  expect(pending.defaultPrevented).toBe(true);
+  selected.hasUnsavedDraft = false;
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+  selected.hasUnsavedDraft = true;
+  view.unmount();
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+  runtime.destroy();
+});
+
 it.each([200, 400])("keeps navigation blocked across a locale change until draft response %i", async (status) => {
   let complete;
   const save = jest.fn(() => new Promise((resolve) => { complete = resolve; }));

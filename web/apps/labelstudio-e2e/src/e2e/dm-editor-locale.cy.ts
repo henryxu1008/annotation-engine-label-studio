@@ -15,6 +15,47 @@ describe("Data Manager and editor display locale", () => {
   });
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`protects an unsaved tab and restores the confirmed retry after reload in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope").then((scope: any) => {
+        const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;
+        cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
+        cy.visit(path);
+        cy.get('[data-testid="bottombar-submit-button"]', { timeout: 30000 }).should("be.visible");
+        let offline = true;
+        cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }, (request) => {
+          request.alias = offline ? "unloadSaveFailed" : "unloadSaveRetry";
+          if (offline) request.reply({ forceNetworkError: true });
+        });
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').then(($input) => $input[0].click());
+        cy.wait("@unloadSaveFailed", { timeout: 20000 });
+        cy.get('[data-testid="draft-save-status"]').should("contain.text", locale === "zh-CN" ? "草稿保存失败" : "Draft not saved");
+        // Cypress accepts native unload dialogs automatically. Test the event
+        // cancellation here; real Edge refresh/close cancellation is a separate
+        // local acceptance step, followed by a genuine clean reload below.
+        cy.window().then((win: any) => {
+          const event = new win.Event("beforeunload", { cancelable: true });
+          expect(win.dispatchEvent(event)).to.eq(false);
+          expect(event.defaultPrevented).to.eq(true);
+        });
+        cy.then(() => { offline = false; });
+        cy.get('[data-testid="draft-save-retry"]').should("contain.text", locale === "zh-CN" ? "重试保存" : "Retry save").click();
+        cy.wait("@unloadSaveRetry").then(({ request, response }) => {
+          expect(response?.statusCode).to.be.oneOf([200, 201]);
+          expect(request.body.result[0].value.choices).to.deep.eq(["Positive"]);
+        });
+        cy.get('[data-testid="draft-save-status"]').should("not.exist");
+        cy.window().then((win: any) => {
+          expect(win.dispatchEvent(new win.Event("beforeunload", { cancelable: true }))).to.eq(true);
+        });
+        cy.reload();
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.checked");
+        cy.get('[data-testid="draft-save-status"]').should("not.exist");
+      });
+    });
+
     it(`recovers drafts, departure protection and submit retry after failures in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { required: true }).then((scope: any) => {
         const path = `/projects/${scope.project_id}/data?task=${scope.task_id}`;

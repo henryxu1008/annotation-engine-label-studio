@@ -16,6 +16,18 @@ export const DraftGuard = () => {
   const runtime = useLocaleRuntime();
 
   useEffect(() => {
+    // Hard navigation cannot wait for an async draft flush. The browser owns
+    // this dialog's wording; cancel leaves the editable page available to retry.
+    const beforeUnload = (event) => {
+      const editor = window.Htx;
+      if (isStateTreeNode(editor) && !isAlive(editor)) return;
+      const selected = editor?.annotationStore?.selected;
+      if (isStateTreeNode(selected) && !isAlive(selected)) return;
+      if (!selected?.hasUnsavedDraft) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener("beforeunload", beforeUnload);
     const unblock = () => {
       draftGuardCallback.current?.(true);
       draftGuardCallback.current = null;
@@ -58,6 +70,7 @@ export const DraftGuard = () => {
     return () => {
       unblock();
       unsubscribe();
+      window.removeEventListener("beforeunload", beforeUnload);
     };
   }, [history, runtime, showToast]);
 

@@ -17,6 +17,20 @@
     align-items: stretch;
   }
 
+  &__draft-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-inline: 8px;
+    min-width: 0;
+
+    [role="status"] {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   &__section {
     display: flex;
     align-items: center;

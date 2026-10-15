@@ -1,4 +1,5 @@
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
+import deepEqual from "deep-equal";
 import { destroy, detach, flow, getEnv, getParent, getRoot, getSnapshot, isAlive, onSnapshot, types } from "mobx-state-tree";
 import { ff } from "@humansignal/core";
 import { errorBuilder } from "../../core/DataValidator/ConfigValidator";
@@ -368,6 +369,13 @@ const _Annotation = types
     isReadOnly() {
       return self.isNonEditableDraft || self.readonly || !self.editable;
     },
+
+    get hasUnsavedDraft() {
+      if (self.isReadOnly() || !getEnv(self).events.hasEvent("submitDraft")) return false;
+      if (self.isDraftSaving || self.submissionStarted || self.draftSaveError) return true;
+      const confirmed = self.savedDraftSnapshot ?? self.history.history[0];
+      return !!confirmed && !deepEqual(getSnapshot(self.trackedState), confirmed, { strict: true });
+    },
   }))
   .volatile(() => ({
     hidden: false,
@@ -376,6 +384,8 @@ const _Annotation = types
     autosaveDelay: 5000,
     isDraftSaving: false,
     draftSavePromise: null,
+    savedDraftSnapshot: null,
+    draftSaveError: false,
     // This flag indicates that we are accepting suggestions right now (an accepting is started and not finished yet)
     isSuggestionsAccepting: false,
     submissionStarted: 0,
@@ -817,18 +827,30 @@ const _Annotation = types
       if (!self.editable) return;
 
       const result = self.serializeAnnotation({ fast: true });
+      const snapshot = getSnapshot(self.trackedState);
 
       self.setDraftSelected();
       self.versions.draft = result;
       self.setDraftSaving(true);
+      self.draftSaveError = false;
       const savedAt = Utils.UDate.currentISODate();
       try {
         self.draftSavePromise = self.store.submitDraft(self, params);
         const res = yield self.draftSavePromise;
         const status = res?.$meta?.status;
         // Standalone editor integrations may return no HTTP metadata.
-        if (isAlive(self) && (status === undefined || status === 200 || status === 201)) self.setDraftSaved(savedAt);
+        if (isAlive(self)) {
+          if (res === undefined || status === 200 || status === 201) {
+            self.setDraftSaved(savedAt);
+            self.savedDraftSnapshot = snapshot;
+          } else {
+            self.draftSaveError = true;
+          }
+        }
         return res;
+      } catch (error) {
+        if (isAlive(self)) self.draftSaveError = true;
+        throw error;
       } finally {
         if (isAlive(self)) {
           self.draftSavePromise = null;
@@ -893,6 +915,8 @@ const _Annotation = types
       self.draftSelected = false;
       self.draftSaved = undefined;
       self.versions.draft = undefined;
+      self.savedDraftSnapshot = getSnapshot(self.trackedState);
+      self.draftSaveError = false;
     },
 
     setDraftSaving(saving = false) {

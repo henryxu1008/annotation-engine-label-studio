@@ -55,6 +55,56 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 }
 
 describe("Annotation model", () => {
+  describe("browser unload draft confirmation", () => {
+    const createDraft = () => {
+      const env = createTestEnv();
+      const store = AppStore.create({ config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>', task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) }, interfaces: ["basic"] }, env);
+      store.initializeStore({});
+      const annotation = store.annotationStore.addAnnotation({ result: [{ from_name: "rect", to_name: "img", type: "rectangle", value: { x: 0, y: 0, width: 20, height: 20 } }] });
+      annotation.deserializeResults(annotation.versions.result);
+      annotation.reinitHistory(false);
+      env.events.hasEvent.mockReturnValue(true);
+      return { annotation, env, region: annotation.regions[0] };
+    };
+
+    it("does not treat an older successful save as confirmation of newer edits", async () => {
+      const { annotation, env, region } = createDraft();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      let complete;
+      env.events.invokeFirst = jest.fn().mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }))
+        .mockResolvedValue({ $meta: { status: 200 } });
+      const first = annotation.saveDraft();
+      region.setProperty("width", 23);
+      complete({ $meta: { status: 200 } });
+      await first;
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.undo();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.redo();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it.each([503, "offline", "unconfirmed"])("keeps unload protection after %s and clears it only on retry success", async (failure) => {
+      const { annotation, env, region } = createDraft();
+      region.setProperty("width", 22);
+      env.events.invokeFirst = jest.fn();
+      if (failure === "offline") env.events.invokeFirst.mockRejectedValueOnce(new Error("offline"));
+      else env.events.invokeFirst.mockResolvedValueOnce(failure === "unconfirmed" ? {} : { $meta: { status: failure } });
+      env.events.invokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+      await annotation.saveDraftImmediatelyWithResults().catch(() => {});
+      expect(annotation.draftSaveError).toBe(true);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.draftSaveError).toBe(false);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.setReadonly(true);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+  });
   describe("draft failure recovery", () => {
     it.each([200, 403, "offline"])("flushes edits made during an explicit save, with follow-up result %s", async (status) => {
       const env = createTestEnv();

@@ -172,6 +172,12 @@
   "zoomToFit": "Zoom to fit",
   "zoomToActualSize": "Zoom to actual size",
   "warningTitle": "Warning",
+  "draftUnsaved": "Unsaved draft",
+  "draftSaving": "Saving draft…",
+  "draftSaveFailed": "Draft not saved",
+  "draftSave": "Save draft",
+  "draftRetry": "Retry save",
+  "draftLeaveHint": "Save your latest edits before refreshing or closing this tab. If saving fails, stay on this page and retry.",
   "requiredChoice": "Select an option for \"{{name}}\" before submitting.",
   "submissionFailed": "Annotation could not be saved. Your edits are still here. Please retry."
 }
