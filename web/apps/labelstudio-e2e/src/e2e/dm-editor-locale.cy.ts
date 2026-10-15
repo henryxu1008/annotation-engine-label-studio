@@ -42,11 +42,15 @@ describe("Data Manager and editor display locale", () => {
         // Cypress's default 4s response-handler budget on a cold CI browser.
         const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; releasePendingImage = resolve; });
         let holdImage = false;
+        let heldEditorImages = 0;
         cy.readFile("../../libs/editor/public/images/logo.png", null).then((image) => {
           // StaticResponse serializes other objects (including Buffer) as JSON.
           const imageBody = Uint8Array.from(image).buffer;
           cy.intercept("GET", "**/ls76-delayed-image.png", (request) => {
-            if (holdImage) {
+            // Only ImageCache's editor XHR is delayed. Late list thumbnails
+            // use resourceType=image and are independent of this gate.
+            if (holdImage && request.resourceType === "xhr") {
+              heldEditorImages += 1;
               request.alias = "delayedImage";
               request.on("before:response", () => imageGate);
             }
@@ -65,8 +69,12 @@ describe("Data Manager and editor display locale", () => {
         // is the visible user control. Keep the input enabled/actionable check.
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("not.be.disabled").closest("label").should("be.visible");
         waitForEditableTask(scope.task_id);
+        cy.wrap(null).should(() => expect(heldEditorImages, "editor image response is pending").to.be.greaterThan(0));
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
-        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check().should("be.checked");
+        // Choice re-renders replace the native input. Assert through a fresh
+        // query instead of retrying against check()'s detached old subject.
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("not.be.checked").check();
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').should("be.checked");
         cy.then(() => { holdImage = false; releaseImage(); releasePendingImage = null; });
         cy.wait("@delayedImage");
         // ImageCache renders the fetched resource through a blob URL.
