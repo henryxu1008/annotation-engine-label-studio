@@ -40,13 +40,20 @@ describe("Data Manager and editor display locale", () => {
           expect(win.Htx.annotationStore.selected.submissionStarted).to.eq(0);
           expect(win.Htx.annotationStore.selected.draftId).to.be.greaterThan(0);
         });
-        cy.intercept({ ...drafts, times: 1 }, { forceNetworkError: true }).as("failedRecoveryDraft");
+        // Chromium can retry an aborted request. Keep the outage active for
+        // every attempt until the user explicitly retries; a one-shot abort
+        // can otherwise be followed by a real successful save and navigation.
+        let draftOffline = true;
+        cy.intercept(drafts, (request) => {
+          request.alias = draftOffline ? "failedRecoveryDraft" : "retryRecoveryDraft";
+          if (draftOffline) request.reply({ forceNetworkError: true });
+        });
         cy.get('#label-studio-dm input[type="checkbox"][name="Negative"]').then(($input) => $input[0].click());
         cy.get('a[href="/projects"]').click();
         cy.wait("@failedRecoveryDraft");
         cy.contains(locale === "zh-CN" ? "草稿未能保存，请重试后再离开此页。" : "There was an error saving your draft").should("be.visible");
         cy.location("pathname").should("eq", `/projects/${scope.project_id}/data`);
-        cy.intercept(drafts).as("retryRecoveryDraft");
+        cy.then(() => { draftOffline = false; });
         cy.get('a[href="/projects"]').click();
         cy.wait("@retryRecoveryDraft").then(({ request, response }) => {
           expect(response?.statusCode).to.be.oneOf([200, 201]);
