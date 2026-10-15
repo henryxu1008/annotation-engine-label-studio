@@ -49,7 +49,9 @@ Cypress.Commands.add('loginAs', (email: string, password: string, nextPath = '/'
         .should('have.value', body.preference ?? 'auto').and('not.be.disabled').then(($select) => {
           if ($select.val() !== loginLocale) {
             cy.intercept({ method: 'PATCH', pathname: /^\/api\/current-user\/locale\/?$/ }).as('loginLocaleSaved');
-            cy.wrap($select).select(loginLocale);
+            // A newly mounted workspace may refetch the actor after the first
+            // readiness check. Query again so Cypress can retry actionability.
+            cy.get('[data-testid="menu-language-select"]').should('be.enabled').select(loginLocale);
             cy.wait('@loginLocaleSaved').then(({ response }) => {
               expect(response?.statusCode).to.eq(200);
               expect(response?.body.preference).to.eq(loginLocale);

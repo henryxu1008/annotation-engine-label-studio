@@ -18,7 +18,7 @@ describe("Data Manager export locale", () => {
     cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("exportLocaleSaved");
     cy.get('[data-testid="language-preference-select"]').then(($select) => {
       if ($select.val() !== locale) {
-        cy.wrap($select).select(locale);
+        cy.get('[data-testid="language-preference-select"]').should('be.enabled').select(locale);
         cy.wait("@exportLocaleSaved").then(({ response }) => {
           expect(response?.statusCode).to.eq(200);
           expect(response?.body.preference).to.eq(locale);

@@ -44,7 +44,7 @@ describe("collaboration language and immutable workflow", () => {
     cy.get('[data-testid="language-preference-select"]').then(($select) => {
       if ($select.val() === originalPreference) return;
       cy.intercept("PATCH", "**/api/current-user/locale*").as("restoreLocale");
-      cy.wrap($select).select(originalPreference);
+      cy.get('[data-testid="language-preference-select"]').should('be.enabled').select(originalPreference);
       cy.wait("@restoreLocale").its("response.statusCode").should("eq", 200);
     });
     cy.get('[data-testid="language-preference-select"]').should("have.value", originalPreference);
@@ -60,7 +60,7 @@ describe("collaboration language and immutable workflow", () => {
   const ensureEnglish = () => {
     cy.get('[data-testid="user-menu-trigger"]').click();
     cy.get('[data-testid="menu-language-select"]').then(($select) => {
-      if ($select.val() !== "en-US") cy.wrap($select).select("en-US");
+      if ($select.val() !== "en-US") cy.get('[data-testid="menu-language-select"]').should('be.enabled').select("en-US");
     });
     cy.get("html").should("have.attr", "lang", "en-US");
     cy.get('[data-testid="user-menu-trigger"]').click();
