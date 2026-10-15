@@ -14,7 +14,7 @@ afterEach(() => { window.Htx = undefined; draftGuardCallback.current = null; moc
 it.each([200, 400])("keeps navigation blocked across a locale change until draft response %i", async (status) => {
   let complete;
   const save = jest.fn(() => new Promise((resolve) => { complete = resolve; }));
-  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1 }, saveDraftImmediatelyWithResults: save } } };
+  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
   const runtime = createLocaleRuntime("en-US");
   const Provider = runtime.provider;
   const toast = { show: jest.fn() };
@@ -60,7 +60,7 @@ it.each(["rejected", "unconfirmed"])("keeps edits on %s save and allows an expli
   if (failure === "rejected") save.mockRejectedValueOnce(new Error("offline"));
   else save.mockResolvedValueOnce({});
   save.mockResolvedValueOnce({ $meta: { status: 200 } });
-  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1 }, saveDraftImmediatelyWithResults: save } } };
+  window.Htx = { annotationStore: { selected: { history: { undoIdx: 1, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
   const runtime = createLocaleRuntime("zh-CN");
   const Provider = runtime.provider;
   const toast = { show: jest.fn() };
@@ -72,6 +72,26 @@ it.each(["rejected", "unconfirmed"])("keeps edits on %s save and allows an expli
   expect(navigate).not.toHaveBeenCalled();
   expect(toast.show).toHaveBeenLastCalledWith({ message: "草稿未能保存，请重试后再离开此页。", type: "error" });
   await act(async () => { mockBlock.mock.calls[0][0](); });
+  expect(navigate).toHaveBeenCalledTimes(1);
+  view.unmount();
+  runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("saves an undo back to index zero before leaving in %s", async (locale) => {
+  let complete;
+  const save = jest.fn(() => new Promise((resolve) => { complete = resolve; }));
+  window.Htx = { annotationStore: { selected: { history: { undoIdx: 0, hasChanges: true }, saveDraftImmediatelyWithResults: save } } };
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  const toast = { show: jest.fn() };
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={toast}><DraftGuard /></ToastContext.Provider></Provider>);
+  const navigate = jest.fn();
+  draftGuardCallback.current = navigate;
+  expect(mockBlock.mock.calls[0][0]()).toBe(DRAFT_GUARD_KEY);
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(navigate).not.toHaveBeenCalled();
+  await act(async () => { complete({ $meta: { status: 200 } }); });
   expect(navigate).toHaveBeenCalledTimes(1);
   view.unmount();
   runtime.destroy();

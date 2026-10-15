@@ -27,6 +27,16 @@ it.each(["next", "prev"])("keeps the current task when %s navigation cannot save
   expect(wrapper.loadTask).toHaveBeenCalledWith(42, 17, true);
 });
 
+it("saves an annotation undone to index zero before publishing its selection", async () => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.saveDraft = jest.fn().mockResolvedValue(true);
+  const outgoing = { history: { undoIdx: 0, hasChanges: true } };
+  await wrapper._invokeSelectAnnotation(null, outgoing, {});
+  expect(wrapper.saveDraft).toHaveBeenCalledWith(outgoing);
+  expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("onSelectAnnotation", null, outgoing, {}, wrapper);
+});
+
 it.each([200, 403, "offline"])("uses the actual in-flight draft result %s instead of inventing success", async (status) => {
   let complete;
   const pending = new Promise((resolve, reject) => { complete = status === "offline" ? reject : resolve; });

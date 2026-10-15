@@ -149,6 +149,8 @@ const TimeTraveller = types
         self.undoIdx = idx;
         self.skipNextUndoState = true;
         applySnapshot(targetStore, self.history[idx]);
+        // Undo/redo changes the draft even when returning to the initial state.
+        self.lastAdditionTime = new Date();
         triggerHandlers();
         if (isFF(FF_DEV_1284)) {
           setTimeout(() => {

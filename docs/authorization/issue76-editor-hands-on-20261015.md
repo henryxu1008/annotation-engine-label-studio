@@ -43,3 +43,21 @@ rectangles through actual pointer/keyboard input, draft leave/reopen/reload,
 offline failure/retry, and formal submission. Check persisted text offsets,
 rectangle geometry and actor identity separately from screenshots. Retain the
 failed d16993ba observations as failure history rather than rewriting them as PASS.
+
+## Undo-to-initial follow-up
+
+The `c77261c9` fixed image reproduced another ordinary editing failure: after a
+single text entity had autosaved, Undo removed it, but immediately leaving and
+reopening restored the old entity. The server draft still contained the entity.
+
+The undo cursor is an editing position, not a dirty-state check. DraftGuard and
+SDK selection now use the existing history.hasChanges contract, including index
+zero. TimeTraveller updates lastAdditionTime on undo/redo so the existing draft
+timestamp check also saves these changes when switching tasks. No extra history
+states or new persistence mechanism are introduced.
+
+Regression coverage includes the failed guard at index zero, undo/redo timestamps
+without new history entries, SDK selection, and both-language browser journeys
+that autosave an edit, undo to the initial result, leave, reopen and verify the
+persisted result. The candidate must obtain new native evidence; earlier manual
+and CI results remain bound to their original sources.

@@ -1288,7 +1288,7 @@ export class LSFWrapper {
     // Invoke the DataManager callback first so that history fetch can start immediately.
     // The history endpoint only needs the annotation pk (available on stubs).
     // Hydration (which fetches full annotation data) runs in parallel afterwards.
-    if (nextAnnotation?.history?.undoIdx) {
+    if (nextAnnotation?.history?.hasChanges) {
       this.saveDraft(nextAnnotation).then((saved) => {
         if (saved !== false) this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
       });

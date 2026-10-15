@@ -47,6 +47,24 @@ describe("TimeTraveller", () => {
   });
 
   describe("views", () => {
+    it("marks undo and redo as new edits without adding undo states", () => {
+      jest.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+      const { root } = createRoot();
+      const history = root.timeTraveller;
+      addHistoryStates(history, [{ value: 1 }]);
+      const states = history.history.length;
+      jest.advanceTimersByTime(1000);
+      history.undo();
+      expect(history.undoIdx).toBe(0);
+      expect(history.hasChanges).toBe(true);
+      expect(history.canRedo).toBe(true);
+      expect(history.lastAdditionTime).toEqual(new Date("2030-01-01T00:00:01Z"));
+      jest.advanceTimersByTime(1000);
+      history.redo();
+      expect(history.lastAdditionTime).toEqual(new Date("2030-01-01T00:00:02Z"));
+      expect(history.history).toHaveLength(states);
+    });
+
     it("canUndo is false when undoIdx is 0", () => {
       const { root } = createRoot();
       expect(root.timeTraveller.canUndo).toBe(false);
