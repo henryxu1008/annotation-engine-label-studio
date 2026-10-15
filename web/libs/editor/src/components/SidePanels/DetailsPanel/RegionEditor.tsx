@@ -8,7 +8,7 @@ import {
   type InputHTMLAttributes,
   type KeyboardEvent,
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
 } from "react";
@@ -169,16 +169,17 @@ const RegionProperty: FC<RegionPropertyProps> = ({ property, label, region }) =>
         }
       }
     },
-    [propertyType, isBoolean],
+    [region, property],
   );
 
-  useEffect(() => {
+  // Subscribe before the input becomes interactive, including its first edit.
+  useLayoutEffect(() => {
     const cancelObserve = observe(region, property, ({ newValue, oldValue }) => {
       if (oldValue.storedValue !== newValue.storedValue) setValue(newValue.storedValue);
     });
 
     return () => cancelObserve();
-  }, [region]);
+  }, [region, property]);
 
   return (
     <label className={cn("region-editor").elem("property").mod({ text: isString }).toClassName()}>
@@ -275,8 +276,10 @@ const RegionInput: FC<RegionInputProps> = ({ onChange: onChangeValue, type, valu
     [currentValue, type, step],
   );
 
-  useEffect(() => {
-    updateValue(value);
+  useLayoutEffect(() => {
+    // Model updates only sync the display. Re-emitting them as edits can write
+    // a stale mount value over input delivered before passive effects run.
+    setValue(value);
   }, [value]);
 
   const Tag = type === "text" ? "textarea" : "input";
