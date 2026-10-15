@@ -23,29 +23,32 @@ describe("Data Manager and editor display locale", () => {
         let releaseImage: () => void;
         const imageGate = new Promise<void>((resolve) => { releaseImage = resolve; });
         let holdImage = true;
-        cy.readFile("../../libs/editor/public/images/astro-visuals.jpg", null).then((image) => {
-          cy.intercept("GET", "**/ls76-delayed-image.jpg", (request) => {
+        cy.readFile("../../libs/editor/public/images/logo.png", null).then((image) => {
+          cy.intercept("GET", "**/ls76-delayed-image.png", (request) => {
             if (holdImage) request.on("before:response", () => imageGate);
-            request.reply({ statusCode: 200, headers: { "content-type": "image/jpeg" }, body: image });
+            request.reply({ statusCode: 200, headers: { "content-type": "image/png" }, body: image });
           }).as("delayedImage");
         });
         cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 }).should("be.visible").and("not.be.disabled");
-        cy.clock(Date.now(), ["Date", "setTimeout", "clearTimeout"]);
+        cy.window().should((win: any) => {
+          expect(win.Htx.isLoading).to.eq(false);
+          expect(win.dataManager.store.loadingData).to.eq(false);
+          expect(win.Htx.annotationStore.selected.autosave).to.be.a("function");
+          expect(win.Htx.annotationStore.selected.autosave.paused).not.to.eq(true);
+        });
         cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ }).as("mediaDraft");
         cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]').check();
         cy.then(() => { holdImage = false; releaseImage(); });
         cy.wait("@delayedImage");
         // ImageCache renders the fetched resource through a blob URL.
         cy.get('#label-studio-dm img[alt="image"]').should(($image) => expect(($image[0] as HTMLImageElement).naturalWidth).to.be.greaterThan(0));
-        cy.tick(1);
         cy.window().should((win: any) => {
           expect(win.Htx.annotationStore.selected.history.hasChanges).to.eq(false);
           expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(true);
           expect(win.dispatchEvent(new win.Event("beforeunload", { cancelable: true }))).to.eq(false);
         });
-        cy.tick(5000);
-        cy.wait("@mediaDraft").then(({ request, response }) => {
+        cy.wait("@mediaDraft", { timeout: 20000 }).then(({ request, response }) => {
           expect(response?.statusCode).to.be.oneOf([200, 201]);
           expect(request.body.result[0].value.choices).to.deep.eq(["Positive"]);
         });

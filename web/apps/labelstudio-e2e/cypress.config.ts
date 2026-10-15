@@ -44,7 +44,10 @@ with transaction.atomic():
     project = Project.objects.create(title='Isolated editor browser regression', organization=original.organization, created_by_id=ids['manager'], is_published=True, enable_empty_annotation=True, label_config=config)
     ProjectMember.objects.create(project=project, user_id=ids['manager'], role=ProjectMember.Role.MANAGER)
     ProjectMember.objects.create(project=project, user_id=ids['annotator'], role=ProjectMember.Role.ANNOTATOR)
-    task = Task.objects.create(project=project, data={'text': 'Independent undo regression.', 'image': '/ls76-delayed-image.jpg'}, overlap=1)
+    data = {'text': 'Independent undo regression.'}
+    if ${options.delayedImage === true ? 'True' : 'False'}:
+        data['image'] = '/ls76-delayed-image.png'
+    task = Task.objects.create(project=project, data=data, overlap=1)
     TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
     project.summary.update_data_columns([task])
 print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': task.pk}))
