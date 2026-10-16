@@ -40,7 +40,10 @@ describe("Keyboard annotation and composition input", () => {
         cy.focused().type("4");
         choice("Two").should("be.checked");
         choice("Positive").click();
-        cy.get("body").should("be.focused").type("2");
+        // Cypress isFocused intentionally excludes the default body element.
+        // Assert the actual focus target after the choice releases focus.
+        cy.document().should((doc) => expect(doc.activeElement).to.eq(doc.body));
+        cy.get("body").type("2");
         choice("Negative").should("be.checked");
       });
     });
