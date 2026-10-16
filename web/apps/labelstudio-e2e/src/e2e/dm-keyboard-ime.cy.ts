@@ -11,6 +11,15 @@ describe("Keyboard annotation and composition input", () => {
     const win = element[0].ownerDocument.defaultView!;
     element[0].dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
   };
+  // Cypress 14.5 type() simulates text input, not checkbox Space activation.
+  // Use its existing Chromium protocol bridge for the native activation pair.
+  const space = () => cy.then(() => Cypress.automation("remote:debugger:protocol", {
+    command: "Input.dispatchKeyEvent",
+    params: { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
+  })).then(() => Cypress.automation("remote:debugger:protocol", {
+    command: "Input.dispatchKeyEvent",
+    params: { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+  }));
   const open = (scope: any, locale: string) => {
     cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
     cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
@@ -27,8 +36,11 @@ describe("Keyboard annotation and composition input", () => {
     it(`keeps focus for consecutive keyboard choice edits in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
         open(scope, locale);
-        choice("One").focus().type(" ");
-        cy.focused().should("have.attr", "name", "One").and("be.checked").type(" ");
+        choice("Negative").focus();
+        cy.press(Cypress.Keyboard.Keys.TAB);
+        space();
+        cy.focused().should("have.attr", "name", "One").and("be.checked");
+        space();
         choice("One").should("be.focused").and("not.be.checked");
         // Label shortcuts remain available with the retained checkbox focus.
         cy.focused().type("4");
