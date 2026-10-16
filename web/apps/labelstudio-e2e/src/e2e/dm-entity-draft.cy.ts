@@ -12,8 +12,11 @@ describe("Restored text entity drafts", () => {
     expect(results.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq([note]);
   });
   const edit = (text: string) => {
-    cy.get('[data-testid="htx-textbox-edit-button"]').should("be.visible").click();
-    cy.get('[data-testid="htx-textbox-input"]').clear().type(`${text}{enter}`);
+    // The note must remain displayed. Its action icons use opacity: 0 until
+    // hover, so check the content and keep Cypress's normal click checks.
+    cy.get('[data-testid="htx-textbox-view"]').should("be.visible");
+    cy.get('[data-testid="htx-textbox-edit-button"]').click();
+    cy.get('[data-testid="htx-textbox-input"]').should("be.visible").clear().type(`${text}{enter}`);
   };
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
 
