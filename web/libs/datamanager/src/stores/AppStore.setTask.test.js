@@ -45,7 +45,7 @@ const makeStore = () => {
   wrapper.saveDraft = jest.fn().mockResolvedValue(true);
   store.taskStore = { selected: task, setSelected: jest.fn(), loadTask: jest.fn().mockResolvedValue(task) };
   store.annotationStore = { setSelected: jest.fn() };
-  store._sdk = { lsf: wrapper };
+  store._sdk = { lsf: wrapper, setMode: jest.fn() };
   wrapper.datamanager = { store };
   return { store, wrapper, editor, annotation };
 };
@@ -140,6 +140,7 @@ it("keeps the outgoing task selected and its URL unchanged until its draft is co
     const switching = store.setTask({ taskID: 42 });
     await nextTick();
     expect(History.navigate).not.toHaveBeenCalled();
+    expect(store._sdk.setMode).not.toHaveBeenCalled();
     expect(store.taskStore.setSelected).not.toHaveBeenCalled();
     expect(store.taskStore.loadTask).not.toHaveBeenCalled();
     save.resolve(true);

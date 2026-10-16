@@ -220,7 +220,10 @@ export const AppStore = types
     }),
 
     setTask(params) {
-      return self.navigateWithSavedDraft(() => self.setTaskAfterSave(params), params);
+      return self.navigateWithSavedDraft(() => {
+        self.SDK.setMode("labeling");
+        return self.setTaskAfterSave(params);
+      }, params);
     },
 
     setTaskAfterSave: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
@@ -391,8 +394,6 @@ export const AppStore = types
       if (self.dataStore.loadingItem) return;
 
       const nextAction = () => {
-        self.SDK.setMode("labeling");
-
         if (item?.id && !item.isSelected) {
           const labelingParams = {
             pushState: options?.pushState,
