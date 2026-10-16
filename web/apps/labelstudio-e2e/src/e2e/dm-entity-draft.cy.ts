@@ -2,6 +2,8 @@
 
 describe("Restored text entity drafts", () => {
   let fixture: any;
+  let releaseDraftResponse: (() => void) | undefined;
+  afterEach(() => { releaseDraftResponse?.(); releaseDraftResponse = undefined; });
   const draftRoute = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)/ };
   const state = (dirty: boolean, note = "原始备注") => cy.window().should((win: any) => {
     const annotation = win.Htx?.annotationStore?.selected;
@@ -21,6 +23,39 @@ describe("Restored text entity drafts", () => {
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`submits the latest local edit after an in-flight draft save in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
+        cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+        cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
+        let responseHeld = false;
+        cy.intercept({ ...draftRoute, times: 1 }, req => req.continue(() => new Promise<void>(resolve => {
+          responseHeld = true;
+          releaseDraftResponse = resolve;
+        }))).as("pendingOwnDraft");
+        cy.intercept("POST", `**/api/tasks/${scope.task_id}/annotations*`).as("submitLatest");
+        cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
+        cy.get('[role="treeitem"]').contains("Entity").should("be.visible").click();
+        edit("First pending save");
+        cy.get('[data-testid="draft-save-retry"]').click();
+        cy.wrap(null).should(() => expect(responseHeld, "server committed; response held").to.eq(true));
+        edit("Newest edit while saving 中文");
+        cy.get('[data-testid="bottombar-submit-button"]').click();
+        cy.then(() => { releaseDraftResponse!(); releaseDraftResponse = undefined; });
+        cy.wait("@pendingOwnDraft").its("response.statusCode").should("eq", 200);
+        cy.wait("@submitLatest").then(({ request, response }) => {
+          expect(response!.statusCode).to.eq(201);
+          expect(request.body.draft_revision).to.eq(2);
+          expect(request.body.result.find((r: any) => r.from_name === "entity_note").value.text)
+            .to.deep.eq(["Newest edit while saving 中文"]);
+          cy.request(`/api/annotations/${response!.body.id}/`).its("body.result").then(result => {
+            expect(result.find((r: any) => r.from_name === "entity_note").value.text)
+              .to.deep.eq(["Newest edit while saving 中文"]);
+          });
+        });
+        cy.get('[data-testid="draft-conflict"]').should("not.exist");
+      });
+    });
+
     it(`preserves a newer remote draft and recovers conflicted offline edits in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");

@@ -605,6 +605,9 @@ offers a local JSON backup, then an explicit reload of the server's latest task.
 Edits made after downloading invalidate that backup acknowledgement. Failed
 reload retains the local editor. Recovery must not merge obsolete annotations
 into the fresh server snapshot. Submission/deletion must not bypass this guard.
+Submit/update must first await this page's own in-flight draft acknowledgement
+before capturing results and its content token, so an ordinary continuous edit
+does not produce a spurious conflict with its own background save.
 Keep PostgreSQL simultaneous-writer tests and bilingual two-page offline/recovery
 acceptance on upgrades. This is draft concurrency control; immutable review
 decisions, IAM operations and Core business integration remain outside this work.

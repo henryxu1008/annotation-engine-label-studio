@@ -27,6 +27,32 @@ it("advances draft tokens only after success and never adopts the remote revisio
   expect(annotation.setDraftRevision).toHaveBeenCalledTimes(1);
 });
 
+it.each(['submit', 'update'])("waits for this page's pending draft acknowledgement before %s", async (kind) => {
+  const wrapper = createDraftWrapper();
+  let finish;
+  const annotation = { pk: 17, draftRevision: 1, draftSavePromise: new Promise(resolve => { finish = resolve; }) };
+  wrapper.task = { id: 42 };
+  wrapper.lsf = { annotationStore: { selected: annotation } };
+  wrapper.prepareData = jest.fn(() => ({ draft_revision: annotation.draftRevision }));
+  wrapper.withinLoadingState = fn => fn();
+  wrapper.saveUserLabels = jest.fn();
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.shouldExitStream = () => false;
+  wrapper.showOperationToast = jest.fn();
+  const request = jest.fn().mockResolvedValue({ $meta: { status: 503 } });
+  wrapper.datamanager.apiCall = request;
+  const saving = kind === 'submit'
+    ? wrapper.submitCurrentAnnotation('submitAnnotation', request)
+    : wrapper.onUpdateAnnotation({}, annotation);
+  expect(wrapper.prepareData).not.toHaveBeenCalled();
+  annotation.draftRevision = 2;
+  finish({ $meta: { status: 200 } });
+  await saving;
+  expect(wrapper.prepareData).toHaveBeenCalled();
+  if (kind === 'submit') expect(request).toHaveBeenCalledWith(expect.anything(), { draft_revision: 2 });
+  else expect(request.mock.calls[0][2].body).toEqual({ draft_revision: 2 });
+});
+
 it("reloads fresh server results without merging obsolete local annotations", async () => {
   const wrapper = createDraftWrapper();
   const old = { id: 42, drafts: [{ id: 1, revision: 1 }] };

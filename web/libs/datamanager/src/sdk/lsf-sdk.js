@@ -956,6 +956,8 @@ export class LSFWrapper {
 
   /** @private */
   onUpdateAnnotation = async (ls, annotation, extraData) => {
+    if (annotation.draftSavePromise) await annotation.draftSavePromise;
+    if (annotation.draftConflict) return { $meta: { status: 409 } };
     const { task } = this;
     const serializedAnnotation = this.prepareData(annotation, { submitForReview: true });
     const exitStream = this.shouldExitStream();
@@ -1430,6 +1432,8 @@ export class LSFWrapper {
   };
   async submitCurrentAnnotation(eventName, submit, includeId = false, loadNext = true) {
     const { taskID, currentAnnotation } = this;
+    if (currentAnnotation.draftSavePromise) await currentAnnotation.draftSavePromise;
+    if (currentAnnotation.draftConflict) return { $meta: { status: 409 } };
     const unique_id = this.task.unique_lock_id;
     const serializedAnnotation = this.prepareData(currentAnnotation, { includeId, submitForReview: true });
 
