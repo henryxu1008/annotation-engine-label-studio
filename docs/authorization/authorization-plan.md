@@ -570,3 +570,16 @@ normal Enter/Shift+Enter/Ctrl+Enter behavior after composition finishes, includi
 existing text result edits and per-region inputs. Keep bilingual browser and
 negative-path component regressions on upstream upgrades. Chromium composition
 events do not establish acceptance of a physical Windows IME candidate window.
+
+### Issue #76 restored entity draft state, 2026-10-16
+
+Plain-text entity global offsets are derived solely from the persisted numeric
+start/end offsets. Initialize this cache with the MST region snapshot, before
+saved-state confirmation and history capture. Lazy first rendering must neither
+report a saved draft as dirty nor enqueue an unnecessary autosave. Preserve
+already-calculated Undo/Redo snapshots and the existing DOM-dependent HTML range
+calculation. Do not relax the generic snapshot comparison or clear dirty state
+after rendering: actual text/boundary edits, failed writes, and edits made during
+an older request must remain protected until their own save succeeds. Keep the
+English/Chinese entity draft restore, failed-save and retry browser regressions
+when upgrading upstream. Server ownership and assignment checks remain unchanged.

@@ -17,6 +17,8 @@ import "../../../tags/visual/View";
 import "../../../tags/object/RichText";
 import "../../../tags/object/Image/Image.js";
 import "../../../tags/control/Rectangle.js";
+import "../../../tags/control/Labels/Labels";
+import "../../../tags/control/TextArea/TextArea";
 import Tree from "../../../core/Tree";
 import Registry from "../../../core/Registry";
 import AppStore from "../../AppStore";
@@ -55,6 +57,106 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 }
 
 describe("Annotation model", () => {
+  describe("restored text entity draft initialization", () => {
+    const createTextDraft = (html = false) => {
+      const env = createTestEnv();
+      const object = html ? '<HyperText name="text" value="$text"/>' : '<Text name="text" value="$text"/>';
+      const store = AppStore.create({
+        config: `<View>${object}<Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="note" toName="text" perRegion="true" editable="true"/></View>`,
+        task: { id: 1, data: JSON.stringify({ text: html ? '<p>Hello 中文</p>' : 'Hello 中文' }) },
+        interfaces: ["basic"],
+      }, env);
+      store.initializeStore({});
+      const position = html ? { start: '/p[1]/text()[1]', end: '/p[1]/text()[1]', startOffset: 0, endOffset: 5 } : { start: 0, end: 5 };
+      const result = [
+        { id: 'entity-1', from_name: 'entity', to_name: 'text', type: 'labels', value: { ...position, labels: ['Entity'], text: 'Hello' } },
+        { id: 'entity-1', from_name: 'note', to_name: 'text', type: 'textarea', value: { ...position, text: ['原始备注'] } },
+      ];
+      const annotation = store.annotationStore.addAnnotation({ result });
+      store.annotationStore.selectAnnotation(annotation.id);
+      annotation.deserializeResults(annotation.versions.result);
+      annotation.reinitHistory(false);
+      annotation.confirmSavedState();
+      env.events.hasEvent.mockReturnValue(true);
+      const region = annotation.regions[0];
+      const note = region.results.find((r) => r.type === 'textarea');
+      return { annotation, region, note, env };
+    };
+
+    it("keeps a restored entity clean when its text range is initialized", () => {
+      const { annotation, region } = createTextDraft();
+      const result = annotation.serializeAnnotation();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.initRangeAndOffsets();
+      expect(annotation.serializeAnnotation()).toEqual(result);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it("does not turn plain-text range initialization into an autosave", async () => {
+      jest.useFakeTimers();
+      try {
+        const { annotation, region, env } = createTextDraft();
+        env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 201 } });
+        annotation.startAutosave();
+        await jest.advanceTimersByTimeAsync(0);
+        region.initRangeAndOffsets();
+        await jest.advanceTimersByTimeAsync(5001);
+        expect(env.events.invokeFirst).not.toHaveBeenCalled();
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.autosave.cancel();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it.each([503, 'offline'])("retains a real note edit and failed %s save through range initialization", async (failure) => {
+      const { annotation, region, note, env } = createTextDraft();
+      note.setValue(['编辑未保存']);
+      env.events.invokeFirst = jest.fn();
+      if (failure === 'offline') env.events.invokeFirst.mockRejectedValueOnce(new Error('offline'));
+      else env.events.invokeFirst.mockResolvedValueOnce({ $meta: { status: failure } });
+      env.events.invokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+      await annotation.saveDraftImmediatelyWithResults().catch(() => {});
+      region.initRangeAndOffsets();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      expect(annotation.draftSaveError).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      expect(note.value.text).toEqual(['编辑未保存']);
+    });
+
+    it("does not confirm newer text edits when an older save completes", async () => {
+      const { annotation, region, note, env } = createTextDraft();
+      note.setValue(['第一版']);
+      let complete;
+      env.events.invokeFirst = jest.fn().mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }))
+        .mockResolvedValue({ $meta: { status: 200 } });
+      const saving = annotation.saveDraft();
+      note.setValue(['第二版']);
+      region.initRangeAndOffsets();
+      complete({ $meta: { status: 200 } });
+      await saving;
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.undo();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.redo();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it("still protects changed entity boundaries", () => {
+      const { annotation, region } = createTextDraft();
+      region.updateTextOffsets(0, 4);
+      region.initRangeAndOffsets();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      expect(annotation.serializeAnnotation().find((r) => r.type === 'labels').value.end).toBe(4);
+    });
+
+    it("leaves HTML range calculation dependent on its DOM", () => {
+      const { region } = createTextDraft(true);
+      expect(region.isText).toBe(false);
+      expect(region.globalOffsets).toBeNull();
+    });
+  });
   describe("browser unload draft confirmation", () => {
     const createDraft = () => {
       const env = createTestEnv();

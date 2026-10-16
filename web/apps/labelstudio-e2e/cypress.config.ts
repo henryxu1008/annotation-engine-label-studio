@@ -23,7 +23,7 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean } = {}) {
+        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean } = {}) {
           const taskCount = options.taskCount ?? 1;
           if (!Number.isSafeInteger(taskCount) || taskCount < 1 || taskCount > 3) throw new Error('Expected one to three isolated tasks');
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
@@ -33,7 +33,7 @@ export default defineConfig({
 import json
 from django.db import transaction
 from projects.models import Project, ProjectMember
-from tasks.models import Task, TaskAssignment
+from tasks.models import Task, TaskAssignment, AnnotationDraft
 ids = ${JSON.stringify(ids)}
 with transaction.atomic():
     original = Project.objects.get(pk=ids['project'], created_by_id=ids['manager'], organization__title='Enterprise E2E Organization')
@@ -41,6 +41,8 @@ with transaction.atomic():
     config = original.label_config
     if ${options.keyboard === true ? 'True' : 'False'}:
         config = '<View><Text name="text" value="$text"/><Choices name="single" toName="text" choice="single"><Choice value="Positive"/><Choice value="Negative"/></Choices><Choices name="multiple" toName="text" choice="multiple"><Choice value="One"/><Choice value="Two"/></Choices><TextArea name="note" toName="text" rows="1" editable="true" placeholder="Single-line note"/><TextArea name="paragraph" toName="text" rows="3" editable="true" placeholder="Multiline note"/></View>'
+    if ${options.entityDraft === true ? 'True' : 'False'}:
+        config = '<View><Text name="text" value="$text"/><Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="entity_note" toName="text" perRegion="true" rows="1" editable="true" placeholder="Entity note"/></View>'
     if ${options.required === true ? 'True' : 'False'}:
         config = config.replace('<Choices ', '<Choices required="true" ', 1)
     if ${options.delayedImage === true ? 'True' : 'False'}:
@@ -57,7 +59,9 @@ with transaction.atomic():
         if ${taskCount} > 1:
             task_data['text'] = 'Independent task ' + str(index + 1)
         task = Task.objects.create(project=project, data=task_data, overlap=1)
-        TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
+        assignment = TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
+        if ${options.entityDraft === true ? 'True' : 'False'}:
+            AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'entity-1', 'from_name': 'entity', 'to_name': 'text', 'type': 'labels', 'value': {'start': 0, 'end': 11, 'text': task_data['text'][:11], 'labels': ['Entity']}}, {'id': 'entity-1', 'from_name': 'entity_note', 'to_name': 'text', 'type': 'textarea', 'value': {'text': ['原始备注']}}])
         tasks.append(task)
     project.summary.update_data_columns(tasks)
 print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': tasks[0].pk, 'task_ids': [task.pk for task in tasks]}))
