@@ -12,8 +12,7 @@ describe("Restored text entity drafts", () => {
     expect(results.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq([note]);
   });
   const edit = (text: string) => {
-    cy.get('[role="treeitem"]').contains("Entity").click();
-    cy.get('[data-testid="htx-textbox-edit-button"]').click();
+    cy.get('[data-testid="htx-textbox-edit-button"]').should("be.visible").click();
     cy.get('[data-testid="htx-textbox-input"]').clear().type(`${text}{enter}`);
   };
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
@@ -39,6 +38,9 @@ describe("Restored text entity drafts", () => {
         cy.reload();
         cy.get('[role="treeitem"]').contains("Entity").should("be.visible");
         state(false);
+        // Select once: clicking an already-selected outliner region toggles it
+        // off and hides its per-region note. Keep it selected across the retry.
+        cy.get('[role="treeitem"]').contains("Entity").click();
         edit("First edit");
         state(true, "First edit");
         cy.get('[data-testid="draft-save-retry"]').click();
