@@ -4,12 +4,15 @@ Output must be a new, exclusive directory outside the checkout. No runtime secre
 are copied into the build context. This entry point only builds a local image.
 """
 import argparse
+import contextlib
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
 import re
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -26,6 +29,35 @@ def sha(path):
 RECIPE_PATH = "deploy/candidate/Dockerfile.debian"
 
 
+@contextlib.contextmanager
+def build_workspace(root, retain=False):
+    """Own one scratch directory; never sweep other builds or runtime files."""
+    options = dict(prefix=".build-work-", dir=root)
+    manager = (contextlib.nullcontext(tempfile.mkdtemp(**options)) if retain
+               else tempfile.TemporaryDirectory(**options))
+    receipt = {"policy": "RETAIN_EXPLICITLY" if retain else "RELEASE_ON_EXIT",
+               "status": "IN_PROGRESS", "started_at": datetime.now(timezone.utc).isoformat()}
+    path = root / "evidence/build-workspace.json"
+    workspace = None
+    try:
+        with manager as directory:
+            workspace = Path(directory).resolve()
+            if workspace.parent != root.resolve():
+                raise RuntimeError("Build workspace escaped its exclusive output directory")
+            receipt["workspace"] = str(workspace)
+            path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+            yield workspace
+            receipt["status"] = "SUCCEEDED"
+    except BaseException as error:
+        receipt["status"] = "FAILED"
+        receipt["error_type"] = type(error).__name__
+        raise
+    finally:
+        receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
+        receipt["released"] = workspace is not None and not workspace.exists()
+        path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+
+
 def main():
     if not __debug__:
         raise SystemExit("Git object assertions require Python without optimization")
@@ -38,6 +70,9 @@ def main():
     parser.add_argument("--branch", default="main", help="Recorded snapshot branch, including unmerged candidates")
     parser.add_argument("--node-image", default="mirror.gcr.io/library/node:20-alpine")
     parser.add_argument("--python-image", default="mirror.gcr.io/library/python:3.11-slim-bookworm")
+    parser.add_argument("--retain-build-workspace", action="store_true",
+                        help="Explicitly keep this build's source and tar files for debugging; "
+                             "otherwise release them on success and failure, preserving evidence")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.source):
         parser.error("--source must be a full commit SHA")
@@ -55,7 +90,12 @@ def main():
     evidence = root / "evidence"
     evidence.mkdir()
     (root / "build-inputs").mkdir()
-    source = root / "source"
+    with build_workspace(root, args.retain_build_workspace) as workspace:
+        build(args, repo, root, evidence, workspace, recipe_bytes)
+
+
+def build(args, repo, root, evidence, workspace, recipe_bytes):
+    source = workspace / "source"
     subprocess.run(["git", "init", "-b", args.branch, str(source)], check=True, capture_output=True)
     for key, value in (("core.autocrlf", "false"), ("core.symlinks", "false")):
         subprocess.run(["git", "config", key, value], cwd=source, check=True)
@@ -77,7 +117,7 @@ def main():
         bases[name] = {"requested": ref, "index_digest": manifest["digest"],
                        "platform_manifest_digest": selected["digest"],
                        "pinned": ref.split("@")[0].rsplit(":", 1)[0] + "@" + manifest["digest"]}
-    archive, context = root / "source.tar", root / "context.tar.gz"
+    archive, context = workspace / "source.tar", workspace / "context.tar.gz"
     subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "tar.umask=0022",
                     "archive", "--format=tar", "-o", str(archive), args.source], cwd=source, check=True)
     tracked = {}
