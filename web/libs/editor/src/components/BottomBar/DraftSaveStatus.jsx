@@ -2,6 +2,7 @@ import { observer } from "mobx-react";
 import { useState } from "react";
 import { Button, Tooltip } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
+import { cn } from "../../utils/bem";
 
 const DraftConflict = observer(({ annotation }) => {
   const { t } = useLocaleTranslation("editor");
@@ -14,7 +15,7 @@ const DraftConflict = observer(({ annotation }) => {
     draft_revision: annotation.draftRevision,
     result: annotation.serializeAnnotation(),
   }, null, 2);
-  return <details open className="bottombar__draft-conflict" data-testid="draft-conflict">
+  return <details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
     <summary>{t("draftConflict")}</summary>
     <p role="alert">{t("draftConflictHint")}</p>
     <textarea aria-label={t("draftLocalCopy")} value={backup} readOnly rows={5} />
@@ -44,7 +45,7 @@ export const DraftSaveStatus = observer(({ annotation }) => {
   const saving = annotation.isDraftSaving || !!annotation.submissionStarted;
   if (annotation.draftConflict) return <DraftConflict key={annotation.id} annotation={annotation} />;
   return (
-    <div className="bottombar__draft-status" data-testid="draft-save-status">
+    <div className={cn("bottombar").elem("draft-status").toClassName()} data-testid="draft-save-status">
       <Tooltip title={t("draftLeaveHint")}>
         <span role="status" aria-live="polite">
           {t(saving ? "draftSaving" : annotation.draftSaveError ? "draftSaveFailed" : "draftUnsaved")}

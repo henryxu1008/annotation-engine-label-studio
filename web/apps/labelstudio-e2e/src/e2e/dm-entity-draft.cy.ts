@@ -27,15 +27,16 @@ describe("Restored text entity drafts", () => {
         cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
         let offline = true;
         cy.intercept(draftRoute, (req) => {
+          req.alias = offline ? "offlineDraftWrite" : "onlineDraftWrite";
           if (offline) req.destroy();
           else req.continue();
-        }).as("conflictWrite");
+        });
         cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
         cy.get('[role="treeitem"]').contains("Entity").should("be.visible").click();
         state(false);
         edit("My offline edit");
         cy.get('[data-testid="draft-save-retry"]').click();
-        cy.wait("@conflictWrite").should("have.property", "error");
+        cy.wait("@offlineDraftWrite").should("have.property", "error");
         // An independent writer saves through the real endpoint, using its own
         // current server snapshot. Real two-tab transport is covered in Edge.
         cy.request(`/api/tasks/${scope.task_id}/`).then(({ body: task }) => {
@@ -54,7 +55,7 @@ describe("Restored text entity drafts", () => {
         cy.then(() => { offline = false; });
         edit("My latest local edit 中文");
         // Let the actual scheduled autosave discover the stale content token.
-        cy.wait("@conflictWrite", { timeout: 15000 }).its("response.statusCode").should("eq", 409);
+        cy.wait("@onlineDraftWrite", { timeout: 15000 }).its("response.statusCode").should("eq", 409);
         cy.get('[data-testid="draft-conflict"]').should("be.visible")
           .and("contain", locale === "zh-CN" ? "草稿已在另一页面更新" : "Draft changed in another page");
         state(true, "My latest local edit 中文");
@@ -64,7 +65,7 @@ describe("Restored text entity drafts", () => {
           expect(result.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq(["Newer remote edit"]);
         });
         cy.get('[data-testid="draft-backup"]').click();
-        cy.readFile(`cypress/downloads/task-${scope.task_id}-unsaved-draft.json`).then((backup) => {
+        cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).then((backup) => {
           expect(String(backup.task_id)).to.eq(String(scope.task_id));
           expect(backup.result.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq(["My latest local edit 中文"]);
         });
@@ -75,7 +76,7 @@ describe("Restored text entity drafts", () => {
         cy.get('[role="treeitem"]').contains("Entity").click();
         edit("Reapplied local edit 中文");
         cy.get('[data-testid="draft-save-retry"]').click();
-        cy.wait("@conflictWrite").its("response.statusCode").should("eq", 200);
+        cy.wait("@onlineDraftWrite").its("response.statusCode").should("eq", 200);
         state(false, "Reapplied local edit 中文");
         cy.reload();
         cy.get('[role="treeitem"]').contains("Entity").should("be.visible");
