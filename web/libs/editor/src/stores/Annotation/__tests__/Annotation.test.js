@@ -84,12 +84,12 @@ describe("Annotation model", () => {
       return { annotation, region, note, env };
     };
 
-    it("retains conflicted edits and refuses queued autosaves or manual retries until reload", async () => {
+    it.each(["changed", "missing"])("retains %s draft edits and refuses queued autosaves or manual retries until reload", async (reason) => {
       const { annotation, note, env } = createTextDraft();
       annotation.autosave = { cancel: jest.fn() };
       note.setValue(['旧页修改']);
       env.events.invokeFirst = jest.fn().mockImplementationOnce(async () => {
-        annotation.setDraftConflict();
+        annotation.setDraftConflict(reason);
         return { $meta: { status: 409 } };
       });
       await annotation.saveDraftImmediatelyWithResults();
@@ -100,6 +100,7 @@ describe("Annotation model", () => {
       expect(annotation.autosave.cancel).toHaveBeenCalled();
       expect(annotation.hasUnsavedDraft).toBe(true);
       expect(annotation.draftConflict).toBe(true);
+      expect(annotation.draftConflictReason).toBe(reason);
       expect(note.value.text).toEqual(['冲突后继续编辑']);
     });
 

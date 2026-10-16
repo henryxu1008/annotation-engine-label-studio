@@ -11,9 +11,10 @@ const DraftConflict = observer(({ annotation }) => {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const backup = annotation.draftBackup;
+  const missing = annotation.draftConflictReason === "missing";
   return createPortal(<details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
-    <summary>{t("draftConflict")}</summary>
-    <p role="alert">{t("draftConflictHint")}</p>
+    <summary>{t(missing ? "draftMissing" : "draftConflict")}</summary>
+    <p role="alert">{t(missing ? "draftMissingHint" : "draftConflictHint")}</p>
     <textarea aria-label={t("draftLocalCopy")} value={backup} readOnly rows={5} />
     <Button size="small" data-testid="draft-backup" onClick={() => {
       const currentCopy = annotation.draftBackup;
@@ -32,8 +33,8 @@ const DraftConflict = observer(({ annotation }) => {
       try { if (!(await annotation.reloadLatestDraft())) setFailed(true); }
       catch { setFailed(true); }
       finally { setLoading(false); }
-    }}>{t("draftReloadLatest")}</Button>
-    {failed && <p role="alert">{t("draftReloadFailed")}</p>}
+    }}>{t(missing ? "draftReloadTask" : "draftReloadLatest")}</Button>
+    {failed && <p role="alert">{t(missing ? "draftReloadTaskFailed" : "draftReloadFailed")}</p>}
   </details>, document.body);
 });
 

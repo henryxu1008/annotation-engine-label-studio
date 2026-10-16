@@ -185,5 +185,9 @@
   "draftLocalCopy": "Unsaved edits from this page (JSON)",
   "draftDownloadCopy": "Download my edits",
   "draftReloadLatest": "Load latest draft",
-  "draftReloadFailed": "Could not load the latest draft. Your edits remain here; check the connection and try again."
+  "draftReloadFailed": "Could not load the latest draft. Your edits remain here; check the connection and try again.",
+  "draftMissing": "Draft is no longer available",
+  "draftMissingHint": "This draft may have been submitted or deleted in another page. Automatic saving is paused and your edits remain here. Download a copy before loading the latest task. This will not recreate the old draft or change submitted results.",
+  "draftReloadTask": "Load latest task",
+  "draftReloadTaskFailed": "Could not load the latest task. Your edits remain here; check the connection and try again."
 }

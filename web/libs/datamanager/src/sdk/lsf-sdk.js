@@ -1014,8 +1014,8 @@ export class LSFWrapper {
   deleteDraft = async (id, annotation = this.currentAnnotation) => {
     const response = await this.datamanager.apiCall("deleteDraft", { draftID: id }, {
       body: this.prepareData(annotation),
-    }, this.draftConflictOptions);
-    this.handleDraftResponse(annotation, response);
+    }, this.existingDraftOptions);
+    this.handleDraftResponse(annotation, response, true);
 
     if (response?.$meta?.status === 204) this.task.deleteDraft(id);
     return response;
@@ -1097,8 +1097,8 @@ export class LSFWrapper {
 
     if (annotation.draftId > 0) {
       // draft has been already created
-      const res = await this.datamanager.apiCall("updateDraft", { draftID: annotation.draftId }, data, this.draftConflictOptions);
-      this.handleDraftResponse(annotation, res);
+      const res = await this.datamanager.apiCall("updateDraft", { draftID: annotation.draftId }, data, this.existingDraftOptions);
+      this.handleDraftResponse(annotation, res, true);
 
       showToast && this.draftToast(res.$meta?.status, res);
       this.datamanager.invoke("submitDraft", this, annotation, res);
@@ -1130,8 +1130,15 @@ export class LSFWrapper {
     errorHandler: (result) => result?.response?.display_context?.reason === "DRAFT_CONFLICT",
   };
 
-  handleDraftResponse(annotation, response) {
-    if (response?.response?.display_context?.reason === "DRAFT_CONFLICT") annotation.setDraftConflict();
+  // A known draft may have been consumed by submission or explicitly deleted.
+  // Keep the stale ID and edits until backup/reload; never turn PATCH into POST.
+  existingDraftOptions = {
+    errorHandler: (result) => result?.$meta?.status === 404 || this.draftConflictOptions.errorHandler(result),
+  };
+
+  handleDraftResponse(annotation, response, existingDraft = false) {
+    if (existingDraft && response?.$meta?.status === 404) annotation.setDraftConflict("missing");
+    else if (response?.response?.display_context?.reason === "DRAFT_CONFLICT") annotation.setDraftConflict();
     else if ((response?.$meta?.status === 200 || response?.$meta?.status === 201) && response.revision != null) {
       annotation.setDraftRevision(response.revision);
     }
@@ -1222,7 +1229,7 @@ export class LSFWrapper {
             {
               body: { ...this.prepareData(currentAnnotation), annotation: null },
             },
-            this.draftConflictOptions,
+            this.existingDraftOptions,
           );
         } else {
           const annotationData = { body: this.prepareData(currentAnnotation) };
@@ -1236,7 +1243,7 @@ export class LSFWrapper {
             this.draftConflictOptions,
           );
         }
-        this.handleDraftResponse(currentAnnotation, response);
+        this.handleDraftResponse(currentAnnotation, response, currentAnnotation.draftId > 0);
         if (![200, 201].includes(response?.$meta?.status)) return false;
 
         // Carry over any comments to when the annotation draft is eventually submitted

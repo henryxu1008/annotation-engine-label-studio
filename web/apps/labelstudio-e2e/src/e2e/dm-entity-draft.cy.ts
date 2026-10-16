@@ -132,6 +132,94 @@ describe("Restored text entity drafts", () => {
       });
     });
 
+    for (const action of ["submitted", "deleted"]) {
+      it(`preserves offline edits after a draft is ${action} in another page in ${locale}`, () => {
+        cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
+          cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
+          cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
+          let offline = true;
+          let writes = 0;
+          let submitted: any;
+          let removedId: number;
+          cy.intercept(draftRoute, req => {
+            writes++;
+            req.alias = offline ? "missingOfflineWrite" : "missingOnlineWrite";
+            if (offline) req.destroy(); else req.continue();
+          });
+          cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
+          cy.get('[role="treeitem"]').contains("Entity").should("be.visible").click();
+          edit("Offline edit before removal 中文");
+          cy.get('[data-testid="draft-save-retry"]').click();
+          cy.wait("@missingOfflineWrite").should("have.property", "error");
+          // Real server mutation from an independent page snapshot. This does
+          // not modify the editor's stale draft ID, content, or revision.
+          cy.request(`/api/tasks/${scope.task_id}/`).then(({ body: task }) => {
+            const draft = task.drafts[0];
+            removedId = draft.id;
+            const body = { assignment_id: task.assignment_id, assignment_version: task.assignment_version,
+              draft_id: draft.id, draft_revision: draft.revision, result: draft.result };
+            cy.getCookie("csrftoken").then(cookie => cy.request({
+              method: action === "submitted" ? "POST" : "DELETE",
+              url: action === "submitted" ? `/api/tasks/${scope.task_id}/annotations/` : `/api/drafts/${draft.id}`,
+              headers: { "X-CSRFToken": cookie!.value }, body,
+            })).then(response => {
+              expect(response.status).to.eq(action === "submitted" ? 201 : 204);
+              if (action === "submitted") submitted = response.body;
+            });
+          });
+          cy.then(() => { offline = false; });
+          edit("Latest offline edit after removal 中文");
+          cy.wait("@missingOnlineWrite", { timeout: 15000 }).its("response.statusCode").should("eq", 404);
+          cy.get('[data-testid="draft-conflict"]').should("be.visible")
+            .and("contain", locale === "zh-CN" ? "草稿已不存在" : "Draft is no longer available");
+          cy.get(".lsf-modal-ls").should("not.exist");
+          state(true, "Latest offline edit after removal 中文");
+          cy.get('[data-testid="bottombar-submit-button"]').should("be.disabled");
+          cy.get('[data-testid="draft-save-retry"]').should("not.exist");
+          cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
+          cy.window().should((win: any) => {
+            expect(win.Htx.annotationStore.selected.draftId).to.eq(removedId);
+            expect(win.dispatchEvent(new win.Event("beforeunload", { cancelable: true }))).to.eq(false);
+          });
+          cy.then(() => {
+            const stoppedAt = writes;
+            edit("Still local after missing draft 中文");
+            state(true, "Still local after missing draft 中文");
+            cy.wait(5500).then(() => expect(writes, "autosave stopped after 404").to.eq(stoppedAt));
+          });
+          cy.get('[data-testid="draft-backup"]').click();
+          cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).then(backup => {
+            expect(backup.draft_id).to.eq(removedId);
+            expect(backup.result.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq(["Still local after missing draft 中文"]);
+          });
+          cy.intercept({ method: "GET", url: new RegExp(`/api/tasks/${scope.task_id}/?(?:\\?.*)?$`), times: 1 },
+            { statusCode: 503, body: { detail: "Synthetic task recovery load failure" } }).as("missingRecoveryFailed");
+          cy.get('[data-testid="draft-reload-latest"]').should("contain", locale === "zh-CN" ? "载入任务最新状态" : "Load latest task").click();
+          cy.wait("@missingRecoveryFailed").its("response.statusCode").should("eq", 503);
+          cy.get('[data-testid="modal-close-button"]').should("be.visible").click();
+          state(true, "Still local after missing draft 中文");
+          cy.contains(locale === "zh-CN" ? "未能载入任务最新状态。本页修改仍然保留" : "Could not load the latest task. Your edits remain here").should("be.visible");
+          cy.get('[data-testid="draft-reload-latest"]').click();
+          cy.get('[data-testid="draft-conflict"]').should("not.exist");
+          cy.window().should((win: any) => {
+            expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false);
+            expect(win.Htx.annotationStore.selected.draftId || 0).to.eq(0);
+          });
+          cy.wait(5500); // Loading the latest state must not recreate a draft.
+          cy.request(`/api/tasks/${scope.task_id}/`).then(({ body: task }) => {
+            expect(task.drafts).to.deep.eq([]);
+            expect(task.annotations).to.have.length(action === "submitted" ? 1 : 0);
+            if (submitted) {
+              expect(task.annotations[0].id).to.eq(submitted.id);
+              expect(task.annotations[0].result).to.deep.eq(submitted.result);
+            }
+          });
+          if (action === "submitted") state(false);
+          else cy.get('[role="treeitem"]').should("not.exist");
+        });
+      });
+    }
+
     it(`restores a clean entity and protects real edits through failed save and retry in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");

@@ -27,6 +27,28 @@ it("advances draft tokens only after success and never adopts the remote revisio
   expect(annotation.setDraftRevision).toHaveBeenCalledTimes(1);
 });
 
+it.each([404, 403, 503])("handles a disappeared existing draft separately from transient or permission errors: %s", async (status) => {
+  const wrapper = createDraftWrapper();
+  const annotation = { draftId: 7, setDraftRevision: jest.fn(), setDraftConflict: jest.fn() };
+  wrapper.task = { id: 42 };
+  wrapper.prepareData = () => ({ draft_id: 7, result: [{ value: 'local edit' }] });
+  wrapper.needsDraftSave = () => true;
+  wrapper.saveUserLabels = jest.fn();
+  wrapper.datamanager.invoke = jest.fn();
+  const response = { $meta: { status } };
+  wrapper.datamanager.apiCall = jest.fn().mockResolvedValue(response);
+  expect(await wrapper.onSubmitDraft({}, annotation)).toBe(response);
+  expect(wrapper.datamanager.apiCall).toHaveBeenCalledTimes(1);
+  expect(wrapper.datamanager.apiCall.mock.calls[0][0]).toBe('updateDraft');
+  const options = wrapper.datamanager.apiCall.mock.calls[0][3];
+  expect(options.errorHandler(response)).toBe(status === 404);
+  expect(annotation.setDraftConflict.mock.calls).toEqual(status === 404 ? [['missing']] : []);
+  expect(annotation.setDraftRevision).not.toHaveBeenCalled();
+  expect(annotation.draftId).toBe(7);
+  wrapper.handleDraftResponse(annotation, response); // Other endpoints' 404 is not proof of a missing draft.
+  expect(annotation.setDraftConflict).toHaveBeenCalledTimes(status === 404 ? 1 : 0);
+});
+
 it.each(['submit', 'update'])("waits for this page's pending draft acknowledgement before %s", async (kind) => {
   const wrapper = createDraftWrapper();
   let finish;

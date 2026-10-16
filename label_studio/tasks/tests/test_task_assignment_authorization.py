@@ -1384,6 +1384,33 @@ class TestDraftContentConcurrency(APITestCase):
         assert second.status_code == 409, second.data
         assert AnnotationDraft.objects.filter(assignment=self.assignment_a).count() == 1
 
+    def _assert_old_page_cannot_restore_removed_draft(self, draft):
+        for _ in range(2):
+            assert self._write(draft, 1, [{'value': 'old offline page'}]).status_code == 404
+        assert not AnnotationDraft.objects.filter(task=self.shared_task).exists()
+        response = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {
+            'result': [{'value': 'old offline page'}], 'draft_id': draft.pk, 'draft_revision': 1,
+            'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+        }, format='json')
+        assert response.status_code == 409, response.data
+        assert not AnnotationDraft.objects.filter(task=self.shared_task).exists()
+
+    def test_submitted_draft_cannot_be_recreated_or_overwrite_final_results_by_stale_page(self):
+        draft = self._draft()
+        annotation = self._create_annotation(self.annotator_a, self.shared_task, draft=draft)
+        before_annotation = Annotation.objects.filter(pk=annotation.pk).values().get()
+        before_submissions = list(Submission.objects.filter(annotation=annotation).values())
+        self._assert_old_page_cannot_restore_removed_draft(draft)
+        assert Annotation.objects.filter(pk=annotation.pk).values().get() == before_annotation
+        assert list(Submission.objects.filter(annotation=annotation).values()) == before_submissions
+        assert Annotation.objects.filter(task=self.shared_task).count() == 1
+
+    def test_deleted_draft_cannot_be_recreated_by_stale_page(self):
+        draft = self._draft()
+        assert self._write(draft, 1, [], 'delete').status_code == 204
+        self._assert_old_page_cannot_restore_removed_draft(draft)
+        assert not Annotation.objects.filter(task=self.shared_task).exists()
+
     def test_stale_annotation_update_cannot_delete_a_newer_attached_draft(self):
         annotation = self._create_annotation(self.annotator_a, self.shared_task)
         draft = AnnotationDraft.objects.create(

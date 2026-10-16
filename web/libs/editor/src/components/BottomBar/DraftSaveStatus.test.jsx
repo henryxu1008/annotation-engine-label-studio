@@ -8,10 +8,10 @@ jest.mock("@humansignal/ui", () => ({
   Tooltip: ({ children, title }) => <div title={title}>{children}</div>,
 }));
 
-it.each(["en-US", "zh-CN"])("preserves local results and requires a fresh backup before %s conflict recovery", async (locale) => {
+it.each(["en-US", "zh-CN"].flatMap(locale => ["changed", "missing"].map(reason => [locale, reason])))("preserves local results before %s %s recovery", async (locale, reason) => {
   const annotation = observable({
     id: 'local', store: { task: { id: 42 } }, draftId: 7, draftRevision: 1,
-    hasUnsavedDraft: true, draftConflict: true, note: 'my offline edit',
+    hasUnsavedDraft: true, draftConflict: true, draftConflictReason: reason, note: 'my offline edit',
     serializeAnnotation() { return [{ value: this.note }]; },
     get draftBackup() { return JSON.stringify({ task_id: 42, draft_id: 7, draft_revision: 1, result: this.serializeAnnotation() }, null, 2); },
     reloadLatestDraft: jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
@@ -22,7 +22,11 @@ it.each(["en-US", "zh-CN"])("preserves local results and requires a fresh backup
   const runtime = createLocaleRuntime(locale);
   const Provider = runtime.provider;
   const view = render(<Provider><DraftSaveStatus annotation={annotation} /></Provider>);
-  expect(screen.getByTestId('draft-conflict')).toHaveTextContent(locale === 'zh-CN' ? '草稿已在另一页面更新' : 'Draft changed in another page');
+  const zh = locale === 'zh-CN';
+  expect(screen.getByTestId('draft-conflict')).toHaveTextContent(reason === 'missing'
+    ? (zh ? '草稿已不存在' : 'Draft is no longer available')
+    : (zh ? '草稿已在另一页面更新' : 'Draft changed in another page'));
+  if (reason === 'missing') expect(screen.getByTestId('draft-reload-latest')).toHaveTextContent(zh ? '载入任务最新状态' : 'Load latest task');
   expect(screen.getByRole('textbox').value).toContain('my offline edit');
   const reload = screen.getByTestId('draft-reload-latest');
   expect(reload).toBeDisabled();

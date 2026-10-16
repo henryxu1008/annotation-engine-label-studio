@@ -615,3 +615,15 @@ through a body portal so the editor's clipped panes cannot hide its instructions
 Keep PostgreSQL simultaneous-writer tests and bilingual two-page offline/recovery
 acceptance on upgrades. This is draft concurrency control; immutable review
 decisions, IAM operations and Core business integration remain outside this work.
+
+An existing draft can also disappear when another page submits or deletes it.
+Its update/delete endpoint retains the ordinary 404 response and authorization
+checks. Only a 404 from an existing-draft operation enters the editor's missing
+draft recovery state; a create endpoint's 404, permission denial or transient
+network error must not be misclassified. Keep the stale ID, pause autosave and
+block submission/retries while retaining local edits and navigation protection.
+Do not fall back from PATCH to POST or automatically recreate a removed draft.
+After a current local backup, explicitly load the latest task (which may contain
+a final annotation or no draft). A failed load preserves the local editor.
+Keep bilingual submit/delete recovery tests, including server readback proving
+no draft recreation and no changes to submitted annotation/submission records.

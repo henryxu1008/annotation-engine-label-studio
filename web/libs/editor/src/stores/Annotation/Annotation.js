@@ -394,6 +394,7 @@ const _Annotation = types
     draftId: 0,
     draftRevision: 0,
     draftConflict: false,
+    draftConflictReason: null,
     draftSelected: false,
     autosaveDelay: 5000,
     isDraftSaving: false,
@@ -927,8 +928,9 @@ const _Annotation = types
       self.draftRevision = revision;
     },
 
-    setDraftConflict() {
+    setDraftConflict(reason = "changed") {
       self.draftConflict = true;
+      self.draftConflictReason = reason;
       self.draftSaveError = true;
       self.pauseAutosave();
     },
@@ -951,6 +953,7 @@ const _Annotation = types
       self.draftId = 0;
       self.draftRevision = 0;
       self.draftConflict = false;
+      self.draftConflictReason = null;
       self.draftSelected = false;
       self.draftSaved = undefined;
       self.versions.draft = undefined;
