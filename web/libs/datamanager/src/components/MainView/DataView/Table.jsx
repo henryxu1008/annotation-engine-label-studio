@@ -170,8 +170,7 @@ export const DataView = injector(
         } else if (e.metaKey || e.ctrlKey) {
           window.open(`./?task=${itemID}`, "_blank");
         } else {
-          store._sdk.lsf?.saveDraft();
-          getRoot(view).startLabeling(item);
+          await getRoot(view).startLabeling(item);
         }
       },
       [view, columns],

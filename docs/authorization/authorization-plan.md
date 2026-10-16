@@ -537,3 +537,19 @@ on the queue-completion screen. Confirming that successful submission prevents
 Projects/navigation from sending a redundant draft with an obsolete assignment
 version. The server must still reject stale assignment tokens; no authorization
 policy, Core review authority or IAM operations are changed by this UI fix.
+
+### Issue #76 in-page task navigation, 2026-10-16
+
+Data Manager task-row selection previously fired a draft save without awaiting
+its result. Replacing the outgoing editor while that request failed discarded
+the only copy of its draft. Task selection, closing the task panel and entering
+the labeling queue now share an awaited draft gate in AppStore. Keep the editor,
+task selection and URL intact while saving, preserve failed edits for retry,
+and ignore competing task choices until the first transition finishes. Browser
+history failures restore the last accepted editor URL. The annotation flush must
+still confirm edits made during an older request before releasing navigation.
+
+Retain both-language browser regressions for failed saves, delayed responses,
+newer edits, repeated task choices, separate A/B draft ownership, reload recovery
+and rejected browser Back navigation. This changes client navigation only;
+assignment IDs/versions and server-side draft authorization remain authoritative.

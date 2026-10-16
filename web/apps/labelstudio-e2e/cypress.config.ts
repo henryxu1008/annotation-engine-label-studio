@@ -23,7 +23,9 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean } = {}) {
+        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number } = {}) {
+          const taskCount = options.taskCount ?? 1;
+          if (!Number.isSafeInteger(taskCount) || taskCount < 1 || taskCount > 3) throw new Error('Expected one to three isolated tasks');
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
           const ids = { project: fixture.project_id, manager: fixture.users.manager.id, annotator: fixture.users.annotator_a.id };
           if (!Object.values(ids).every((id) => Number.isSafeInteger(id) && Number(id) > 0)) throw new Error('Fixture IDs required');
@@ -47,10 +49,16 @@ with transaction.atomic():
     data = {'text': 'Independent undo regression.'}
     if ${options.delayedImage === true ? 'True' : 'False'}:
         data['image'] = '/ls76-delayed-image.png'
-    task = Task.objects.create(project=project, data=data, overlap=1)
-    TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
-    project.summary.update_data_columns([task])
-print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': task.pk}))
+    tasks = []
+    for index in range(${taskCount}):
+        task_data = dict(data)
+        if ${taskCount} > 1:
+            task_data['text'] = 'Independent task ' + str(index + 1)
+        task = Task.objects.create(project=project, data=task_data, overlap=1)
+        TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
+        tasks.append(task)
+    project.summary.update_data_columns(tasks)
+print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': tasks[0].pk, 'task_ids': [task.pk for task in tasks]}))
 `], true);
           const result = output.split(/\r?\n/).find((line) => line.startsWith('E2E_UNDO_SCOPE='));
           if (!result) throw new Error('Independent Undo fixture was not created');

@@ -158,7 +158,7 @@ jobs:
 
       - name: Run isolated locale component journeys
         run: |
-          for spec in auth-tips-timeout app-locale dm-editor-locale annotator-label-stream dm-export-locale collaboration-locale; do
+          for spec in auth-tips-timeout app-locale dm-editor-locale dm-task-switch annotator-label-stream dm-export-locale collaboration-locale; do
             poetry run python label_studio/manage.py seed_enterprise_e2e
             (cd web && yarn cypress run \
               --project apps/labelstudio-e2e \

@@ -124,6 +124,8 @@ export const AppStore = types
     needsDataFetch: false,
     projectFetch: false,
     requestsInFlight: new Map(),
+    taskNavigationPending: false,
+    editorLocation: null,
   }))
   .actions((self) => ({
     startPolling() {
@@ -188,7 +190,40 @@ export const AppStore = types
       self.toolbar = toolbarString;
     },
 
-    setTask: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
+    navigateWithSavedDraft: flow(function* (navigate, options = {}) {
+      // All in-page task entry points share this gate, including keyboard and
+      // history navigation. Keep the outgoing editor alive until its real flush
+      // confirms every edit; repeated clicks must not start competing resets.
+      const restoreLocation = () => {
+        if (options.pushState === false && self.editorLocation) {
+          History.forceNavigate({ ...self.editorLocation }, true);
+        }
+      };
+      if (self.taskNavigationPending) {
+        restoreLocation();
+        return false;
+      }
+      self.taskNavigationPending = true;
+      const lsf = self._sdk?.lsf;
+      try {
+        if (lsf && (yield lsf.saveDraft()) === false) {
+          restoreLocation();
+          return false;
+        }
+        if (!isAlive(self) || self._sdk?.lsf !== lsf) return false;
+        yield Promise.resolve(navigate());
+        self.editorLocation = History.getParams();
+        return true;
+      } finally {
+        if (isAlive(self)) self.taskNavigationPending = false;
+      }
+    }),
+
+    setTask(params) {
+      return self.navigateWithSavedDraft(() => self.setTaskAfterSave(params), params);
+    },
+
+    setTaskAfterSave: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
       if (pushState !== false) {
         History.navigate({
           task: taskID,
@@ -327,13 +362,13 @@ export const AppStore = types
     startLabelStream(options = {}) {
       if (!self.confirmLabelingConfigured()) return;
 
-      const nextAction = () => {
+      const nextAction = () => self.navigateWithSavedDraft(() => {
         self.SDK.setMode("labelstream");
 
         if (options?.pushState !== false) {
           History.navigate({ labeling: 1 });
         }
-      };
+      }, options);
 
       if (isFF(FF_DEV_2887) && self.LSF?.lsf?.annotationStore?.selected?.commentStore?.hasUnsaved) {
         Modal.confirm({
@@ -347,7 +382,7 @@ export const AppStore = types
         return;
       }
 
-      nextAction();
+      return nextAction();
     },
 
     startLabeling(item, options = {}) {
@@ -375,9 +410,9 @@ export const AppStore = types
             });
           }
 
-          self.setTask(labelingParams);
+          return self.setTask(labelingParams);
         } else {
-          self.closeLabeling();
+          return self.closeLabeling(options);
         }
       };
 
@@ -393,7 +428,7 @@ export const AppStore = types
         return;
       }
 
-      nextAction();
+      return nextAction();
     },
 
     confirmLabelingConfigured() {
@@ -412,6 +447,10 @@ export const AppStore = types
     },
 
     closeLabeling(options) {
+      return self.navigateWithSavedDraft(() => self.closeLabelingAfterSave(options), options);
+    },
+
+    closeLabelingAfterSave(options) {
       const { SDK } = self;
 
       self.unsetTask(options);
