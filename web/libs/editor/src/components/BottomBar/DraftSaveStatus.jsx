@@ -1,5 +1,6 @@
 import { observer } from "mobx-react";
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Button, Tooltip } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { cn } from "../../utils/bem";
@@ -9,26 +10,23 @@ const DraftConflict = observer(({ annotation }) => {
   const [backedUp, setBackedUp] = useState(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
-  const backup = JSON.stringify({
-    task_id: annotation.store.task.id,
-    draft_id: annotation.draftId,
-    draft_revision: annotation.draftRevision,
-    result: annotation.serializeAnnotation(),
-  }, null, 2);
-  return <details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
+  const backup = annotation.draftBackup;
+  return createPortal(<details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
     <summary>{t("draftConflict")}</summary>
     <p role="alert">{t("draftConflictHint")}</p>
     <textarea aria-label={t("draftLocalCopy")} value={backup} readOnly rows={5} />
     <Button size="small" data-testid="draft-backup" onClick={() => {
-      const url = URL.createObjectURL(new Blob([backup], { type: "application/json" }));
+      const currentCopy = annotation.draftBackup;
+      const url = URL.createObjectURL(new Blob([currentCopy], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
       link.download = `task-${annotation.store.task.id}-unsaved-draft.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setBackedUp(backup);
+      setBackedUp(currentCopy);
     }}>{t("draftDownloadCopy")}</Button>
     <Button size="small" data-testid="draft-reload-latest" disabled={loading || backedUp !== backup} onClick={async () => {
+      if (backedUp !== annotation.draftBackup) return;
       setLoading(true);
       setFailed(false);
       try { if (!(await annotation.reloadLatestDraft())) setFailed(true); }
@@ -36,7 +34,7 @@ const DraftConflict = observer(({ annotation }) => {
       finally { setLoading(false); }
     }}>{t("draftReloadLatest")}</Button>
     {failed && <p role="alert">{t("draftReloadFailed")}</p>}
-  </details>;
+  </details>, document.body);
 });
 
 export const DraftSaveStatus = observer(({ annotation }) => {

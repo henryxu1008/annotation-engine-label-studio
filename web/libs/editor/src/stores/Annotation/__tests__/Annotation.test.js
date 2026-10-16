@@ -22,6 +22,7 @@ import "../../../tags/control/TextArea/TextArea";
 import Tree from "../../../core/Tree";
 import Registry from "../../../core/Registry";
 import AppStore from "../../AppStore";
+import { autorun } from "mobx";
 
 const MINIMAL_CONFIG = `<View><Text name="t1" value="$text" /></View>`;
 
@@ -100,6 +101,21 @@ describe("Annotation model", () => {
       expect(annotation.hasUnsavedDraft).toBe(true);
       expect(annotation.draftConflict).toBe(true);
       expect(note.value.text).toEqual(['冲突后继续编辑']);
+    });
+
+    it("updates the observed recovery copy after edits inside real MST serialization actions", () => {
+      const { annotation, note } = createTextDraft();
+      annotation.setDraftId(7);
+      annotation.setDraftRevision(1);
+      const copies = [];
+      const stop = autorun(() => copies.push(annotation.draftBackup));
+      const first = copies[copies.length - 1];
+      note.setValue(['冲突后的最新备注']);
+      const latest = JSON.parse(copies[copies.length - 1]);
+      expect(copies[copies.length - 1]).not.toEqual(first);
+      expect(latest.result.find(r => r.from_name === 'note').value.text).toEqual(['冲突后的最新备注']);
+      expect(latest.draft_id).toBe(7);
+      stop();
     });
 
     it("keeps a restored entity clean when its text range is initialized", () => {

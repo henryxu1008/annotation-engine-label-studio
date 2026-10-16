@@ -608,6 +608,10 @@ into the fresh server snapshot. Submission/deletion must not bypass this guard.
 Submit/update must first await this page's own in-flight draft acknowledgement
 before capturing results and its content token, so an ordinary continuous edit
 does not produce a spurious conflict with its own background save.
+The recovery copy must observe the real MST content snapshot: serialization is
+an action and does not by itself subscribe a React observer to later edits. Read
+the current copy again at download/reload action time. Render the recovery panel
+through a body portal so the editor's clipped panes cannot hide its instructions.
 Keep PostgreSQL simultaneous-writer tests and bilingual two-page offline/recovery
 acceptance on upgrades. This is draft concurrency control; immutable review
 decisions, IAM operations and Core business integration remain outside this work.

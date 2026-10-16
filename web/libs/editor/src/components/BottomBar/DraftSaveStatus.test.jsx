@@ -13,6 +13,7 @@ it.each(["en-US", "zh-CN"])("preserves local results and requires a fresh backup
     id: 'local', store: { task: { id: 42 } }, draftId: 7, draftRevision: 1,
     hasUnsavedDraft: true, draftConflict: true, note: 'my offline edit',
     serializeAnnotation() { return [{ value: this.note }]; },
+    get draftBackup() { return JSON.stringify({ task_id: 42, draft_id: 7, draft_revision: 1, result: this.serializeAnnotation() }, null, 2); },
     reloadLatestDraft: jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
   });
   URL.createObjectURL = jest.fn().mockReturnValue('blob:local-copy');

@@ -93,6 +93,7 @@ describe("Restored text entity drafts", () => {
         cy.wait("@onlineDraftWrite", { timeout: 15000 }).its("response.statusCode").should("eq", 409);
         cy.get('[data-testid="draft-conflict"]').should("be.visible")
           .and("contain", locale === "zh-CN" ? "草稿已在另一页面更新" : "Draft changed in another page");
+        cy.get('[data-testid="draft-conflict"] summary').should("be.visible");
         state(true, "My latest local edit 中文");
         cy.get('[data-testid="draft-save-retry"]').should("not.exist");
         cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
@@ -104,6 +105,18 @@ describe("Restored text entity drafts", () => {
           expect(String(backup.task_id)).to.eq(String(scope.task_id));
           expect(backup.result.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq(["My latest local edit 中文"]);
         });
+        edit("Not yet backed up");
+        cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
+        edit("My latest local edit 中文");
+        cy.get('[data-testid="draft-reload-latest"]').should("be.enabled");
+        cy.intercept({ method: "GET", url: new RegExp(`/api/tasks/${scope.task_id}/?(?:\\?.*)?$`), times: 1 },
+          { statusCode: 503, body: { detail: "Synthetic recovery load failure" } }).as("failedConflictReload");
+        cy.get('[data-testid="draft-reload-latest"]').click();
+        cy.wait("@failedConflictReload").its("response.statusCode").should("eq", 503);
+        cy.get('[data-testid="modal-close-button"]').should("be.visible").click();
+        state(true, "My latest local edit 中文");
+        cy.contains(locale === "zh-CN" ? "未能载入最新草稿。本页修改仍然保留，请检查网络后重试。"
+          : "Could not load the latest draft. Your edits remain here; check the connection and try again.").should("be.visible");
         cy.get('[data-testid="draft-reload-latest"]').click();
         cy.get('[role="treeitem"]').contains("Entity").should("be.visible");
         state(false, "Newer remote edit");

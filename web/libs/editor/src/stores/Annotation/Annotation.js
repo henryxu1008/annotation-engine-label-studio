@@ -375,6 +375,19 @@ const _Annotation = types
       if (self.isDraftSaving || self.submissionStarted || self.draftSaveError) return true;
       return !deepEqual(getSnapshot(self.trackedState), self.savedDraftSnapshot, { strict: true });
     },
+
+    get draftBackup() {
+      // serializeAnnotation is an MST action: reads inside it are untracked.
+      // Observe the content snapshot so later edits invalidate both the copy
+      // and the acknowledgement that permits reloading the server version.
+      getSnapshot(self.trackedState);
+      return JSON.stringify({
+        task_id: self.store.task.id,
+        draft_id: self.draftId,
+        draft_revision: self.draftRevision,
+        result: self.serializeAnnotation(),
+      }, null, 2);
+    },
   }))
   .volatile((self) => ({
     hidden: false,
