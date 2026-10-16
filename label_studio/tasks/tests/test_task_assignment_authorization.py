@@ -1,11 +1,15 @@
 from unittest.mock import patch
+from unittest import skipUnless
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from data_export.models import Export
 from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
-from rest_framework.test import APITestCase
+from django.db import connection, connections, close_old_connections
+from rest_framework.test import APIClient, APITestCase, APITransactionTestCase
 from tasks.models import Annotation, AnnotationDraft, ReviewDecision, Submission, TaskAssignment
 from tasks.submissions import create_submission
 from tasks.tests.factories import TaskFactory
@@ -73,7 +77,7 @@ class TestTaskAssignmentAuthorization(APITestCase):
                 'result': [],
                 'assignment_id': assignment.id,
                 'assignment_version': assignment.version,
-                **({'draft_id': draft.id} if draft is not None else {}),
+                **({'draft_id': draft.id, 'draft_revision': draft.revision} if draft is not None else {}),
             },
             format='json',
         )
@@ -1309,3 +1313,150 @@ class TestTaskAssignmentAuthorization(APITestCase):
         )
 
         assert response.status_code == 403
+
+
+class TestDraftContentConcurrency(APITestCase):
+    """Same actor and assignment, but independent page snapshots."""
+    setUpTestData = classmethod(TestTaskAssignmentAuthorization.setUpTestData.__func__)
+    _create_annotation = TestTaskAssignmentAuthorization._create_annotation
+    def _draft(self):
+        return AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[{'value': 'initial'}],
+        )
+
+    def _write(self, draft, revision, result, method='patch'):
+        self.client.force_authenticate(user=self.annotator_a)
+        data = {'result': result, 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version}
+        if revision is not None:
+            data['draft_revision'] = revision
+        return getattr(self.client, method)(f'/api/drafts/{draft.pk}', data, format='json')
+
+    def test_stale_page_cannot_overwrite_latest_draft_and_fresh_page_can_continue(self):
+        draft = self._draft()
+        revision = draft.revision
+        newer = self._write(draft, revision, [{'value': 'new page'}])
+        assert newer.status_code == 200, newer.data
+        assert newer.data['revision'] == revision + 1
+        stale = self._write(draft, revision, [{'value': 'old offline page'}])
+        assert stale.status_code == 409, stale.data
+        assert stale.data['display_context']['reason'] == 'DRAFT_CONFLICT'
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new page'}]
+        assert draft.revision == revision + 1
+        restored = self.client.get(f'/api/tasks/{self.shared_task.pk}/').data['drafts'][0]
+        recovered = self._write(draft, restored['revision'], [{'value': 'reapplied local change'}])
+        assert recovered.status_code == 200, recovered.data
+        assert recovered.data['revision'] == revision + 2
+
+    def test_missing_content_token_cannot_write_or_delete(self):
+        draft = self._draft()
+        for method in ('patch', 'put', 'delete'):
+            response = self._write(draft, None, [], method)
+            assert response.status_code == 409, response.data
+        draft.refresh_from_db()
+        assert draft.revision == 1 and draft.result == [{'value': 'initial'}]
+
+    def test_stale_delete_and_submit_cannot_consume_newer_draft(self):
+        draft = self._draft()
+        assert self._write(draft, 1, [{'value': 'new page'}]).status_code == 200
+        assert self._write(draft, 1, [], 'delete').status_code == 409
+        for token in ({}, {'draft_id': draft.id, 'draft_revision': 1}):
+            response = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {
+                'result': [], 'assignment_id': self.assignment_a.id,
+                'assignment_version': self.assignment_a.version, **token,
+            }, format='json')
+            assert response.status_code == 409, response.data
+        assert not Annotation.objects.filter(task=self.shared_task, completed_by=self.annotator_a).exists()
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new page'}]
+        self._create_annotation(self.annotator_a, self.shared_task, draft=draft)
+        assert not AnnotationDraft.objects.filter(pk=draft.pk).exists()
+
+    def test_two_pages_without_a_draft_cannot_create_parallel_silent_versions(self):
+        self.client.force_authenticate(user=self.annotator_a)
+        data = {'result': [], 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version, 'draft_revision': 0}
+        first = self.client.post(f'/api/tasks/{self.shared_task.pk}/drafts', data, format='json')
+        assert first.status_code == 201, first.data
+        second = self.client.post(f'/api/tasks/{self.shared_task.pk}/drafts', data, format='json')
+        assert second.status_code == 409, second.data
+        assert AnnotationDraft.objects.filter(assignment=self.assignment_a).count() == 1
+
+    def test_stale_annotation_update_cannot_delete_a_newer_attached_draft(self):
+        annotation = self._create_annotation(self.annotator_a, self.shared_task)
+        draft = AnnotationDraft.objects.create(
+            task=self.shared_task, annotation=annotation, user=self.annotator_a,
+            assignment=self.assignment_a, result=[{'value': 'initial attached draft'}],
+        )
+        assert self._write(draft, 1, [{'value': 'new attached draft'}]).status_code == 200
+        body = {'result': [], 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version, 'draft_id': draft.pk, 'draft_revision': 1}
+        response = self.client.patch(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert response.status_code == 409, response.data
+        deleted = self.client.delete(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert deleted.status_code == 409, deleted.data
+        converted = self.client.post(f'/api/annotations/{annotation.pk}/convert-to-draft', body, format='json')
+        assert converted.status_code == 409, converted.data
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new attached draft'}]
+        body['draft_revision'] = draft.revision
+        response = self.client.patch(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert response.status_code == 200, response.data
+        assert not AnnotationDraft.objects.filter(pk=draft.pk).exists()
+
+    def test_content_revision_cannot_override_owner_or_assignment_and_cannot_be_set_by_client(self):
+        draft = self._draft()
+        self.client.force_authenticate(user=self.annotator_b)
+        response = self.client.patch(f'/api/drafts/{draft.pk}', {
+            'result': [], 'draft_revision': 1, 'assignment_id': self.assignment_b.pk,
+            'assignment_version': self.assignment_b.version,
+        }, format='json')
+        assert response.status_code == 403, response.data
+        self.client.force_authenticate(user=self.annotator_a)
+        response = self.client.patch(f'/api/drafts/{draft.pk}', {
+            'result': [], 'draft_revision': 1, 'revision': 900,
+            'task': self.other_task.pk, 'user': str(self.annotator_b.pk), 'assignment': self.other_assignment.pk,
+            'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+        }, format='json')
+        assert response.status_code == 200 and response.data['revision'] == 2, response.data
+        draft.refresh_from_db()
+        assert (draft.task_id, draft.user_id, draft.assignment_id) == (
+            self.shared_task.pk, self.annotator_a.pk, self.assignment_a.pk,
+        )
+        self.assignment_a.cancel()
+        assert self._write(draft, 2, []).status_code in (403, 409)
+
+
+@skipUnless(connection.vendor == 'postgresql', 'Row lock race requires PostgreSQL')
+class TestDraftContentConcurrencyRace(APITransactionTestCase):
+    def test_simultaneous_same_revision_has_exactly_one_winner(self):
+        TestTaskAssignmentAuthorization.setUpTestData.__func__(type(self))
+        draft = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a, result=[],
+        )
+        barrier = Barrier(2)
+
+        def save(value):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(user=self.annotator_a)
+                barrier.wait(timeout=10)
+                response = client.patch(f'/api/drafts/{draft.pk}', {
+                    'result': [{'value': value}], 'draft_revision': 1,
+                    'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+                }, format='json')
+                return response.status_code, value
+            finally:
+                from core.current_request import CurrentContext
+                CurrentContext.clear()
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(save, ('tab A', 'tab B')))
+        assert sorted(status for status, _ in results) == [200, 409], results
+        draft.refresh_from_db()
+        assert draft.revision == 2
+        assert draft.result == [{'value': next(value for status, value in results if status == 200)}]

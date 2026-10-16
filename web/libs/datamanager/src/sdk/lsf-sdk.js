@@ -265,6 +265,8 @@ export class LSFWrapper {
 
       this.lsfInstance = new LSF(this.root, settings);
 
+      this.lsfInstance.on("reloadDraft", this.onReloadDraft);
+
       this.lsfInstance.on("presignUrlForProject", this.onPresignUrlForProject);
 
       const names = Array.from(this.datamanager.callbacks.keys()).filter((k) => k.startsWith("lsf:"));
@@ -667,6 +669,7 @@ export class LSFWrapper {
         cs.selectAnnotation(c.id);
         c.deserializeResults(draft.result);
         c.setDraftId(draft.id);
+        c.setDraftRevision(draft.revision);
         c.setDraftSaved(draft.created_at);
         c.history.safeUnfreeze();
         c.history.reinit();
@@ -863,6 +866,7 @@ export class LSFWrapper {
     if (status === 200 || status === 201) {
       this.datamanager.invoke("toast", { message: t(successKey), type: "info" });
     } else if (status !== undefined) {
+      if (result?.response?.display_context?.reason === "DRAFT_CONFLICT") return;
       // Skip toast for errors that are handled by global modal handlers via display_context
       // These errors bubble up to ApiProvider which shows appropriate modals
       // Note: display_context is in result.response for API error responses
@@ -976,6 +980,7 @@ export class LSFWrapper {
     });
     const status = result?.$meta?.status;
 
+    this.handleDraftResponse(annotation, result);
     this.showOperationToast(status, "annotationUpdated", "annotationUpdateFailed", result);
 
     this.datamanager.invoke("updateAnnotation", ls, annotation, result);
@@ -1004,12 +1009,13 @@ export class LSFWrapper {
     return result;
   };
 
-  deleteDraft = async (id) => {
-    const response = await this.datamanager.apiCall("deleteDraft", {
-      draftID: id,
-    });
+  deleteDraft = async (id, annotation = this.currentAnnotation) => {
+    const response = await this.datamanager.apiCall("deleteDraft", { draftID: id }, {
+      body: this.prepareData(annotation),
+    }, this.draftConflictOptions);
+    this.handleDraftResponse(annotation, response);
 
-    this.task.deleteDraft(id);
+    if (response?.$meta?.status === 204) this.task.deleteDraft(id);
     return response;
   };
 
@@ -1017,8 +1023,6 @@ export class LSFWrapper {
   onDeleteAnnotation = async (ls, annotation) => {
     const { task } = this;
     let response;
-
-    task.deleteAnnotation(annotation);
 
     if (annotation.userGenerate && annotation.sentUserGenerate === false) {
       if (annotation.draftId) {
@@ -1031,14 +1035,16 @@ export class LSFWrapper {
         return this.datamanager.apiCall("deleteAnnotation", {
           taskID: task.id,
           annotationID: annotation.pk,
-        });
+        }, { body: this.prepareData(annotation) }, this.draftConflictOptions);
       });
+      this.handleDraftResponse(annotation, response);
 
       // this.task.deleteAnnotation(annotation);
       this.datamanager.invoke("deleteAnnotation", ls, annotation);
     }
 
     if (response.ok) {
+      task.deleteAnnotation(annotation);
       const lastAnnotation = this.annotations[this.annotations.length - 1] ?? {};
       const annotationID = lastAnnotation.pk ?? undefined;
 
@@ -1089,7 +1095,8 @@ export class LSFWrapper {
 
     if (annotation.draftId > 0) {
       // draft has been already created
-      const res = await this.datamanager.apiCall("updateDraft", { draftID: annotation.draftId }, data);
+      const res = await this.datamanager.apiCall("updateDraft", { draftID: annotation.draftId }, data, this.draftConflictOptions);
+      this.handleDraftResponse(annotation, res);
 
       showToast && this.draftToast(res.$meta?.status, res);
       this.datamanager.invoke("submitDraft", this, annotation, res);
@@ -1098,19 +1105,43 @@ export class LSFWrapper {
     let response;
 
     if (annotationDoesntExist) {
-      response = await this.datamanager.apiCall("createDraftForTask", { taskID: taskId }, data);
+      response = await this.datamanager.apiCall("createDraftForTask", { taskID: taskId }, data, this.draftConflictOptions);
     } else {
       response = await this.datamanager.apiCall(
         "createDraftForAnnotation",
         { taskID: taskId, annotationID: annotation.pk },
         data,
+        this.draftConflictOptions,
       );
     }
+    this.handleDraftResponse(annotation, response);
     response?.id && annotation.setDraftId(response?.id);
     showToast && this.draftToast(response.$meta?.status, response);
     this.datamanager.invoke("submitDraft", this, annotation, response);
 
     return response;
+  };
+
+  // Handle this expected concurrency outcome in the editor's localized,
+  // persistent recovery UI, rather than an English global error modal.
+  draftConflictOptions = {
+    errorHandler: (result) => result?.response?.display_context?.reason === "DRAFT_CONFLICT",
+  };
+
+  handleDraftResponse(annotation, response) {
+    if (response?.response?.display_context?.reason === "DRAFT_CONFLICT") annotation.setDraftConflict();
+    else if ((response?.$meta?.status === 200 || response?.$meta?.status === 201) && response.revision != null) {
+      annotation.setDraftRevision(response.revision);
+    }
+  }
+
+  onReloadDraft = async () => {
+    const task = await this.datamanager.store.taskStore.loadTask(this.task.id);
+    if (!task || this.destroyed || !this.lsf) return false;
+    // Do not merge the obsolete editor annotations back into this fresh task.
+    this.task = task;
+    await this.setLSFTask(task, undefined, true);
+    return true;
   };
 
   onSkipTask = async (_, { comment } = {}) => {
@@ -1169,47 +1200,56 @@ export class LSFWrapper {
       return;
     }
 
-    await this.withinLoadingState(async () => {
+    const converted = await this.withinLoadingState(async () => {
       currentAnnotation.pauseAutosave();
 
       if (isFF(FF_DEV_3034)) {
-        await this.datamanager.apiCall("convertToDraft", {
+        const response = await this.datamanager.apiCall("convertToDraft", {
           annotationID: currentAnnotation.pk,
-        });
+        }, { body: this.prepareData(currentAnnotation) }, this.draftConflictOptions);
+        this.handleDraftResponse(currentAnnotation, response);
+        return response?.$meta?.status === 201;
       } else {
+        let response;
         if (currentAnnotation.draftId > 0) {
-          await this.datamanager.apiCall(
+          response = await this.datamanager.apiCall(
             "updateDraft",
             {
               draftID: currentAnnotation.draftId,
             },
             {
-              body: { annotation: null },
+              body: { ...this.prepareData(currentAnnotation), annotation: null },
             },
+            this.draftConflictOptions,
           );
         } else {
           const annotationData = { body: this.prepareData(currentAnnotation) };
 
-          await this.datamanager.apiCall(
+          response = await this.datamanager.apiCall(
             "createDraftForTask",
             {
               taskID: this.task.id,
             },
             annotationData,
+            this.draftConflictOptions,
           );
         }
+        this.handleDraftResponse(currentAnnotation, response);
+        if (![200, 201].includes(response?.$meta?.status)) return false;
 
         // Carry over any comments to when the annotation draft is eventually submitted
         if (isFF(FF_DEV_2887) && this.lsf?.commentStore?.toCache) {
           this.lsf.commentStore.toCache(`task.${task.id}`);
         }
 
-        await this.datamanager.apiCall("deleteAnnotation", {
+        const removed = await this.datamanager.apiCall("deleteAnnotation", {
           taskID: task.id,
           annotationID: currentAnnotation.pk,
         });
+        return removed?.$meta?.status === 204;
       }
     });
+    if (!converted) return;
     await this.loadTask(task.id);
     this.datamanager.invoke("unskipTask");
   };
@@ -1404,6 +1444,7 @@ export class LSFWrapper {
       return result;
     });
 
+    this.handleDraftResponse(currentAnnotation, result);
     if (result && result.id !== undefined) {
       const annotationId = result.id.toString();
 
@@ -1493,6 +1534,7 @@ export class LSFWrapper {
       lead_time: leadTime,
       result: (isNewDraft ? annotation.versions.draft : annotation.serializeAnnotation()) ?? [],
       draft_id: annotation.draftId,
+      draft_revision: annotation.draftRevision,
       parent_prediction: annotation.parent_prediction,
       parent_annotation: annotation.parent_annotation,
       started_at: startedAt.toISOString(),

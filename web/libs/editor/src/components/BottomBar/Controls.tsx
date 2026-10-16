@@ -86,7 +86,7 @@ export const Controls = controlsInjector<{ annotation: MSTAnnotation }>(
     const [isInProgress, setIsInProgress] = useState(false);
     const disabled = !annotationEditable || store.isSubmitting || historySelected || isInProgress;
     // Reviewing an immutable annotation is separate from editing its results.
-    const writeDisabled = disabled || annotation.isReadOnly?.() === true;
+    const writeDisabled = disabled || annotation.isReadOnly?.() === true || !!annotation.draftConflict;
     const submitDisabled = store.hasInterface("annotations:deny-empty") && results.length === 0;
     const hasIncompleteRegions = annotation.hasIncompletePolygons;
 

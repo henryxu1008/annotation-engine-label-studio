@@ -16,6 +16,51 @@ function createDraftWrapper() {
   }
 }
 
+it("advances draft tokens only after success and never adopts the remote revision on conflict", () => {
+  const wrapper = createDraftWrapper();
+  const annotation = { setDraftRevision: jest.fn(), setDraftConflict: jest.fn() };
+  wrapper.handleDraftResponse(annotation, { $meta: { status: 200 }, revision: 3 });
+  expect(annotation.setDraftRevision).toHaveBeenCalledWith(3);
+  wrapper.handleDraftResponse(annotation, { $meta: { status: 409 }, revision: 8,
+    response: { display_context: { reason: "DRAFT_CONFLICT" } } });
+  expect(annotation.setDraftConflict).toHaveBeenCalledTimes(1);
+  expect(annotation.setDraftRevision).toHaveBeenCalledTimes(1);
+});
+
+it("reloads fresh server results without merging obsolete local annotations", async () => {
+  const wrapper = createDraftWrapper();
+  const old = { id: 42, drafts: [{ id: 1, revision: 1 }] };
+  const fresh = { id: 42, drafts: [{ id: 1, revision: 2 }] };
+  wrapper.task = old;
+  wrapper.lsf = {};
+  wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(fresh) };
+  wrapper.setLSFTask = jest.fn();
+  expect(await wrapper.onReloadDraft()).toBe(false);
+  expect(wrapper.task).toBe(old);
+  expect(wrapper.setLSFTask).not.toHaveBeenCalled();
+  expect(await wrapper.onReloadDraft()).toBe(true);
+  expect(wrapper.task).toBe(fresh);
+  expect(wrapper.setLSFTask).toHaveBeenCalledWith(fresh, undefined, true);
+});
+
+it.each([200, 409])("does not delete a skipped annotation after its draft write returns %s", async (status) => {
+  const wrapper = createDraftWrapper();
+  const selected = { pk: 17, draftId: 7, pauseAutosave: jest.fn(), setDraftConflict: jest.fn(), setDraftRevision: jest.fn() };
+  wrapper.task = { id: 42 };
+  wrapper.lsf = { annotationStore: { selected } };
+  wrapper.prepareData = jest.fn().mockReturnValue({ draft_id: 7, draft_revision: 1 });
+  wrapper.withinLoadingState = async (fn) => fn();
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.datamanager.apiCall = jest.fn().mockResolvedValueOnce({ $meta: { status },
+    ...(status === 409 ? { response: { display_context: { reason: 'DRAFT_CONFLICT' } } } : { revision: 2 })
+  }).mockResolvedValueOnce({ $meta: { status: 204 } });
+  wrapper.loadTask = jest.fn();
+  await wrapper.onUnskipTask();
+  expect(wrapper.datamanager.apiCall).toHaveBeenCalledTimes(status === 200 ? 2 : 1);
+  expect(wrapper.loadTask).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+  expect(selected.setDraftConflict).toHaveBeenCalledTimes(status === 409 ? 1 : 0);
+});
+
 it.each([0, 503, 201])("returns the real submit response %s and exits only after success", async (status) => {
   const wrapper = createDraftWrapper();
   const result = { $meta: { status } };

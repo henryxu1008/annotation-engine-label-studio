@@ -178,5 +178,11 @@
   "draftRetry": "重试保存",
   "draftLeaveHint": "刷新或关闭标签页前请先保存最新编辑。保存失败时，请留在此页重试。",
   "requiredChoice": "提交前请为“{{name}}”选择一个选项。",
-  "submissionFailed": "标注未能保存，当前编辑仍保留在页面中，请重试。"
+  "submissionFailed": "标注未能保存，当前编辑仍保留在页面中，请重试。",
+  "draftConflict": "草稿已在另一页面更新",
+  "draftConflictHint": "已暂停自动保存。本页修改仍然保留，服务器上的新草稿未被覆盖。请先下载本页修改，再载入最新草稿，重新应用需要的修改。",
+  "draftLocalCopy": "本页未保存的修改（JSON）",
+  "draftDownloadCopy": "下载本页修改",
+  "draftReloadLatest": "载入最新草稿",
+  "draftReloadFailed": "未能载入最新草稿。本页修改仍然保留，请检查网络后重试。"
 }

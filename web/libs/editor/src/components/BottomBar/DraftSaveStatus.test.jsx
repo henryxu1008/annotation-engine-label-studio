@@ -8,6 +8,38 @@ jest.mock("@humansignal/ui", () => ({
   Tooltip: ({ children, title }) => <div title={title}>{children}</div>,
 }));
 
+it.each(["en-US", "zh-CN"])("preserves local results and requires a fresh backup before %s conflict recovery", async (locale) => {
+  const annotation = observable({
+    id: 'local', store: { task: { id: 42 } }, draftId: 7, draftRevision: 1,
+    hasUnsavedDraft: true, draftConflict: true, note: 'my offline edit',
+    serializeAnnotation() { return [{ value: this.note }]; },
+    reloadLatestDraft: jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+  });
+  URL.createObjectURL = jest.fn().mockReturnValue('blob:local-copy');
+  URL.revokeObjectURL = jest.fn();
+  const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  const view = render(<Provider><DraftSaveStatus annotation={annotation} /></Provider>);
+  expect(screen.getByTestId('draft-conflict')).toHaveTextContent(locale === 'zh-CN' ? '草稿已在另一页面更新' : 'Draft changed in another page');
+  expect(screen.getByRole('textbox').value).toContain('my offline edit');
+  const reload = screen.getByTestId('draft-reload-latest');
+  expect(reload).toBeDisabled();
+  fireEvent.click(screen.getByTestId('draft-backup'));
+  expect(click).toHaveBeenCalledTimes(1);
+  expect(reload).toBeEnabled();
+  act(() => runInAction(() => { annotation.note = 'new local edit'; }));
+  expect(reload).toBeDisabled();
+  fireEvent.click(screen.getByTestId('draft-backup'));
+  await act(async () => { fireEvent.click(reload); });
+  expect(screen.getAllByRole('alert').some(el => el.textContent.includes(locale === 'zh-CN' ? '本页修改仍然保留，请检查网络' : 'Your edits remain here; check'))).toBe(true);
+  expect(screen.getByRole('textbox').value).toContain('new local edit');
+  expect(reload).toBeEnabled();
+  await act(async () => { fireEvent.click(reload); });
+  expect(annotation.reloadLatestDraft).toHaveBeenCalledTimes(2);
+  view.unmount();runtime.destroy();click.mockRestore();
+});
+
 it.each(["en-US", "zh-CN"])("keeps %s draft failures actionable until a confirmed save", async (locale) => {
   const annotation = observable({
     hasUnsavedDraft: true,

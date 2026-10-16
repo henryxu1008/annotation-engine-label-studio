@@ -652,7 +652,7 @@ export default types
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
-      if (!entity || entity.isReadOnly()) return;
+      if (!entity || entity.isReadOnly() || entity.draftConflict) return;
       const event = entity.exists ? "updateAnnotation" : "submitAnnotation";
 
       entity.beforeSend();
@@ -684,7 +684,7 @@ export default types
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
-      if (!entity || entity.isReadOnly()) return;
+      if (!entity || entity.isReadOnly() || entity.draftConflict) return;
 
       entity.beforeSend();
 

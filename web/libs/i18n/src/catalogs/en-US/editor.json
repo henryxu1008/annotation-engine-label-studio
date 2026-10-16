@@ -179,5 +179,11 @@
   "draftRetry": "Retry save",
   "draftLeaveHint": "Save your latest edits before refreshing or closing this tab. If saving fails, stay on this page and retry.",
   "requiredChoice": "Select an option for \"{{name}}\" before submitting.",
-  "submissionFailed": "Annotation could not be saved. Your edits are still here. Please retry."
+  "submissionFailed": "Annotation could not be saved. Your edits are still here. Please retry.",
+  "draftConflict": "Draft changed in another page",
+  "draftConflictHint": "Automatic saving is paused. Your edits are still on this page; the newer saved draft has not been overwritten. Download a copy of your edits, then load the latest draft and reapply the changes you need.",
+  "draftLocalCopy": "Unsaved edits from this page (JSON)",
+  "draftDownloadCopy": "Download my edits",
+  "draftReloadLatest": "Load latest draft",
+  "draftReloadFailed": "Could not load the latest draft. Your edits remain here; check the connection and try again."
 }

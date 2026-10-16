@@ -379,6 +379,8 @@ const _Annotation = types
   .volatile((self) => ({
     hidden: false,
     draftId: 0,
+    draftRevision: 0,
+    draftConflict: false,
     draftSelected: false,
     autosaveDelay: 5000,
     isDraftSaving: false,
@@ -830,6 +832,9 @@ const _Annotation = types
       if (!isAlive(self)) return;
       // There is no draft to save as it was already saved as an annotation
       if (self.submissionStarted) return;
+      // A conflict is not a transient network failure. Never retry with a
+      // newer token while retaining results from the obsolete page.
+      if (self.draftConflict) return { $meta: { status: 409 } };
       // if this is now a history item or prediction don't save it
       if (!self.editable) return;
 
@@ -905,6 +910,20 @@ const _Annotation = types
       self.draftId = id;
     },
 
+    setDraftRevision(revision) {
+      self.draftRevision = revision;
+    },
+
+    setDraftConflict() {
+      self.draftConflict = true;
+      self.draftSaveError = true;
+      self.pauseAutosave();
+    },
+
+    reloadLatestDraft() {
+      return getEnv(self).events.invokeFirst("reloadDraft", self);
+    },
+
     setDraftSelected(selected = true) {
       self.draftSelected = selected;
     },
@@ -917,6 +936,8 @@ const _Annotation = types
     dropDraft() {
       self.autosave?.cancel();
       self.draftId = 0;
+      self.draftRevision = 0;
+      self.draftConflict = false;
       self.draftSelected = false;
       self.draftSaved = undefined;
       self.versions.draft = undefined;

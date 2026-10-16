@@ -1083,6 +1083,7 @@ class AnnotationDraftManager(models.Manager):
 
 class AnnotationDraft(FsmHistoryStateModel):
     objects = AnnotationDraftManager()
+    revision = models.PositiveBigIntegerField(default=1, editable=False)
     result = JSONField(_('result'), help_text='Draft result in JSON format')
     lead_time = models.FloatField(
         _('lead time'),
@@ -1160,6 +1161,12 @@ class AnnotationDraft(FsmHistoryStateModel):
                 from projects.models import ProjectSummary
 
                 ProjectSummary.objects.select_for_update().filter(pk=project.summary.pk).first()
+            if self.pk:
+                previous = AnnotationDraft.objects.select_for_update().filter(pk=self.pk).first()
+                if previous:
+                    self.revision = previous.revision + 1
+                    if kwargs.get('update_fields') is not None:
+                        kwargs['update_fields'] = set(kwargs['update_fields']) | {'revision'}
             super().save(*args, **kwargs)
             if hasattr(project, 'summary'):
                 project.summary.update_created_labels_drafts([self])

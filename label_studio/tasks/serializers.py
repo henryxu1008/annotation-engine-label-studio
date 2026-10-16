@@ -951,7 +951,7 @@ class AnnotationDraftSerializer(ModelSerializer):
     """
 
     state = FSMStateField(read_only=True)  # FSM state - automatically uses annotation if present
-    user = serializers.CharField(default=serializers.CurrentUserDefault())
+    user = serializers.CharField(read_only=True)
     assignment_id = serializers.IntegerField(required=False, write_only=True)
     assignment_version = serializers.IntegerField(required=False, write_only=True)
     created_username = serializers.SerializerMethodField(default='', read_only=True, help_text='User name string')
@@ -966,6 +966,13 @@ class AnnotationDraftSerializer(ModelSerializer):
         validated_data.pop('assignment_id', None)
         validated_data.pop('assignment_version', None)
         return super().update(instance, validated_data)
+
+    def validate_annotation(self, annotation):
+        # Upstream unskip detaches a draft before removing the skipped
+        # annotation. Rebinding it to a different annotation is never allowed.
+        if self.instance and annotation is not None and annotation.pk != self.instance.annotation_id:
+            raise serializers.ValidationError('A draft cannot be moved to another annotation.')
+        return annotation
 
     def get_created_username(self, draft):
         user = draft.user
@@ -993,6 +1000,7 @@ class AnnotationDraftSerializer(ModelSerializer):
     class Meta:
         model = AnnotationDraft
         fields = '__all__'
+        read_only_fields = ('task', 'assignment', 'revision')
 
 
 class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):

@@ -583,3 +583,28 @@ after rendering: actual text/boundary edits, failed writes, and edits made durin
 an older request must remain protected until their own save succeeds. Keep the
 English/Chinese entity draft restore, failed-save and retry browser regressions
 when upgrading upstream. Server ownership and assignment checks remain unchanged.
+
+### Issue #76 concurrent draft pages, 2026-10-16
+
+Assignment versions protect authorization lifecycles, not draft contents. Each
+draft now exposes a monotonically increasing content `revision`. Updates,
+deletes and annotation writes consuming a draft require `draft_revision` from
+the page's last acknowledged snapshot. Missing or stale tokens return 409 with
+`display_context.reason=DRAFT_CONFLICT`; no remote revision is adopted on error.
+The transaction locks the active assignment, project summary and draft in that
+order, preserving upstream summary-before-draft ordering. The model increments
+the revision for all instance saves. First creation is serialized by assignment
+and rejects an existing draft in the same actor/assignment/annotation scope.
+Draft owner, task and assignment references are server controlled; the annotation
+reference permits only the existing, revision-checked unskip detach operation.
+Unversioned old clients must reload the new editor before writing existing drafts.
+
+On conflict, preserve local results and unsaved navigation protection, cancel
+pending automatic saves and refuse blind retries. The bilingual conflict panel
+offers a local JSON backup, then an explicit reload of the server's latest task.
+Edits made after downloading invalidate that backup acknowledgement. Failed
+reload retains the local editor. Recovery must not merge obsolete annotations
+into the fresh server snapshot. Submission/deletion must not bypass this guard.
+Keep PostgreSQL simultaneous-writer tests and bilingual two-page offline/recovery
+acceptance on upgrades. This is draft concurrency control; immutable review
+decisions, IAM operations and Core business integration remain outside this work.
