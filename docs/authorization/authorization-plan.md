@@ -625,5 +625,9 @@ block submission/retries while retaining local edits and navigation protection.
 Do not fall back from PATCH to POST or automatically recreate a removed draft.
 After a current local backup, explicitly load the latest task (which may contain
 a final annotation or no draft). A failed load preserves the local editor.
+When no draft remains, explicitly select the latest returned annotation owned
+by the authenticated editor user, rather than upstream's default blank new
+annotation. Existing drafts retain their normal hydration selection. This is
+display selection only; all read/write authorization stays server controlled.
 Keep bilingual submit/delete recovery tests, including server readback proving
 no draft recreation and no changes to submitted annotation/submission records.

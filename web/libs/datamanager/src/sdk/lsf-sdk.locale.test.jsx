@@ -91,6 +91,20 @@ it("reloads fresh server results without merging obsolete local annotations", as
   expect(wrapper.setLSFTask).toHaveBeenCalledWith(fresh, undefined, true);
 });
 
+it.each([17, { id: 17 }, null])("selects the returned owner's latest submitted annotation without fabricating a new draft: %j", async (owner) => {
+  const wrapper = createDraftWrapper();
+  const task = { id: 42, drafts: [], annotations: [
+    { id: 100, completed_by: owner }, { id: 99, completed_by: owner }, { id: 101, completed_by: 18 },
+  ] };
+  wrapper.task = { id: 42 };
+  wrapper.lsf = { user: { id: 17 } };
+  wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValue(task) };
+  wrapper.setLSFTask = jest.fn();
+  expect(await wrapper.onReloadDraft()).toBe(true);
+  expect(wrapper.setLSFTask).toHaveBeenCalledWith(task, owner === null ? undefined : "100", true);
+  expect(task.annotations.map(a => a.id)).toEqual([100, 99, 101]);
+});
+
 it.each([200, 409])("does not delete a skipped annotation after its draft write returns %s", async (status) => {
   const wrapper = createDraftWrapper();
   const selected = { pk: 17, draftId: 7, pauseAutosave: jest.fn(), setDraftConflict: jest.fn(), setDraftRevision: jest.fn() };

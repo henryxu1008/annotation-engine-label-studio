@@ -1149,7 +1149,15 @@ export class LSFWrapper {
     if (!task || this.destroyed || !this.lsf) return false;
     // Do not merge the obsolete editor annotations back into this fresh task.
     this.task = task;
-    await this.setLSFTask(task, undefined, true);
+    // A submitted task-level draft has no local annotation PK. Without an
+    // explicit selection, upstream opens a new blank annotation instead of
+    // showing the actor's submitted work. Drafts still use normal hydration.
+    const actorId = this.lsf.user?.id;
+    const owned = actorId == null ? [] : Array.from(task.annotations ?? []).filter(annotation =>
+      String(annotation.completed_by?.id ?? annotation.completed_by) === String(actorId));
+    const latest = owned.reduce((previous, annotation) =>
+      !previous || Number(annotation.id) > Number(previous.id) ? annotation : previous, null);
+    await this.setLSFTask(task, task.drafts?.length || !latest ? undefined : String(latest.id), true);
     return true;
   };
 
