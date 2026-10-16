@@ -44,6 +44,12 @@ describe("Restored text entity drafts", () => {
         cy.get('[data-testid="draft-save-retry"]').click();
         cy.wait("@draftWrite").its("response.statusCode").should("eq", 503);
         cy.contains(locale === "zh-CN" ? "草稿保存失败" : "Draft not saved").should("be.visible");
+        // A server response also opens the existing API error dialog. Follow
+        // its normal close action before editing the still-unsaved draft.
+        cy.get(".lsf-modal-ls__body").should("be.visible");
+        cy.get('[data-testid="modal-close-button"]').click();
+        cy.get(".lsf-modal-ls").should("not.exist");
+        state(true, "First edit");
         edit("Latest edit 中文");
         state(true, "Latest edit 中文");
         cy.then(() => { fail = false; });
