@@ -64,7 +64,10 @@ const HtxTextAreaResultLine = forwardRef(
     inputProps.onBlur = blurHandler;
 
     inputProps.onKeyDown = (e) => {
-      if (isComposingKeyEvent(e)) return;
+      if (isComposingKeyEvent(e)) {
+        if (e.key === "Enter") e.preventDefault();
+        return;
+      }
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();

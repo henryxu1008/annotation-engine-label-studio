@@ -119,7 +119,15 @@ describe("HtxTextBox", () => {
       fireEvent.click(screen.getByTestId("htx-textbox-edit-button"));
       const input = screen.getByTestId("htx-textbox-input");
       fireEvent.change(input, { target: { value: "中文候选" } });
-      fireEvent.keyDown(input, { key, isComposing: true, keyCode: key === "Enter" ? 13 : 229 });
+      const event = new KeyboardEvent("keydown", {
+        key,
+        isComposing: true,
+        keyCode: key === "Enter" ? 13 : 229,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => input.dispatchEvent(event));
+      if (key === "Enter") expect(event.defaultPrevented).toBe(true);
       expect(input).toHaveFocus();
       expect(screen.getByTestId("htx-textbox-input")).toHaveValue("中文候选");
       expect(defaultProps.onChange).not.toHaveBeenCalled();

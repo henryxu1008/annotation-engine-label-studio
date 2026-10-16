@@ -130,7 +130,10 @@ export class HtxTextBox extends React.Component {
         this.updateHeight();
       },
       onKeyDown: (e) => {
-        if (isComposingKeyEvent(e)) return;
+        if (isComposingKeyEvent(e)) {
+          if (e.key === "Enter") e.preventDefault();
+          return;
+        }
         const { key, shiftKey } = e;
 
         if (key === "Enter") {

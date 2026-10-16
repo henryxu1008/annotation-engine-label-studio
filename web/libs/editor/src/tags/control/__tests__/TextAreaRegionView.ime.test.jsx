@@ -53,7 +53,9 @@ it.each(["Enter", "Escape"])("keeps an existing region result focused during com
   const input = screen.getAllByTestId("textarea-region-input")[0];
   input.focus();
   fireEvent.change(input, { target: { value: "修改候选" } });
-  fireEvent.keyDown(input, { key, isComposing: true });
+  const event = new KeyboardEvent("keydown", { key, isComposing: true, bubbles: true, cancelable: true });
+  act(() => input.dispatchEvent(event));
+  if (key === "Enter") expect(event.defaultPrevented).toBe(true);
   expect(input).toHaveFocus();
   expect(input).toHaveValue("修改候选");
   expect(result.setValue).not.toHaveBeenCalled();
