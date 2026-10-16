@@ -43,8 +43,12 @@ describe("Keyboard annotation and composition input", () => {
       cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
         open(scope, locale);
         choice("Positive").click();
-        cy.get('[placeholder="Single-line note"]').type("3").then(($input) => key($input, { key: "3", keyCode: 99, code: "Numpad3" }));
+        // Start in editor scope: the first numpad keystroke must establish the
+        // input scope before any translated event is dispatched.
+        cy.get("body").type("9");
+        cy.get('[placeholder="Single-line note"]').focus().then(($input) => key($input, { key: "3", keyCode: 99, code: "Numpad3" }));
         choice("One").should("not.be.checked");
+        cy.get('[placeholder="Single-line note"]').type("3").should("have.value", "3");
         cy.get('[placeholder="Single-line note"]').then(($input) => key($input, { key: "2", keyCode: 50, isComposing: true }));
         choice("Positive").should("be.checked");
         choice("Negative").should("not.be.checked");
