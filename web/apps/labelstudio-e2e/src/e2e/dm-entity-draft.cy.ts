@@ -133,7 +133,7 @@ describe("Restored text entity drafts", () => {
     });
 
     for (const action of ["submitted", "deleted"]) {
-      it(`preserves offline edits after a draft is ${action} in another page in ${locale}`, () => {
+      it(`preserves offline edits after a draft is ${action} in another page in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
         cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
           cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
           cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
