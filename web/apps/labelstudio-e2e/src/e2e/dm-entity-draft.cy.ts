@@ -43,7 +43,7 @@ describe("Restored text entity drafts", () => {
         state(true, "First edit");
         cy.get('[data-testid="draft-save-retry"]').click();
         cy.wait("@draftWrite").its("response.statusCode").should("eq", 503);
-        cy.contains(locale === "zh-CN" ? "草稿保存失败" : "Draft save failed").should("be.visible");
+        cy.contains(locale === "zh-CN" ? "草稿保存失败" : "Draft not saved").should("be.visible");
         edit("Latest edit 中文");
         state(true, "Latest edit 中文");
         cy.then(() => { fail = false; });
