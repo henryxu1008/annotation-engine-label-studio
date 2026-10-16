@@ -553,3 +553,20 @@ Retain both-language browser regressions for failed saves, delayed responses,
 newer edits, repeated task choices, separate A/B draft ownership, reload recovery
 and rejected browser Back navigation. This changes client navigation only;
 assignment IDs/versions and server-side draft authorization remain authoritative.
+
+### Issue #76 keyboard focus and IME input, 2026-10-16
+
+Choice controls must keep a stable native input across observable updates and
+retain keyboard focus after Space. Pointer selection still releases focus for
+editor shortcuts. The keymaster filter establishes the originating input scope
+before forwarding numpad digits; text inputs and contenteditable elements must
+not forward typing as label shortcuts. Checkbox/radio focus remains in the
+editor shortcut scope.
+
+Composition keys (`isComposing`, React's native event, or legacy process key 229)
+must not submit, cancel, blur or run editor shortcuts. Single-line annotation
+forms also suppress implicit Enter submission during composition. Preserve the
+normal Enter/Shift+Enter/Ctrl+Enter behavior after composition finishes, including
+existing text result edits and per-region inputs. Keep bilingual browser and
+negative-path component regressions on upstream upgrades. Chromium composition
+events do not establish acceptance of a physical Windows IME candidate window.

@@ -25,6 +25,7 @@ import VisibilityMixin from "../../../mixins/Visibility";
 
 import "./TextArea.scss";
 import { cn } from "../../../utils/bem";
+import { isComposingKeyEvent } from "../../../utils/events";
 
 const { TextArea } = Input;
 
@@ -366,7 +367,10 @@ const HtxTextArea = observer(({ item }) => {
     onFocus,
     ref: item.textareaRef,
     onKeyPress: item.countTime,
-    onKeyDown: item.countTime,
+    onKeyDown: (e) => {
+      if (isComposingKeyEvent(e) && e.key === "Enter") e.preventDefault();
+      item.countTime();
+    },
     onKeyUp: item.countTime,
     onMouseDown: item.countTime,
     onMouseUp: item.countTime,
@@ -376,6 +380,10 @@ const HtxTextArea = observer(({ item }) => {
   if (rows > 1) {
     // allow to add multiline text with shift+enter
     props.onKeyDown = (e) => {
+      if (isComposingKeyEvent(e)) {
+        if (e.key === "Enter") e.preventDefault();
+        return;
+      }
       if (e.key === "Enter" && e.shiftKey && item.allowsubmit && item._value && !item.annotation.isReadOnly()) {
         e.preventDefault();
         e.stopPropagation();

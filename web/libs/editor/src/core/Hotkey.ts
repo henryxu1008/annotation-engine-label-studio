@@ -7,6 +7,7 @@ import Hint from "../components/Hint/Hint";
 import { cn } from "../utils/bem";
 import { FF_MULTI_OBJECT_HOTKEYS, isFF } from "../utils/feature-flags";
 import { isDefined, isMacOS } from "../utils/utilities";
+import { isComposingKeyEvent } from "../utils/events";
 import defaultKeymap from "./settings/keymap.json";
 
 type Keymap = typeof defaultKeymap;
@@ -80,15 +81,21 @@ const translateNumpad = (event: any) => {
 };
 
 keymaster.filter = (event) => {
-  if (keymaster.getScope() === "__none__") return false;
+  if (keymaster.getScope() === "__none__" || isComposingKeyEvent(event)) return false;
 
-  const tag = (event.target || event.srcElement)?.tagName;
+  const target = (event.target || event.srcElement) as HTMLElement;
+  const tag = target?.tagName;
+  const isTextInput =
+    /^(TEXTAREA|SELECT)$/.test(tag) ||
+    (tag === "INPUT" && !/^(checkbox|radio|button|submit|reset)$/.test((target as HTMLInputElement).type)) ||
+    target?.isContentEditable;
   const inNumberPadCodeRange = (event as any).keyCode >= 96 && (event as any).keyCode <= 105;
 
-  if (inNumberPadCodeRange) translateNumpad(event);
   if (tag) {
-    keymaster.setScope(/^(INPUT|TEXTAREA|SELECT)$/.test(tag) ? INPUT_SCOPE : DEFAULT_SCOPE);
+    keymaster.setScope(isTextInput ? INPUT_SCOPE : DEFAULT_SCOPE);
   }
+  // Forward only editor shortcuts, after establishing the originating target's scope.
+  if (inNumberPadCodeRange && !isTextInput) translateNumpad(event);
 
   return true;
 };

@@ -23,7 +23,7 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number } = {}) {
+        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean } = {}) {
           const taskCount = options.taskCount ?? 1;
           if (!Number.isSafeInteger(taskCount) || taskCount < 1 || taskCount > 3) throw new Error('Expected one to three isolated tasks');
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
@@ -39,6 +39,8 @@ with transaction.atomic():
     original = Project.objects.get(pk=ids['project'], created_by_id=ids['manager'], organization__title='Enterprise E2E Organization')
     assert original.members.filter(user_id=ids['annotator'], role=ProjectMember.Role.ANNOTATOR, enabled=True).exists()
     config = original.label_config
+    if ${options.keyboard === true ? 'True' : 'False'}:
+        config = '<View><Text name="text" value="$text"/><Choices name="single" toName="text" choice="single"><Choice value="Positive"/><Choice value="Negative"/></Choices><Choices name="multiple" toName="text" choice="multiple"><Choice value="One"/><Choice value="Two"/></Choices><TextArea name="note" toName="text" rows="1" editable="true" placeholder="Single-line note"/><TextArea name="paragraph" toName="text" rows="3" editable="true" placeholder="Multiline note"/></View>'
     if ${options.required === true ? 'True' : 'False'}:
         config = config.replace('<Choices ', '<Choices required="true" ', 1)
     if ${options.delayedImage === true ? 'True' : 'False'}:

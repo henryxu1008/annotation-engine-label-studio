@@ -4,6 +4,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Provider } from "mobx-react";
+import { observable, runInAction } from "mobx";
 import { ChoiceModel, HtxChoice } from "../Choice";
 import { ChoicesModel } from "../Choices";
 
@@ -291,6 +292,41 @@ describe("Choice model", () => {
 });
 
 describe("HtxChoice view", () => {
+  it("keeps keyboard focus through repeated Space selections and rerenders", async () => {
+    const user = userEvent.setup();
+    const item = observable(createMockItem());
+    item.toggleSelected = jest.fn(() =>
+      runInAction(() => {
+        item.sel = !item.sel;
+      }),
+    );
+    render(
+      <Provider store={createMockStore()}>
+        <HtxChoice item={item} />
+      </Provider>,
+    );
+    const input = screen.getByRole("checkbox");
+    await user.tab();
+    expect(input).toHaveFocus();
+    await user.keyboard(" ");
+    expect(input).toBeChecked();
+    expect(input).toHaveFocus();
+    await user.keyboard(" ");
+    expect(input).not.toBeChecked();
+    expect(input).toHaveFocus();
+    expect(item.toggleSelected).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns pointer selection focus to the editor for shortcuts", async () => {
+    const user = userEvent.setup();
+    render(
+      <Provider store={createMockStore()}>
+        <HtxChoice item={createMockItem()} />
+      </Provider>,
+    );
+    await user.click(screen.getByRole("checkbox"));
+    expect(document.body).toHaveFocus();
+  });
   function createMockStore(overrides = {}) {
     return {
       settings: {

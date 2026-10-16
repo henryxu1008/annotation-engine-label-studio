@@ -114,6 +114,19 @@ describe("HtxTextBox", () => {
   });
 
   describe("edit mode", () => {
+    it.each(["Enter", "Escape", "Tab"])("keeps the edit open for composing %s", (key) => {
+      render(<HtxTextBox {...defaultProps} />);
+      fireEvent.click(screen.getByTestId("htx-textbox-edit-button"));
+      const input = screen.getByTestId("htx-textbox-input");
+      fireEvent.change(input, { target: { value: "中文候选" } });
+      fireEvent.keyDown(input, { key, isComposing: true, keyCode: key === "Enter" ? 13 : 229 });
+      expect(input).toHaveFocus();
+      expect(screen.getByTestId("htx-textbox-input")).toHaveValue("中文候选");
+      expect(defaultProps.onChange).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Enter", keyCode: 13 });
+      expect(defaultProps.onChange).toHaveBeenCalledWith("中文候选");
+      expect(screen.getByTestId("htx-textbox-view")).toBeInTheDocument();
+    });
     it("renders edit when onlyEdit and isEditable", () => {
       render(<HtxTextBox {...defaultProps} onlyEdit={true} />);
       expect(screen.getByTestId("htx-textbox-edit")).toBeInTheDocument();

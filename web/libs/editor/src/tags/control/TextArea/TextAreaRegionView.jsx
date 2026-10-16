@@ -9,6 +9,7 @@ import styles from "../../../components/HtxTextBox/HtxTextBox.module.scss";
 import Registry from "../../../core/Registry";
 import { PER_REGION_MODES } from "../../../mixins/PerRegion";
 import { cn } from "../../../utils/bem";
+import { isComposingKeyEvent } from "../../../utils/events";
 
 import "./TextArea.scss";
 
@@ -63,6 +64,7 @@ const HtxTextAreaResultLine = forwardRef(
     inputProps.onBlur = blurHandler;
 
     inputProps.onKeyDown = (e) => {
+      if (isComposingKeyEvent(e)) return;
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -215,11 +217,18 @@ const HtxTextAreaRegionView = observer(({ item, area, collapsed, setCollapsed, o
         area.annotation.selectArea(area);
       }
     },
+    onKeyDown: (e) => {
+      if (isComposingKeyEvent(e) && e.key === "Enter") e.preventDefault();
+    },
   };
 
   if (isTextArea) {
     // allow to add multiline text with shift+enter
     props.onKeyDown = (e) => {
+      if (isComposingKeyEvent(e)) {
+        if (e.key === "Enter") e.preventDefault();
+        return;
+      }
       if (((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") && !item.annotation.isReadOnly()) {
         e.preventDefault();
         e.stopPropagation();
