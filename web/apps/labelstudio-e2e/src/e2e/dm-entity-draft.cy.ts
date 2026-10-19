@@ -117,6 +117,42 @@ describe("Restored text entity drafts", () => {
         state(true, "My latest local edit 中文");
         cy.contains(locale === "zh-CN" ? "未能载入最新草稿。本页修改仍然保留，请检查网络后重试。"
           : "Could not load the latest draft. Your edits remain here; check the connection and try again.").should("be.visible");
+        let recoveryHeld = false;
+        const holdRecovery = (alias: string) => {
+          recoveryHeld = false;
+          cy.intercept({ method: "GET", url: new RegExp(`/api/tasks/${scope.task_id}/?(?:\\?.*)?$`), times: 1 },
+            req => req.continue(() => new Promise<void>(resolve => {
+              recoveryHeld = true;
+              releaseDraftResponse = resolve;
+            }))).as(alias);
+          cy.get('[data-testid="draft-reload-latest"]').click();
+          cy.wrap(null).should(() => expect(recoveryHeld, "recovery response held").to.eq(true));
+        };
+        const releaseRecovery = (alias: string) => {
+          cy.then(() => { releaseDraftResponse!(); releaseDraftResponse = undefined; });
+          cy.wait(`@${alias}`).its("response.statusCode").should("eq", 200);
+        };
+        holdRecovery("changedDuringRecovery");
+        edit("New edit during recovery 中文");
+        releaseRecovery("changedDuringRecovery");
+        state(true, "New edit during recovery 中文");
+        cy.contains(locale === "zh-CN" ? "载入期间本页又有修改，内容仍然保留" : "Your edits changed while loading and remain here").should("be.visible");
+        cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
+        cy.get('[data-testid="draft-backup"]').click();
+        holdRecovery("rawTextDuringRecovery");
+        cy.get('[data-testid="htx-textbox-edit-button"]').click();
+        cy.get('[data-testid="htx-textbox-input"]').clear().type("Unconfirmed during recovery 中文");
+        releaseRecovery("rawTextDuringRecovery");
+        cy.get('[data-testid="htx-textbox-input"]').should("have.value", "Unconfirmed during recovery 中文");
+        state(true, "New edit during recovery 中文");
+        cy.get('[data-testid="draft-backup"]').should("be.disabled");
+        cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
+        cy.get('[data-testid="htx-textbox-input"]').type("{enter}");
+        state(true, "Unconfirmed during recovery 中文");
+        cy.get('[data-testid="draft-backup"]').click();
+        cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).then((backup) => {
+          expect(backup.result.find((r: any) => r.from_name === "entity_note").value.text).to.deep.eq(["Unconfirmed during recovery 中文"]);
+        });
         cy.get('[data-testid="draft-reload-latest"]').click();
         cy.get('[role="treeitem"]').contains("Entity").should("be.visible");
         state(false, "Newer remote edit");

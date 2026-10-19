@@ -414,8 +414,9 @@ export class LSFWrapper {
     await this.setLSFTask(task, annotationID, fromHistory);
   }
 
-  async setLSFTask(task, annotationID, fromHistory, selectPrediction = false) {
-    if (this.destroyed || !this.lsf) return;
+  async setLSFTask(task, annotationID, fromHistory, selectPrediction = false, beforeReset) {
+    if (this.destroyed || !this.lsf) return false;
+    const lsf = this.lsf;
 
     if (isFF(FF_FIT_1304_STRICT_OVERLAP)) {
       this.dismissOverlapToast();
@@ -428,7 +429,14 @@ export class LSFWrapper {
     // Let the browser paint the loading indicator before heavy store operations
     await waitForPaint();
 
-    if (this.destroyed || !this.lsf) return;
+    if (this.destroyed || this.lsf !== lsf) return false;
+
+    // Recovery must still refer to the backed-up editor at the actual reset,
+    // including edits made while the loading indicator was waiting to paint.
+    if (beforeReset && !beforeReset()) {
+      this.setLoading(false);
+      return false;
+    }
 
     // Pure data preparation (no MobX mutations)
     const lsfTask = taskToLSFormat(task);
@@ -1064,18 +1072,23 @@ export class LSFWrapper {
 
   saveDraft = async (target = null) => {
     const selected = target || this.lsf?.annotationStore?.selected;
-    if (selected?.hasPendingTextInput) {
+    const canLeave = () => {
+      if (!selected?.hasPendingTextInput) return true;
       this.datamanager.invoke("toast", {
         message: this.datamanager.localeRuntime.t("datamanager:confirmTextBeforeLeaving"),
         type: "error",
       });
       return false;
-    }
+    };
+    if (!canLeave()) return false;
     const hasChanges = selected ? this.needsDraftSave(selected) : false;
 
     if (selected?.isDraftSaving || (hasChanges && selected)) {
       try {
         const res = await selected.saveDraftImmediatelyWithResults();
+        // Raw text is outside the saved result snapshot and can be entered
+        // while this request is pending. A saved draft cannot confirm it.
+        if (!canLeave()) return false;
         const status = res?.$meta?.status;
         this.draftToast(status ?? 0, res);
         return status === 200 || status === 201;
@@ -1152,10 +1165,16 @@ export class LSFWrapper {
   }
 
   onReloadDraft = async () => {
-    const task = await this.datamanager.store.taskStore.loadTask(this.task.id);
-    if (!task || this.destroyed || !this.lsf) return false;
+    const lsf = this.lsf;
+    const annotation = this.currentAnnotation;
+    if (this.destroyed || !lsf || !annotation || annotation.hasPendingTextInput) return false;
+    const taskId = this.task.id;
+    const backup = annotation.draftBackup;
+    const canReplace = () => !this.destroyed && this.lsf === lsf && this.task?.id === taskId
+      && this.currentAnnotation === annotation && !annotation.hasPendingTextInput && annotation.draftBackup === backup;
+    const task = await this.datamanager.store.taskStore.loadTask(taskId, { select: false });
+    if (!task || !canReplace()) return false;
     // Do not merge the obsolete editor annotations back into this fresh task.
-    this.task = task;
     // A submitted task-level draft has no local annotation PK. Without an
     // explicit selection, upstream opens a new blank annotation instead of
     // showing the actor's submitted work. Drafts still use normal hydration.
@@ -1164,8 +1183,12 @@ export class LSFWrapper {
       String(annotation.completed_by?.id ?? annotation.completed_by) === String(actorId));
     const latest = owned.reduce((previous, annotation) =>
       !previous || Number(annotation.id) > Number(previous.id) ? annotation : previous, null);
-    await this.setLSFTask(task, task.drafts?.length || !latest ? undefined : String(latest.id), true);
-    return true;
+    const applied = await this.setLSFTask(task, task.drafts?.length || !latest ? undefined : String(latest.id), true, false, () => {
+      if (!canReplace()) return false;
+      this.task = task;
+      return true;
+    });
+    return applied !== false;
   };
 
   onSkipTask = async (_, { comment } = {}) => {

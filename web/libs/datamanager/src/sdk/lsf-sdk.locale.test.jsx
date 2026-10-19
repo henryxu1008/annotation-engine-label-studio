@@ -30,6 +30,24 @@ it.each(['en-US', 'zh-CN'])("does not leave or claim a save for unconfirmed text
   wrapper.datamanager.localeRuntime.destroy();
 });
 
+it.each(['en-US', 'zh-CN'])("retains text entered during the outgoing %s draft save", async (locale) => {
+  const wrapper = createDraftWrapper();
+  let complete;
+  const annotation = { hasUnsavedDraft: true, hasPendingTextInput: false,
+    saveDraftImmediatelyWithResults: jest.fn(() => new Promise(resolve => { complete = resolve; })) };
+  wrapper.lsf = { annotationStore: { selected: annotation } };
+  wrapper.datamanager.localeRuntime = createLocaleRuntime(locale);
+  wrapper.datamanager.invoke = jest.fn();
+  const saving = wrapper.saveDraft();
+  annotation.hasPendingTextInput = true;
+  complete({ $meta: { status: 200 } });
+  expect(await saving).toBe(false);
+  expect(wrapper.datamanager.invoke).toHaveBeenCalledWith('toast', { message: locale === 'zh-CN'
+    ? '请先确认或清空正在输入的文本，再离开此任务。'
+    : 'Confirm or clear the text you are entering before leaving this task.', type: 'error' });
+  wrapper.datamanager.localeRuntime.destroy();
+});
+
 it("advances draft tokens only after success and never adopts the remote revision on conflict", () => {
   const wrapper = createDraftWrapper();
   const annotation = { setDraftRevision: jest.fn(), setDraftConflict: jest.fn() };
@@ -94,15 +112,62 @@ it("reloads fresh server results without merging obsolete local annotations", as
   const old = { id: 42, drafts: [{ id: 1, revision: 1 }] };
   const fresh = { id: 42, drafts: [{ id: 1, revision: 2 }] };
   wrapper.task = old;
-  wrapper.lsf = {};
+  wrapper.lsf = { annotationStore: { selected: { draftBackup: 'local copy' } } };
   wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(fresh) };
-  wrapper.setLSFTask = jest.fn();
+  wrapper.setLSFTask = jest.fn((_task, _id, _history, _prediction, beforeReset) => beforeReset());
   expect(await wrapper.onReloadDraft()).toBe(false);
   expect(wrapper.task).toBe(old);
   expect(wrapper.setLSFTask).not.toHaveBeenCalled();
   expect(await wrapper.onReloadDraft()).toBe(true);
   expect(wrapper.task).toBe(fresh);
-  expect(wrapper.setLSFTask).toHaveBeenCalledWith(fresh, undefined, true);
+  expect(wrapper.setLSFTask).toHaveBeenCalledWith(fresh, undefined, true, false, expect.any(Function));
+});
+
+it.each(['results', 'text input', 'annotation', 'editor'])("keeps the local page when %s changes during conflict reload", async (change) => {
+  const wrapper = createDraftWrapper();
+  const annotation = { draftBackup: 'downloaded local copy', hasPendingTextInput: false };
+  const editor = { annotationStore: { selected: annotation } };
+  const old = { id: 42 };
+  const fresh = { id: 42, drafts: [{ id: 1, revision: 2 }] };
+  let complete;
+  wrapper.task = old;
+  wrapper.lsf = editor;
+  wrapper.datamanager.store.taskStore = { loadTask: jest.fn(() => new Promise(resolve => { complete = resolve; })) };
+  wrapper.setLSFTask = jest.fn();
+  const reloading = wrapper.onReloadDraft();
+  if (change === 'results') annotation.draftBackup = 'new edit after download';
+  if (change === 'text input') annotation.hasPendingTextInput = true;
+  if (change === 'annotation') editor.annotationStore.selected = { draftBackup: 'another annotation' };
+  if (change === 'editor') wrapper.lsf = { annotationStore: { selected: annotation } };
+  complete(fresh);
+  expect(await reloading).toBe(false);
+  expect(wrapper.task).toBe(old);
+  expect(wrapper.setLSFTask).not.toHaveBeenCalled();
+});
+
+it.each(['results', 'text input'])("keeps %s entered after recovery returns but before the editor reset paints", async (change) => {
+  const frames = [];
+  const frame = jest.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+  try {
+    const wrapper = createDraftWrapper();
+    const annotation = { draftBackup: 'downloaded local copy', hasPendingTextInput: false };
+    const editor = { task: { id: 42 }, annotationStore: { selected: annotation }, resetAnnotationStore: jest.fn() };
+    wrapper.task = { id: 42 };
+    wrapper.lsf = editor;
+    wrapper.setLoading = jest.fn();
+    wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValue({ id: 42, drafts: [] }) };
+    const reloading = wrapper.onReloadDraft();
+    await Promise.resolve();
+    expect(frames).toHaveLength(1);
+    if (change === 'results') annotation.draftBackup = 'new edit while waiting to paint';
+    else annotation.hasPendingTextInput = true;
+    frames.shift()(0);
+    frames.shift()(0);
+    expect(await reloading).toBe(false);
+    expect(editor.resetAnnotationStore).not.toHaveBeenCalled();
+    expect(wrapper.currentAnnotation).toBe(annotation);
+    expect(wrapper.setLoading).toHaveBeenLastCalledWith(false);
+  } finally { frame.mockRestore(); }
 });
 
 it.each([17, { id: 17 }, null])("selects the returned owner's latest submitted annotation without fabricating a new draft: %j", async (owner) => {
@@ -111,11 +176,11 @@ it.each([17, { id: 17 }, null])("selects the returned owner's latest submitted a
     { id: 100, completed_by: owner }, { id: 99, completed_by: owner }, { id: 101, completed_by: 18 },
   ] };
   wrapper.task = { id: 42 };
-  wrapper.lsf = { user: { id: 17 } };
+  wrapper.lsf = { user: { id: 17 }, annotationStore: { selected: { draftBackup: 'local copy' } } };
   wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValue(task) };
-  wrapper.setLSFTask = jest.fn();
+  wrapper.setLSFTask = jest.fn((_task, _id, _history, _prediction, beforeReset) => beforeReset());
   expect(await wrapper.onReloadDraft()).toBe(true);
-  expect(wrapper.setLSFTask).toHaveBeenCalledWith(task, owner === null ? undefined : "100", true);
+  expect(wrapper.setLSFTask).toHaveBeenCalledWith(task, owner === null ? undefined : "100", true, false, expect.any(Function));
   expect(task.annotations.map(a => a.id)).toEqual([100, 99, 101]);
 });
 

@@ -661,3 +661,15 @@ Shift+Enter behavior. Changing display language must preserve the mounted text
 editor, active input buffer, focus and pending-input registration. Keep custom
 project text/labels unchanged and retain upstream confirmation, blur and save
 semantics; these copy changes do not alter server authorization or submission.
+
+Recheck pending text after an awaited outgoing draft save, immediately before
+releasing either task selection or router navigation. The saved result snapshot
+does not include raw input entered while the request was pending.
+Conflict recovery must also retain the backed-up editor identity and content
+through the HTTP response and the subsequent paint yield. Check again immediately
+before resetting the annotation store; reject an obsolete recovery if confirmed
+results, pending input, annotation selection or editor identity changed. Fetch
+without changing task selection, keep all local content, and require a current
+copy before retrying. Explain this local-edit outcome separately from a failed
+network load in English and Chinese. No authorization or server revision rules
+change; retain delayed-response text and rectangle browser regressions.

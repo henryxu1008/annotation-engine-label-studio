@@ -8,6 +8,32 @@ jest.mock("@humansignal/ui", () => ({
   Tooltip: ({ children, title }) => <div title={title}>{children}</div>,
 }));
 
+it.each(['en-US', 'zh-CN'].flatMap(locale => [false, true].map(pending => [locale, pending])))("explains changed %s recovery with pending text=%s", async (locale, pending) => {
+  let complete;
+  const annotation = observable({ id: 'local', store: { task: { id: 42 } }, hasUnsavedDraft: true,
+    hasPendingTextInput: false, draftConflict: true, draftBackup: 'downloaded local copy',
+    reloadLatestDraft: jest.fn(() => new Promise(resolve => { complete = resolve; })) });
+  URL.createObjectURL = jest.fn().mockReturnValue('blob:local-copy');
+  URL.revokeObjectURL = jest.fn();
+  const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  const view = render(<Provider><DraftSaveStatus annotation={annotation} /></Provider>);
+  fireEvent.click(screen.getByTestId('draft-backup'));
+  fireEvent.click(screen.getByTestId('draft-reload-latest'));
+  act(() => runInAction(() => {
+    if (pending) annotation.hasPendingTextInput = true;
+    else annotation.draftBackup = 'new local edits after download';
+  }));
+  await act(async () => { complete(false); });
+  expect(screen.getByText(locale === 'zh-CN'
+    ? '载入期间本页又有修改，内容仍然保留。请先确认正在输入的文本，再下载当前副本后重新载入。'
+    : 'Your edits changed while loading and remain here. Confirm any text, then download the current copy before loading again.')).toBeVisible();
+  expect(screen.getByTestId('draft-reload-latest')).toBeDisabled();
+  expect(screen.getByRole('textbox')).toHaveValue(annotation.draftBackup);
+  view.unmount();runtime.destroy();click.mockRestore();
+});
+
 it.each(["en-US", "zh-CN"].flatMap(locale => ["changed", "missing"].map(reason => [locale, reason])))("preserves local results before %s %s recovery", async (locale, reason) => {
   const annotation = observable({
     id: 'local', store: { task: { id: 42 } }, draftId: 7, draftRevision: 1,

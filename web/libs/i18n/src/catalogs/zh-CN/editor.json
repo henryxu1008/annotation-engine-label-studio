@@ -185,6 +185,7 @@
   "draftDownloadCopy": "下载本页修改",
   "draftReloadLatest": "载入最新草稿",
   "draftReloadFailed": "未能载入最新草稿。本页修改仍然保留，请检查网络后重试。",
+  "draftReloadChanged": "载入期间本页又有修改，内容仍然保留。请先确认正在输入的文本，再下载当前副本后重新载入。",
   "draftMissing": "草稿已不存在",
   "draftMissingHint": "该草稿可能已在另一页面提交或删除。已暂停自动保存，本页修改仍然保留。请先下载本页修改，再载入任务最新状态。此操作不会重建旧草稿，也不会修改已提交结果。",
   "draftReloadTask": "载入任务最新状态",

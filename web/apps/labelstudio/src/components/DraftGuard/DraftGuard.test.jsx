@@ -11,6 +11,29 @@ jest.mock("@humansignal/ui", () => ({ ToastContext: require("react").createConte
 
 afterEach(() => { window.Htx = undefined; draftGuardCallback.current = null; mockBlock.mockReset(); });
 
+it.each(['en-US', 'zh-CN'])("retains %s text entered while an in-page navigation save is pending", async (locale) => {
+  let complete;
+  const selected = { hasUnsavedDraft: true, hasPendingTextInput: false,
+    saveDraftImmediatelyWithResults: jest.fn(() => new Promise(resolve => { complete = resolve; })) };
+  window.Htx = { annotationStore: { selected } };
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  const show = jest.fn();
+  mockBlock.mockReturnValue(jest.fn());
+  const view = render(<Provider><ToastContext.Provider value={{ show }}><DraftGuard /></ToastContext.Provider></Provider>);
+  expect(mockBlock.mock.calls[0][0]()).toBe(DRAFT_GUARD_KEY);
+  const navigate = jest.fn();
+  draftGuardCallback.current = navigate;
+  selected.hasPendingTextInput = true;
+  await act(async () => { complete({ $meta: { status: 200 } }); });
+  expect(navigate).not.toHaveBeenCalled();
+  expect(show).toHaveBeenLastCalledWith({ message: locale === 'zh-CN'
+    ? '请先确认或清空正在输入的文本，再离开此任务。'
+    : 'Confirm or clear the text you are entering before leaving this task.', type: 'error' });
+  view.unmount();
+  runtime.destroy();
+});
+
 it.each(["en-US", "zh-CN"])("retains unconfirmed text on hard and in-page navigation in %s", (locale) => {
   const save = jest.fn();
   const selected = { hasUnsavedDraft: false, hasPendingTextInput: true, saveDraftImmediatelyWithResults: save };

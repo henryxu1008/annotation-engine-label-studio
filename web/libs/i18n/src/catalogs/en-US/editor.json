@@ -186,6 +186,7 @@
   "draftDownloadCopy": "Download my edits",
   "draftReloadLatest": "Load latest draft",
   "draftReloadFailed": "Could not load the latest draft. Your edits remain here; check the connection and try again.",
+  "draftReloadChanged": "Your edits changed while loading and remain here. Confirm any text, then download the current copy before loading again.",
   "draftMissing": "Draft is no longer available",
   "draftMissingHint": "This draft may have been submitted or deleted in another page. Automatic saving is paused and your edits remain here. Download a copy before loading the latest task. This will not recreate the old draft or change submitted results.",
   "draftReloadTask": "Load latest task",

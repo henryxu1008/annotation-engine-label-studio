@@ -60,6 +60,10 @@ export const DraftGuard = () => {
           const status = res?.$meta?.status;
 
           if (status === 200 || status === 201) {
+            if (selected.hasPendingTextInput) {
+              showToast({ message: runtime.t("datamanager:confirmTextBeforeLeaving"), type: "error" });
+              return;
+            }
             showToast({ message: runtime.t("datamanager:draftSaved"), type: "info" });
             unblock();
           } else {

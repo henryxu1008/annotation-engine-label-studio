@@ -2,6 +2,8 @@
 
 describe("Image draft recovery after another page submits or deletes", () => {
   let fixture: { password: string; users: { annotator_a: { email: string } } };
+  let releaseRecovery: (() => void) | undefined;
+  afterEach(() => { releaseRecovery?.(); releaseRecovery = undefined; });
   const draftRoute = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ };
   const localBox = { x: 19, y: 23, width: 42, height: 33, rotation: 0, rectanglelabels: ["Other"] };
   const remoteBox = { x: 55, y: 40, width: 20, height: 18, rotation: 0, rectanglelabels: ["Object"] };
@@ -115,6 +117,21 @@ describe("Image draft recovery after another page submits or deletes", () => {
           cy.then(() => {
             const stopped = writes;
             cy.wait(5500).then(() => expect(writes, "no automatic writes after missing draft").to.eq(stopped));
+          });
+          let responseHeld = false;
+          cy.intercept({ method: "GET", url: new RegExp(`/api/tasks/${scope.task_id}/?(?:\\?.*)?$`), times: 1 },
+            req => req.continue(() => new Promise<void>(resolve => { responseHeld = true; releaseRecovery = resolve; }))).as("imageRecoveryHeld");
+          cy.get('[data-testid="draft-reload-latest"]').click();
+          cy.wrap(null).should(() => expect(responseHeld, "image recovery response held").to.eq(true));
+          editBox({ W: 47, H: 36 });
+          cy.then(() => { releaseRecovery!(); releaseRecovery = undefined; });
+          cy.wait("@imageRecoveryHeld").its("response.statusCode").should("eq", 200);
+          assertBox({ ...localBox, width: 47, height: 36 });
+          cy.contains(locale === "zh-CN" ? "载入期间本页又有修改，内容仍然保留" : "Your edits changed while loading and remain here").should("be.visible");
+          cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
+          cy.get('[data-testid="draft-backup"]').click();
+          cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).then(backup => {
+            expect(backup.result[0].value).to.deep.eq({ ...localBox, width: 47, height: 36 });
           });
           cy.get('[data-testid="draft-reload-latest"]').click();
           cy.get('[data-testid="draft-conflict"]').should("not.exist");

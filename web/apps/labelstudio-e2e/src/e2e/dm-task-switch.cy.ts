@@ -24,6 +24,41 @@ describe("Cross-task draft protection", () => {
   afterEach(() => { releasePending?.(); releasePending = undefined; });
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`retains unconfirmed text entered while saving before a task switch in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
+      cy.task("createEnterpriseE2EUndoScope", { keyboard: true, taskCount: 2 }).then((scope: any) => {
+        open(scope, locale);
+        let responseHeld = false;
+        cy.intercept({ ...drafts, times: 1 }, request => request.continue(() => new Promise<void>(resolve => {
+          responseHeld = true;
+          releasePending = resolve;
+        }))).as("textPendingTaskSave");
+        choice("Positive").check();
+        row(2).click();
+        cy.wrap(null).should(() => expect(responseHeld, "outgoing save response held").to.eq(true));
+        cy.get('[placeholder="Single-line note"]').type("Text entered while saving 中文");
+        cy.then(() => { releasePending!(); releasePending = undefined; });
+        cy.wait("@textPendingTaskSave").its("response.statusCode").should("be.oneOf", [200, 201]);
+        ready(scope.task_ids[0]);
+        cy.location("search").should("contain", `task=${scope.task_ids[0]}`);
+        cy.get('[placeholder="Single-line note"]').should("have.value", "Text entered while saving 中文");
+        cy.contains(locale === "zh-CN" ? "请先确认或清空正在输入的文本，再离开此任务。"
+          : "Confirm or clear the text you are entering before leaving this task.").should("be.visible");
+        cy.request(`/api/tasks/${scope.task_ids[0]}/`).then(({ body: task }) => {
+          expect(task.drafts[0].result.some((result: any) => result.from_name === "note")).to.eq(false);
+          expect(task.annotations).to.deep.eq([]);
+        });
+        cy.get('[placeholder="Single-line note"]').type("{enter}");
+        row(2).click();
+        ready(scope.task_ids[1]);
+        row(1).click();
+        ready(scope.task_ids[0]);
+        cy.window().should((win: any) => {
+          expect(win.Htx.annotationStore.selected.serializeAnnotation().find((result: any) => result.from_name === "note").value.text)
+            .to.deep.eq(["Text entered while saving 中文"]);
+        });
+      });
+    });
+
     it(`retains failed drafts on task A and saves separate task results on retry in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
       cy.task("createEnterpriseE2EUndoScope", { taskCount: 3 }).then((scope: any) => {
         open(scope, locale);

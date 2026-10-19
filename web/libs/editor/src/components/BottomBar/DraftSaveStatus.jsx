@@ -9,7 +9,7 @@ const DraftConflict = observer(({ annotation }) => {
   const { t } = useLocaleTranslation("editor");
   const [backedUp, setBackedUp] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState(null);
   const backup = annotation.draftBackup;
   const missing = annotation.draftConflictReason === "missing";
   return createPortal(<details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
@@ -28,14 +28,19 @@ const DraftConflict = observer(({ annotation }) => {
       setBackedUp(currentCopy);
     }}>{t("draftDownloadCopy")}</Button>
     <Button size="small" data-testid="draft-reload-latest" disabled={loading || backedUp !== backup || annotation.hasPendingTextInput} onClick={async () => {
-      if (backedUp !== annotation.draftBackup) return;
+      const requestedCopy = annotation.draftBackup;
+      if (backedUp !== requestedCopy) return;
       setLoading(true);
-      setFailed(false);
-      try { if (!(await annotation.reloadLatestDraft())) setFailed(true); }
-      catch { setFailed(true); }
+      setFailed(null);
+      try {
+        if (!(await annotation.reloadLatestDraft())) setFailed(
+          annotation.hasPendingTextInput || annotation.draftBackup !== requestedCopy ? "changed" : "load",
+        );
+      }
+      catch { setFailed("load"); }
       finally { setLoading(false); }
     }}>{t(missing ? "draftReloadTask" : "draftReloadLatest")}</Button>
-    {failed && <p role="alert">{t(missing ? "draftReloadTaskFailed" : "draftReloadFailed")}</p>}
+    {failed && <p role="alert">{t(failed === "changed" ? "draftReloadChanged" : missing ? "draftReloadTaskFailed" : "draftReloadFailed")}</p>}
   </details>, document.body);
 });
 
