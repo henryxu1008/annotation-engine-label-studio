@@ -160,7 +160,11 @@ jobs:
         run: |
           for spec in dm-entity-boundary auth-tips-timeout app-locale dm-editor-locale dm-task-switch dm-keyboard-ime dm-entity-draft dm-image-draft annotator-label-stream dm-export-locale collaboration-locale; do
             poetry run python label_studio/manage.py seed_enterprise_e2e
-            (cd web && yarn cypress run \
+            limit=()
+            if [[ "$spec" == dm-entity-boundary ]]; then
+              limit=(timeout --signal=INT --kill-after=15s 5m)
+            fi
+            (cd web && "${limit[@]}" yarn cypress run \
               --project apps/labelstudio-e2e \
               --config-file cypress.config.ts \
               --config baseUrl=http://localhost:8080,video=true \

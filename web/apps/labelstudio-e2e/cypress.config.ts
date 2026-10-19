@@ -23,6 +23,12 @@ export default defineConfig({
         );
       };
       on('task', {
+        traceEntityBoundary({ locale, boundary, phase }: { locale: string; boundary: string; phase: string }) {
+          if (!['en-US', 'zh-CN'].includes(locale) || !['zh-chars', 'en-spaces', 'zh-punctuation', 'en-punctuation'].includes(boundary)
+            || !['start', 'left-adjusted', 'right-adjusted', 'draft-saved', 'reloaded', 'submitted', 'client-settled', 'navigated-away'].includes(phase)) throw new Error('Invalid entity boundary trace');
+          console.info(`[entity-boundary] ${locale} ${boundary}: ${phase}`);
+          return null;
+        },
         createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean; imageDraft?: boolean; entityBoundary?: string } = {}) {
           const boundaries: Record<string, { text: string; start: number; end: number; targetStart: number; targetEnd: number }> = {
             'zh-chars': { text: '😀甲乙丙丁，中文边界。', start: 1, end: 4, targetStart: 2, targetEnd: 5 },

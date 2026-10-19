@@ -54,6 +54,8 @@ describe('Existing text entity boundary handles', () => {
   for (const locale of ['en-US', 'zh-CN']) {
     for (const boundary of ['zh-chars', 'en-spaces', 'zh-punctuation', 'en-punctuation']) {
       it(`adjusts ${boundary}, preserves its note and restores/submits in ${locale}`, () => {
+        const trace = (phase: string) => cy.task('traceEntityBoundary', { locale, boundary, phase });
+        trace('start');
         cy.task('createEnterpriseE2EUndoScope', { entityDraft: true, entityBoundary: boundary }).then((scope: any) => {
           const value = scope.boundary;
           const target = Array.from(value.text).slice(value.targetStart, value.targetEnd).join('');
@@ -74,7 +76,9 @@ describe('Existing text entity boundary handles', () => {
           cy.get('.htx-highlight').click();
           cy.get('.lsf-richtext__container').should('have.css', 'white-space', 'pre-wrap');
           resize('left', value.targetStart);
+          trace('left-adjusted');
           resize('right', value.targetEnd);
+          trace('right-adjusted');
           cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
           cy.get('[aria-label="' + (locale === 'zh-CN' ? '撤销' : 'Undo') + '"]').click();
           cy.window().should((win: any) => expect(win.Htx.annotationStore.selected.serializeAnnotation().find((r: any) => r.type === 'labels').value.end).to.eq(value.end));
@@ -83,13 +87,33 @@ describe('Existing text entity boundary handles', () => {
           cy.get('body').then($body => { if ($body.find('[data-testid="draft-save-retry"]').length) cy.get('[data-testid="draft-save-retry"]').click(); });
           cy.window({ timeout: 15000 }).should((win: any) => expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false));
           cy.request(`/api/tasks/${scope.task_id}/`).then(({ body }) => { check(body.drafts[0].result); expect(body.annotations).to.deep.eq([]); });
+          trace('draft-saved');
           cy.reload();
           cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
           cy.get('[data-testid="draft-save-retry"]').should('not.exist');
+          trace('reloaded');
           cy.intercept('POST', `**/api/tasks/${scope.task_id}/annotations*`).as('submitBoundary');
           cy.get('[data-testid="bottombar-submit-button"]').click();
           cy.wait('@submitBoundary').then(({ response }) => { expect(response!.statusCode).to.eq(201); check(response!.body.result); });
           cy.request(`/api/tasks/${scope.task_id}/`).then(({ body }) => { expect(body.drafts).to.deep.eq([]); check(body.annotations[0].result); });
+          trace('submitted');
+          // A server response precedes the editor's restored, read-only state.
+          // Native mouse input enables sticky activation: do not let Cypress
+          // reset the AUT while the application is still settling its save.
+          cy.get('[data-testid="bottombar-update-button"]').should('be.visible').and('be.disabled');
+          cy.window().should((win: any) => {
+            expect(win.Htx.isLoading).to.eq(false);
+            expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false);
+            check(win.Htx.annotationStore.selected.serializeAnnotation());
+          }).then((win: any) => {
+            const event = new win.Event('beforeunload', { cancelable: true });
+            win.dispatchEvent(event);
+            expect(event.defaultPrevented, 'a completed submission must not warn on leaving').to.eq(false);
+          });
+          trace('client-settled');
+          cy.visit('/user/account/personal-info');
+          cy.get('input[type="email"]').should('have.value', fixture.users.annotator_a.email);
+          trace('navigated-away');
         });
       });
     }
