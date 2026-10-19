@@ -32,6 +32,9 @@ describe('Existing text entity boundary handles', () => {
       const scaleX = frame.width / win.innerWidth;
       const scaleY = frame.height / win.innerHeight;
       const box = handle.getBoundingClientRect();
+      const span = handle.closest('.htx-highlight')!.getBoundingClientRect();
+      expect(Math.abs(box.left + box.width / 2 - (side === 'left' ? span.left : span.right)), 'handle at its text boundary').to.be.lessThan(4);
+      expect(Math.abs(box.top - span.top), 'handle on the same text line').to.be.lessThan(3);
       const from = { x: frame.left + (box.left + box.width / 2) * scaleX, y: frame.top + (box.top + box.height / 2) * scaleY };
       const to = { x: frame.left + target!.left * scaleX, y: frame.top + (target!.top + target!.height / 2) * scaleY };
       return (async () => {

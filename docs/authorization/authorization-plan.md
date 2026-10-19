@@ -676,7 +676,8 @@ change; retain delayed-response text and rectangle browser regressions.
 
 Retain upstream's text span resize handles and symbol granularity. Chromium hides
 the `<area>` elements used for these handles by default; explicitly display them
-within rich-text highlights so the existing native drag selection can run.
+as inline within rich-text highlights so the existing native drag selection can
+run with each handle anchored to its text boundary (block breaks static positioning).
 Preserve the same region ID, label and per-region results while adjusting offsets.
 Cover both handles with native browser mouse input, including Chinese characters
 after a supplementary Unicode character, outer and internal English spaces, and
