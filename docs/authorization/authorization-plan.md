@@ -473,6 +473,14 @@ this expected rejection from format-load failure. Both display locales explain
 the existing Release route; pending formal submissions remain unreleasable.
 No Core review authority, approval rule or export-storage boundary is changed.
 
+The Release workspace downloads the original response blob from that same
+authenticated release endpoint after verifying the selected submission ID,
+revision, hash and snapshot. Do not re-serialize its parsed JSON: snapshot
+integers can exceed JavaScript's exact Number range. Failed or stale responses
+(including a changed selection or closed workspace) must not download a file
+or display success. Preserve the bilingual retry feedback and actual file
+checks when rebasing; mutable project export remains closed.
+
 The optimized finished-task aggregate counts distinct task IDs so project
 membership joins cannot inflate completion. Draft navigation feedback uses the
 stable locale runtime; changing locale does not re-register or release a pending

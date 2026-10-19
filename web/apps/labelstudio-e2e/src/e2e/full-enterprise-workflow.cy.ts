@@ -404,6 +404,13 @@ describe("full enterprise collaboration browser workflow", () => {
       cy.get('[data-testid="release-success"]', { timeout: 30000 })
         .should("contain.text", copy.releasedRevision2)
         .and("contain.text", revision2Hash);
+      cy.readFile(`${Cypress.config("downloadsFolder")}/submission-${revision2Id}-revision-2.json`)
+        .then((download) => {
+          expect(download.submission_id).to.eq(revision2Id);
+          expect(download.revision).to.eq(2);
+          expect(download.result_hash).to.eq(revision2Hash);
+          expect(download.result_snapshot.annotation.result[0].value.choices).to.deep.equal(["Negative"]);
+        });
     });
     closeModal();
 

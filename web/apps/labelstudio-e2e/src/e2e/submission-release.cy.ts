@@ -99,6 +99,14 @@ describe("approved submission release workspace", () => {
         .should("contain.text", "Released revision 2")
         .and("contain.text", approvedResponse.body.result_hash);
 
+      cy.readFile(`${Cypress.config("downloadsFolder")}/submission-${fixture.tasks.release.revision_2_submission_id}-revision-2.json`)
+        .then((download) => {
+          expect(download.submission_id).to.eq(fixture.tasks.release.revision_2_submission_id);
+          expect(download.revision).to.eq(2);
+          expect(download.result_hash).to.eq(approvedResponse.body.result_hash);
+          expect(download.result_snapshot).to.deep.equal(approvedResponse.body.result_snapshot);
+        });
+
       cy.request(`/api/submissions/${fixture.tasks.release.revision_2_submission_id}/release/`).then(
         (releaseResponse) => {
           expect(releaseResponse.status).to.eq(200);

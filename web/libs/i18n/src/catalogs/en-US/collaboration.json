@@ -94,7 +94,7 @@
   "reviewDecision": "Review: {{decision}}",
   "reviewerIdentity": "Reviewer: {{user}}",
   "reasonText": "Reason: {{reason}}",
-  "releaseApprovedRevision": "Release approved revision",
+  "releaseApprovedRevision": "Release and download approved revision",
   "selectSubmissionRevision": "Select a submission revision.",
   "accessDenied": "Access was denied. Your project permissions may have changed.",
   "resourceUnavailable": "This resource is no longer available.",

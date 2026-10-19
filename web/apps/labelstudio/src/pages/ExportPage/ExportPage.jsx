@@ -18,6 +18,7 @@ import { cn } from "../../utils/bem";
 import { isDefined, copyText } from "../../utils/helpers";
 import { formatDisplayNumber, useLocaleRuntime, useLocaleTranslation } from "@humansignal/i18n";
 import { displayExportFormat } from "./exportFormatDisplay";
+import { downloadFile } from "../../utils/download";
 import "./ExportPage.scss";
 
 // Community Edition exports run synchronously in a single HTTP request.
@@ -32,14 +33,6 @@ const ENTERPRISE_URL = "https://docs.humansignal.com/guide/label_studio_compare"
 //   json: 'JSON',
 //   csv: 'CSV',
 // };
-
-const downloadFile = (blob, filename) => {
-  const link = document.createElement("a");
-
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  link.click();
-};
 
 const wait = () => new Promise((resolve) => setTimeout(resolve, 5000));
 
