@@ -673,3 +673,12 @@ without changing task selection, keep all local content, and require a current
 copy before retrying. Explain this local-edit outcome separately from a failed
 network load in English and Chinese. No authorization or server revision rules
 change; retain delayed-response text and rectangle browser regressions.
+
+Retain upstream's text span resize handles and symbol granularity. Chromium hides
+the `<area>` elements used for these handles by default; explicitly display them
+within rich-text highlights so the existing native drag selection can run.
+Preserve the same region ID, label and per-region results while adjusting offsets.
+Cover both handles with native browser mouse input, including Chinese characters
+after a supplementary Unicode character, outer and internal English spaces, and
+intentional Chinese/English punctuation. Draft save, reload and submission must
+retain the selected code-point range and its exact text; never silently trim data.

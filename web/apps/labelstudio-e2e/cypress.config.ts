@@ -23,7 +23,15 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean; imageDraft?: boolean } = {}) {
+        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean; imageDraft?: boolean; entityBoundary?: string } = {}) {
+          const boundaries: Record<string, { text: string; start: number; end: number; targetStart: number; targetEnd: number }> = {
+            'zh-chars': { text: '😀甲乙丙丁，中文边界。', start: 1, end: 4, targetStart: 2, targetEnd: 5 },
+            'en-spaces': { text: 'Prefix:  New  York  suffix.', start: 8, end: 19, targetStart: 9, targetEnd: 18 },
+            'zh-punctuation': { text: '起点：“北京”，结束。', start: 4, end: 6, targetStart: 3, targetEnd: 8 },
+            'en-punctuation': { text: 'He said: "Paris", then left.', start: 10, end: 15, targetStart: 9, targetEnd: 17 },
+          };
+          if (options.entityBoundary && (!options.entityDraft || !Object.prototype.hasOwnProperty.call(boundaries, options.entityBoundary))) throw new Error('Expected an isolated entity-boundary case');
+          const boundary = options.entityBoundary ? boundaries[options.entityBoundary] : null;
           const taskCount = options.taskCount ?? 1;
           if (!Number.isSafeInteger(taskCount) || taskCount < 1 || taskCount > 3) throw new Error('Expected one to three isolated tasks');
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
@@ -53,6 +61,9 @@ with transaction.atomic():
     ProjectMember.objects.create(project=project, user_id=ids['manager'], role=ProjectMember.Role.MANAGER)
     ProjectMember.objects.create(project=project, user_id=ids['annotator'], role=ProjectMember.Role.ANNOTATOR)
     data = {'text': 'Independent undo regression.'}
+    boundary = ${boundary ? JSON.stringify(boundary) : 'None'}
+    if boundary:
+        data['text'] = boundary['text']
     if ${options.delayedImage === true ? 'True' : 'False'}:
         data['image'] = '/ls76-delayed-image.png'
     if ${options.imageDraft === true ? 'True' : 'False'}:
@@ -71,12 +82,13 @@ with transaction.atomic():
         task = Task.objects.create(project=project, data=task_data, overlap=1)
         assignment = TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
         if ${options.entityDraft === true ? 'True' : 'False'}:
-            AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'entity-1', 'from_name': 'entity', 'to_name': 'text', 'type': 'labels', 'value': {'start': 0, 'end': 11, 'text': task_data['text'][:11], 'labels': ['Entity']}}, {'id': 'entity-1', 'from_name': 'entity_note', 'to_name': 'text', 'type': 'textarea', 'value': {'text': ['原始备注']}}])
+            start, end = (boundary['start'], boundary['end']) if boundary else (0, 11)
+            AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'entity-1', 'from_name': 'entity', 'to_name': 'text', 'type': 'labels', 'value': {'start': start, 'end': end, 'text': task_data['text'][start:end], 'labels': ['Entity']}}, {'id': 'entity-1', 'from_name': 'entity_note', 'to_name': 'text', 'type': 'textarea', 'value': {'text': ['原始备注']}}])
         if ${options.imageDraft === true ? 'True' : 'False'}:
             AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'box-1', 'from_name': 'bbox', 'to_name': 'image', 'type': 'rectanglelabels', 'original_width': 400, 'original_height': 300, 'image_rotation': 0, 'value': {'x': 10, 'y': 12, 'width': 30, 'height': 25, 'rotation': 0, 'rectanglelabels': ['Object']}}])
         tasks.append(task)
     project.summary.update_data_columns(tasks)
-print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': tasks[0].pk, 'task_ids': [task.pk for task in tasks]}))
+print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': tasks[0].pk, 'task_ids': [task.pk for task in tasks], 'boundary': boundary}))
 `], true);
           const result = output.split(/\r?\n/).find((line) => line.startsWith('E2E_UNDO_SCOPE='));
           if (!result) throw new Error('Independent Undo fixture was not created');
