@@ -73,15 +73,17 @@ class BuildContracts(unittest.TestCase):
             return real_run(command, *positional, **keywords)
 
         def helper(command, cwd=None):
-            if command[0] == "docker":
-                if failure == "manifest":
-                    raise RuntimeError("synthetic manifest lookup failed")
-                return json.dumps({"digest": "sha256:" + "1" * 64, "manifests": [
-                    {"digest": "sha256:" + "2" * 64, "platform": {"os": "linux", "architecture": "amd64"}}]})
             return real_helper(command, cwd)
+
+        def index(ref):
+            if failure == "manifest":
+                raise RuntimeError("synthetic manifest lookup failed")
+            return json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": [
+                {"digest": "sha256:" + "2" * 64, "platform": {"os": "linux", "architecture": "amd64"}}]}).encode()
 
         with patch.object(sys, "argv", args), patch.object(subject, "__file__", str(self.repo / "scripts/build_fixed_candidate.py")), \
                 patch.object(subject.subprocess, "run", side_effect=command), patch.object(subject, "run", side_effect=helper), \
+                patch.object(subject, "read_index", side_effect=index), \
                 patch.object(subject.urllib.request, "urlopen", return_value=io.BytesIO(b"# synthetic installer\n")) as network, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             if source == self.without_recipe:
@@ -115,6 +117,9 @@ class BuildContracts(unittest.TestCase):
         self.assertEqual((destination / "Dockerfile.debian").read_bytes(), self.original)
         metadata = json.loads((destination / "evidence/build-inputs.json").read_text())
         self.assertEqual(metadata["dockerfile_sha256"], hashlib.sha256(self.original).hexdigest())
+        for name in ["node", "python"]:
+            raw = (destination / ("evidence/" + name + "-index.json")).read_bytes()
+            self.assertEqual(metadata["bases"][name]["index_digest"], "sha256:" + hashlib.sha256(raw).hexdigest())
         self.assertEqual(contexts[0]["Dockerfile.debian"], self.original)
         self.assertEqual(contexts[0][subject.RECIPE_PATH], self.original)
         self.assertEqual(contexts[0]["source.txt"], subprocess.check_output(
@@ -172,6 +177,44 @@ class BuildContracts(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             self.invoke(self.source)
         self.assertEqual(sentinel.read_bytes(), b"existing candidate backup")
+
+
+class BaseIndexContracts(unittest.TestCase):
+    def raw(self, **changes):
+        value = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": [
+            {"digest": "sha256:" + "2" * 64, "platform": {"os": "linux", "architecture": "amd64"}}]}
+        value.update(changes)
+        return json.dumps(value).encode() + b"\n"
+
+    def test_raw_bytes_are_hashed_without_trimming(self):
+        raw = self.raw()
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        ref = "localhost:5000/library/node:20@" + digest
+        value = subject.base_input(ref, raw)
+        self.assertEqual(value["pinned"], "localhost:5000/library/node@" + digest)
+
+    def test_digest_mismatch_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "requested digest"):
+            subject.base_input("node@sha256:" + "0" * 64, self.raw())
+
+    def test_null_and_non_index_responses_are_rejected(self):
+        for raw in [b"null", b"{}", self.raw(mediaType="application/vnd.oci.image.manifest.v1+json"), self.raw(manifests=None)]:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                subject.base_input("node:20", raw)
+
+    def test_missing_ambiguous_and_invalid_platform_digests_are_rejected(self):
+        descriptor = json.loads(self.raw())["manifests"][0]
+        for manifests in [[], [descriptor, descriptor], [dict(descriptor, digest="invalid")], [dict(descriptor, digest=None)]]:
+            with self.subTest(manifests=manifests), self.assertRaises(ValueError):
+                subject.base_input("node:20", self.raw(manifests=manifests))
+
+    def test_docker_manifest_list_is_supported(self):
+        self.assertTrue(subject.base_input("node:20", self.raw(mediaType="application/vnd.docker.distribution.manifest.list.v2+json"))["pinned"].startswith("node@sha256:"))
+
+    def test_inspection_uses_unformatted_registry_bytes(self):
+        with patch.object(subject.subprocess, "check_output", return_value=self.raw()) as command:
+            self.assertEqual(subject.read_index("node:20"), self.raw())
+        command.assert_called_once_with(["docker", "buildx", "imagetools", "inspect", "node:20", "--raw"])
 
 
 if __name__ == "__main__":

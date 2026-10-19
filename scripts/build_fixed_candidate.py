@@ -29,6 +29,31 @@ def sha(path):
 RECIPE_PATH = "deploy/candidate/Dockerfile.debian"
 
 
+def read_index(ref):
+    # --raw returns registry bytes; the formatted .Manifest projection can be null.
+    return subprocess.check_output(["docker", "buildx", "imagetools", "inspect", ref, "--raw"])
+
+
+def base_input(ref, raw):
+    manifest = json.loads(raw)
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2 or manifest.get("mediaType") not in (
+        "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"
+    ) or not isinstance(manifest.get("manifests"), list):
+        raise ValueError("Expected a raw OCI index or Docker manifest list for " + ref)
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    if "@" in ref and ref.rsplit("@", 1)[1] != digest:
+        raise ValueError("Raw base index does not match its requested digest: " + ref)
+    selected = [m for m in manifest["manifests"] if isinstance(m, dict) and
+                m.get("platform") == {"architecture": "amd64", "os": "linux"}]
+    if len(selected) != 1 or not isinstance(selected[0].get("digest"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", selected[0]["digest"]):
+        raise ValueError("Expected exactly one linux/amd64 base manifest: " + ref)
+    repository = ref.split("@", 1)[0]
+    if repository.rfind(":") > repository.rfind("/"):
+        repository = repository.rsplit(":", 1)[0]
+    return {"requested": ref, "index_digest": digest,
+            "platform_manifest_digest": selected[0]["digest"], "pinned": repository + "@" + digest}
+
+
 @contextlib.contextmanager
 def build_workspace(root, retain=False):
     """Own one scratch directory; never sweep other builds or runtime files."""
@@ -111,12 +136,9 @@ def build(args, repo, root, evidence, workspace, recipe_bytes):
     recipe.write_bytes(recipe_bytes)
     bases = {}
     for name, ref in (("node", args.node_image), ("python", args.python_image)):
-        manifest = json.loads(run(["docker", "buildx", "imagetools", "inspect", ref,
-                                   "--format", "{{json .Manifest}} "]))
-        selected = next(m for m in manifest["manifests"] if m.get("platform") == {"architecture": "amd64", "os": "linux"})
-        bases[name] = {"requested": ref, "index_digest": manifest["digest"],
-                       "platform_manifest_digest": selected["digest"],
-                       "pinned": ref.split("@")[0].rsplit(":", 1)[0] + "@" + manifest["digest"]}
+        raw = read_index(ref)
+        (evidence / (name + "-index.json")).write_bytes(raw)
+        bases[name] = base_input(ref, raw)
     archive, context = workspace / "source.tar", workspace / "context.tar.gz"
     subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "tar.umask=0022",
                     "archive", "--format=tar", "-o", str(archive), args.source], cwd=source, check=True)
