@@ -12,7 +12,7 @@ function setup(rows, existing = false) {
     _value: "中文候选",
     mode: "region-list",
     allowsubmit: true,
-    annotation: { isReadOnly: () => false },
+    annotation: { isReadOnly: () => false, setPendingTextInput: jest.fn() },
     isReadOnly: () => false,
     editable: true,
     isDeleteable: true,
@@ -30,9 +30,19 @@ function setup(rows, existing = false) {
   const area = { results: existing ? [result] : [], isReadOnly: () => false, isSelected: true };
   result.area = area;
   item.perRegionArea = area;
-  render(<RegionView item={item} area={area} collapsed={false} />);
-  return { item, result };
+  const view = render(<RegionView item={item} area={area} collapsed={false} />);
+  return { item, result, view };
 }
+
+it("protects a local region edit before blur and releases its registration when unmounted", () => {
+  const { item, result, view } = setup(1, true);
+  fireEvent.change(screen.getAllByTestId('textarea-region-input')[0], { target: { value: '尚未确认的区域备注' } });
+  const [key, pending] = item.annotation.setPendingTextInput.mock.calls.at(-1);
+  expect(pending).toBe(true);
+  expect(result.setValue).not.toHaveBeenCalled();
+  view.unmount();
+  expect(item.annotation.setPendingTextInput).toHaveBeenLastCalledWith(key, false);
+});
 
 it.each([1, 3])("keeps per-region composition out of submission with rows=%s", async (rows) => {
   const { item } = setup(rows);

@@ -103,9 +103,14 @@ const Model = types
     return {
       focusable: true,
       textareaRef: createRef(),
+      inputBaseline: undefined,
     };
   })
   .views((self) => ({
+    get hasPendingInput() {
+      return self._value !== "" && self.inputBaseline !== undefined && self._value !== self.inputBaseline;
+    },
+
     get isEditable() {
       return self.editable && self.annotation.editable;
     },
@@ -202,6 +207,7 @@ const Model = types
       },
 
       setValue(value) {
+        if (self.inputBaseline === undefined || self._value === "") self.inputBaseline = self._value;
         self._value = value;
       },
 

@@ -293,5 +293,6 @@
   "exportImmutableTitle": "请通过“发布”导出已获批提交",
   "exportImmutableDescription": "此项目已有正式提交，传统项目导出已停用。请使用“发布”下载已获批的不可变提交；待审核提交不能发布。",
   "exportFormatsLoading": "正在读取导出格式…",
-  "exportFormatsUnavailable": "无法读取导出格式。请关闭此窗口后重试。"
+  "exportFormatsUnavailable": "无法读取导出格式。请关闭此窗口后重试。",
+  "confirmTextBeforeLeaving": "请先确认或清空正在输入的文本，再离开此任务。"
 }

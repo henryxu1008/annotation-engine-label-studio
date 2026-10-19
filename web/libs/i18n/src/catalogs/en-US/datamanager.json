@@ -297,5 +297,6 @@
   "exportImmutableTitle": "Export approved submissions through Release",
   "exportImmutableDescription": "This project has formal submissions, so traditional project export is disabled. Use Release to download approved immutable submissions. Pending submissions cannot be released.",
   "exportFormatsLoading": "Loading export formats…",
-  "exportFormatsUnavailable": "Export formats could not be loaded. Close this dialog and try again."
+  "exportFormatsUnavailable": "Export formats could not be loaded. Close this dialog and try again.",
+  "confirmTextBeforeLeaving": "Confirm or clear the text you are entering before leaving this task."
 }

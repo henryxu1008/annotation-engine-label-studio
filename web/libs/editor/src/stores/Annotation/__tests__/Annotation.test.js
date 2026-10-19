@@ -58,6 +58,40 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 }
 
 describe("Annotation model", () => {
+  it("protects unconfirmed TextArea buffers without autosaving them as results", async () => {
+    const env = createTestEnv();
+    const store = AppStore.create({ config: '<View><Text name="text" value="$text"/><TextArea name="note" toName="text" editable="true"/></View>',
+      task: { id: 1, data: JSON.stringify({ text: 'Hello 中文' }) }, interfaces: ['basic'] }, env);
+    store.initializeStore({});
+    const annotation = store.annotationStore.addAnnotation({ result: [] });
+    store.annotationStore.selectAnnotation(annotation.id);
+    annotation.confirmSavedState();
+    env.events.hasEvent.mockReturnValue(true);
+    const note = annotation.names.get('note');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.updateLocalValue('unchanged prefill');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('unchanged prefill');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('尚未确认');
+    expect(annotation.hasPendingTextInput).toBe(true);
+    expect(annotation.hasUnsavedDraft).toBe(false);
+    expect(annotation.serializeAnnotation()).toEqual([]);
+    expect(await annotation.reloadLatestDraft()).toBe(false);
+    note.setValue('');
+    annotation.setPendingTextInput('editing-result', true);
+    expect(annotation.hasPendingTextInput).toBe(true);
+    annotation.setPendingTextInput('editing-result', false);
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('明确确认');
+    note.beforeSend();
+    expect(annotation.hasPendingTextInput).toBe(false);
+    expect(annotation.serializeAnnotation()[0].value.text).toEqual(['明确确认']);
+    annotation.setPendingTextInput('editing-result', true);
+    annotation.setReadonly(true);
+    expect(annotation.hasPendingTextInput).toBe(false);
+  });
+
   describe("restored text entity draft initialization", () => {
     const createTextDraft = (html = false) => {
       const env = createTestEnv();

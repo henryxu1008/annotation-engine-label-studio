@@ -23,7 +23,7 @@ export const DraftGuard = () => {
       if (isStateTreeNode(editor) && !isAlive(editor)) return;
       const selected = editor?.annotationStore?.selected;
       if (isStateTreeNode(selected) && !isAlive(selected)) return;
-      if (!selected?.hasUnsavedDraft) return;
+      if (!selected?.hasUnsavedDraft && !selected?.hasPendingTextInput) return;
       event.preventDefault();
       event.returnValue = true;
     };
@@ -47,6 +47,10 @@ export const DraftGuard = () => {
       if (isStateTreeNode(editor) && !isAlive(editor)) return;
       const selected = editor?.annotationStore?.selected;
       if (isStateTreeNode(selected) && !isAlive(selected)) return;
+      if (selected?.hasPendingTextInput) {
+        showToast({ message: runtime.t("datamanager:confirmTextBeforeLeaving"), type: "error" });
+        return DRAFT_GUARD_KEY;
+      }
       const submissionInProgress = !!selected?.submissionStarted;
       const hasChanges = !!selected?.hasUnsavedDraft && !submissionInProgress;
 

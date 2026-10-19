@@ -16,6 +16,20 @@ function createDraftWrapper() {
   }
 }
 
+it.each(['en-US', 'zh-CN'])("does not leave or claim a save for unconfirmed text in %s", async (locale) => {
+  const wrapper = createDraftWrapper();
+  const save = jest.fn();
+  wrapper.lsf = { annotationStore: { selected: { hasPendingTextInput: true, saveDraftImmediatelyWithResults: save } } };
+  wrapper.datamanager.localeRuntime = createLocaleRuntime(locale);
+  wrapper.datamanager.invoke = jest.fn();
+  expect(await wrapper.saveDraft()).toBe(false);
+  expect(save).not.toHaveBeenCalled();
+  expect(wrapper.datamanager.invoke).toHaveBeenCalledWith('toast', { message: locale === 'zh-CN'
+    ? '请先确认或清空正在输入的文本，再离开此任务。'
+    : 'Confirm or clear the text you are entering before leaving this task.', type: 'error' });
+  wrapper.datamanager.localeRuntime.destroy();
+});
+
 it("advances draft tokens only after success and never adopts the remote revision on conflict", () => {
   const wrapper = createDraftWrapper();
   const annotation = { setDraftRevision: jest.fn(), setDraftConflict: jest.fn() };

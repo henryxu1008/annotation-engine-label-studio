@@ -639,3 +639,16 @@ annotation. Existing drafts retain their normal hydration selection. This is
 display selection only; all read/write authorization stays server controlled.
 Keep bilingual submit/delete recovery tests, including server readback proving
 no draft recreation and no changes to submitted annotation/submission records.
+
+### Unconfirmed text before navigation (#76)
+
+TextArea input buffers and local edits to an existing text result are not yet
+confirmed annotation results. Track them separately from the server-saved draft
+baseline. They must trigger the browser's native unload warning, and prevent
+in-page navigation or recovery reload until the annotator confirms or clears
+the input. Explain the action in both display languages. Unchanged prefilled
+text and read-only views must not be blocked. Retain upstream's explicit text
+confirmation/submission behavior; no buffered text is silently added to draft
+serialization, immutable submissions, or recovery-copy downloads.
+Physical Windows IME and native Cancel acceptance remain separate from synthetic
+composition events and beforeunload-hook regression assertions.

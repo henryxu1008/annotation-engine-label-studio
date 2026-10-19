@@ -15,8 +15,9 @@ const DraftConflict = observer(({ annotation }) => {
   return createPortal(<details open className={cn("bottombar").elem("draft-conflict").toClassName()} data-testid="draft-conflict">
     <summary>{t(missing ? "draftMissing" : "draftConflict")}</summary>
     <p role="alert">{t(missing ? "draftMissingHint" : "draftConflictHint")}</p>
+    {annotation.hasPendingTextInput && <p role="alert">{t("confirmTextInput")}</p>}
     <textarea aria-label={t("draftLocalCopy")} value={backup} readOnly rows={5} />
-    <Button size="small" data-testid="draft-backup" onClick={() => {
+    <Button size="small" data-testid="draft-backup" disabled={annotation.hasPendingTextInput} onClick={() => {
       const currentCopy = annotation.draftBackup;
       const url = URL.createObjectURL(new Blob([currentCopy], { type: "application/json" }));
       const link = document.createElement("a");
@@ -26,7 +27,7 @@ const DraftConflict = observer(({ annotation }) => {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setBackedUp(currentCopy);
     }}>{t("draftDownloadCopy")}</Button>
-    <Button size="small" data-testid="draft-reload-latest" disabled={loading || backedUp !== backup} onClick={async () => {
+    <Button size="small" data-testid="draft-reload-latest" disabled={loading || backedUp !== backup || annotation.hasPendingTextInput} onClick={async () => {
       if (backedUp !== annotation.draftBackup) return;
       setLoading(true);
       setFailed(false);
@@ -40,9 +41,12 @@ const DraftConflict = observer(({ annotation }) => {
 
 export const DraftSaveStatus = observer(({ annotation }) => {
   const { t } = useLocaleTranslation("editor");
-  if (!annotation?.hasUnsavedDraft) return null;
+  if (!annotation?.hasUnsavedDraft && !annotation?.hasPendingTextInput) return null;
   const saving = annotation.isDraftSaving || !!annotation.submissionStarted;
   if (annotation.draftConflict) return <DraftConflict key={annotation.id} annotation={annotation} />;
+  if (annotation.hasPendingTextInput) return (
+    <span role="status" aria-live="polite" data-testid="text-input-pending">{t("confirmTextInput")}</span>
+  );
   return (
     <div className={cn("bottombar").elem("draft-status").toClassName()} data-testid="draft-save-status">
       <Tooltip title={t("draftLeaveHint")}>

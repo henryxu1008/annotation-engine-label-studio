@@ -28,6 +28,46 @@ describe("Keyboard annotation and composition input", () => {
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`protects unconfirmed text buffers before leaving in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
+        open(scope, locale);
+        for (const [placeholder, name, submit] of [["Single-line note", "note", "{enter}"],
+          ["Multiline note", "paragraph", "{shift}{enter}"]] as const) {
+          const input = `[placeholder="${placeholder}"]`;
+          cy.get(input).type("尚未确认");
+          cy.get('[data-testid="text-input-pending"]').should("contain.text", locale === "zh-CN" ? "文本尚未确认" : "Text is not confirmed");
+          result(name, []);
+          // This asserts the browser hook, not a physical Windows dialog Cancel.
+          cy.window().then((win) => {
+            const event = new win.Event("beforeunload", { cancelable: true });
+            expect(win.dispatchEvent(event)).to.eq(false);
+            expect(event.defaultPrevented).to.eq(true);
+          });
+          cy.get('a[href="/projects"]').first().click();
+          cy.location("pathname").should("eq", `/projects/${scope.project_id}/data`);
+          cy.get(input).should("have.value", "尚未确认");
+          result(name, []);
+          cy.get(input).clear();
+          cy.get('[data-testid="text-input-pending"]').should("not.exist");
+          cy.get(input).type(`明确确认${submit}`);
+          result(name, ["明确确认"]);
+        }
+        cy.get('[data-testid="htx-textbox-edit-button"]').last().click();
+        cy.get('[data-testid="htx-textbox-input"]').type("未确认的编辑");
+        cy.get('[data-testid="text-input-pending"]').should("exist");
+        cy.get('[data-testid="htx-textbox-input"]').type("{esc}");
+        cy.get('[data-testid="text-input-pending"]').should("not.exist");
+        result("paragraph", ["明确确认"]);
+        cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)/ }).as("confirmedTextDraft");
+        cy.get('[data-testid="draft-save-retry"]').click();
+        cy.wait("@confirmedTextDraft").its("response.statusCode").should("be.oneOf", [200, 201]);
+        cy.reload();
+        result("note", ["明确确认"]);
+        result("paragraph", ["明确确认"]);
+        cy.get('[data-testid="text-input-pending"]').should("not.exist");
+      });
+    });
+
     it(`keeps focus for consecutive keyboard choice edits in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
         open(scope, locale);

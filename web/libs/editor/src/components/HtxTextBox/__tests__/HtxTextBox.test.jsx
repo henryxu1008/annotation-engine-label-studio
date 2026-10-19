@@ -42,6 +42,19 @@ const defaultProps = {
 };
 
 describe("HtxTextBox", () => {
+  it("tracks an edited buffer until cancellation and clears only its own registration on unmount", () => {
+    const annotation = { setPendingTextInput: jest.fn() };
+    const view = render(<HtxTextBox {...defaultProps} annotation={annotation} />);
+    fireEvent.click(screen.getByTestId('htx-textbox-edit-button'));
+    fireEvent.change(screen.getByTestId('htx-textbox-input'), { target: { value: '尚未确认' } });
+    const [key, pending] = annotation.setPendingTextInput.mock.calls.at(-1);
+    expect(pending).toBe(true);
+    fireEvent.keyDown(screen.getByTestId('htx-textbox-input'), { key: 'Escape' });
+    expect(annotation.setPendingTextInput).toHaveBeenLastCalledWith(key, false);
+    view.unmount();
+    expect(annotation.setPendingTextInput).toHaveBeenLastCalledWith(key, false);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();

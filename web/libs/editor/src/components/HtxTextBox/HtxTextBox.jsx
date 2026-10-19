@@ -4,11 +4,14 @@ import { Button, Tooltip, Typography } from "@humansignal/ui";
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
 import { cn } from "../../utils/bem";
 import { isComposingKeyEvent } from "../../utils/events";
+import { isAlive, isStateTreeNode } from "mobx-state-tree";
+import { guidGenerator } from "../../core/Helpers";
 
 // used for correct auto-height calculation
 const BORDER_WIDTH = 1;
 
 export class HtxTextBox extends React.Component {
+  pendingInputKey = guidGenerator();
   state = {
     editing: false,
     height: 0,
@@ -33,11 +36,30 @@ export class HtxTextBox extends React.Component {
 
   componentDidMount() {
     window.addEventListener("click", this.handleGlobalClick, { capture: true });
+    this.syncPendingInput();
+  }
+
+  componentDidUpdate(previousProps) {
+    if (previousProps.annotation !== this.props.annotation) this.clearPendingInput(previousProps.annotation);
+    this.syncPendingInput();
   }
 
   componentWillUnmount() {
     window.removeEventListener("click", this.handleGlobalClick, { capture: true });
+    this.clearPendingInput(this.props.annotation);
   }
+
+  clearPendingInput = (annotation) => {
+    if (isStateTreeNode(annotation) && !isAlive(annotation)) return;
+    annotation?.setPendingTextInput?.(this.pendingInputKey, false);
+  };
+
+  syncPendingInput = () => {
+    const annotation = this.props.annotation;
+    if (isStateTreeNode(annotation) && !isAlive(annotation)) return;
+    annotation?.setPendingTextInput?.(this.pendingInputKey,
+      (this.state.editing || !!this.props.onlyEdit) && this.state.value !== this.props.text);
+  };
 
   handleGlobalClick = (e) => {
     const el = e?.target;
@@ -110,6 +132,7 @@ export class HtxTextBox extends React.Component {
       isEditable: __,
       isDeleteable: ___,
       ignoreShortcuts: ____,
+      annotation: _____,
     } = this.props;
     const { height, value } = this.state;
 
@@ -186,6 +209,7 @@ export class HtxTextBox extends React.Component {
       // don't pass non-DOM props to Paragraph
       ignoreShortcuts: _,
       onlyEdit: __,
+      annotation: ___,
 
       ...props
     } = this.props;

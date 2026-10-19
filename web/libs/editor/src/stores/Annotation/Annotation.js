@@ -1,5 +1,6 @@
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
 import deepEqual from "deep-equal";
+import { observable } from "mobx";
 import { destroy, detach, flow, getEnv, getParent, getRoot, getSnapshot, isAlive, onSnapshot, types } from "mobx-state-tree";
 import { ff } from "@humansignal/core";
 import { errorBuilder } from "../../core/DataValidator/ConfigValidator";
@@ -376,6 +377,13 @@ const _Annotation = types
       return !deepEqual(getSnapshot(self.trackedState), self.savedDraftSnapshot, { strict: true });
     },
 
+    get hasPendingTextInput() {
+      if (self.isReadOnly()) return false;
+      return self.pendingTextInputs.size > 0 || Array.from(self.names.values()).some(
+        (tag) => tag.type === "textarea" && tag.hasPendingInput && !tag.isReadOnly(),
+      );
+    },
+
     get draftBackup() {
       // serializeAnnotation is an MST action: reads inside it are untracked.
       // Observe the content snapshot so later edits invalidate both the copy
@@ -403,6 +411,8 @@ const _Annotation = types
     // Only server hydration and acknowledged saves may advance this baseline.
     savedDraftSnapshot: getSnapshot(self.trackedState),
     draftSaveError: false,
+    // UI buffers are not confirmed annotation results and must not enter autosave.
+    pendingTextInputs: observable.map(),
     // This flag indicates that we are accepting suggestions right now (an accepting is started and not finished yet)
     isSuggestionsAccepting: false,
     submissionStarted: 0,
@@ -440,6 +450,11 @@ const _Annotation = types
     },
   }))
   .actions((self) => ({
+    setPendingTextInput(key, pending) {
+      if (pending) self.pendingTextInputs.set(key, true);
+      else self.pendingTextInputs.delete(key);
+    },
+
     reinitHistory(force = true) {
       self.history.reinit(force);
       if (!self.hasUnsavedDraft) self.autosave?.cancel();
@@ -936,6 +951,7 @@ const _Annotation = types
     },
 
     reloadLatestDraft() {
+      if (self.hasPendingTextInput) return Promise.resolve(false);
       return getEnv(self).events.invokeFirst("reloadDraft", self);
     },
 

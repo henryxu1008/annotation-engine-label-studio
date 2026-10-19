@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { isAlive } from "mobx-state-tree";
 
@@ -20,6 +20,14 @@ const HtxTextAreaResultLine = forwardRef(
     const rows = Number.parseInt(control.rows);
     const isTextarea = rows > 1;
     const [stateValue, setStateValue] = useState(value ?? "");
+    const pendingInputKey = useId();
+    const annotation = control.annotation;
+    useLayoutEffect(() => {
+      annotation?.setPendingTextInput?.(pendingInputKey, !readOnly && !collapsed && stateValue !== (value ?? ""));
+      return () => {
+        if (annotation && isAlive(annotation)) annotation.setPendingTextInput?.(pendingInputKey, false);
+      };
+    }, [annotation, pendingInputKey, stateValue, value, readOnly, collapsed]);
 
     useEffect(() => {
       if (value !== stateValue) {

@@ -1064,6 +1064,13 @@ export class LSFWrapper {
 
   saveDraft = async (target = null) => {
     const selected = target || this.lsf?.annotationStore?.selected;
+    if (selected?.hasPendingTextInput) {
+      this.datamanager.invoke("toast", {
+        message: this.datamanager.localeRuntime.t("datamanager:confirmTextBeforeLeaving"),
+        type: "error",
+      });
+      return false;
+    }
     const hasChanges = selected ? this.needsDraftSave(selected) : false;
 
     if (selected?.isDraftSaving || (hasChanges && selected)) {
