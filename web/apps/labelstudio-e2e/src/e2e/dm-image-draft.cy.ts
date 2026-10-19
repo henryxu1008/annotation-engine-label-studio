@@ -5,6 +5,16 @@ describe("Image draft recovery after another page submits or deletes", () => {
   const draftRoute = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)\/?(?:\?.*)?$/ };
   const localBox = { x: 19, y: 23, width: 42, height: 33, rotation: 0, rectanglelabels: ["Other"] };
   const remoteBox = { x: 55, y: 40, width: 20, height: 18, rotation: 0, rectanglelabels: ["Object"] };
+  const regionTab = (locale: string) => cy.contains('#label-studio-dm .lsf-panel-tabs__tab', locale === "zh-CN" ? "区域" : "Regions")
+    .scrollIntoView().should("be.visible").click();
+  const selectBox = (locale: string) => {
+    // Narrow workspaces move these tabs below the image. Follow the normal
+    // scroll -> Regions -> select row -> Info workflow, without forced clicks.
+    regionTab(locale);
+    cy.contains('[role="treeitem"]', "Object").scrollIntoView().should("be.visible").click();
+    cy.contains('#label-studio-dm .lsf-panel-tabs__tab', locale === "zh-CN" ? "信息" : "Info")
+      .scrollIntoView().should("be.visible").click();
+  };
   const input = (name: string) => cy.contains("label.lsf-region-editor__property", new RegExp(`^${name}$`)).find("input");
   const editBox = (values: Record<string, number>) => {
     for (const [name, value] of Object.entries(values)) {
@@ -45,9 +55,7 @@ describe("Image draft recovery after another page submits or deletes", () => {
           cy.get('#label-studio-dm img[alt="image"]').should($image => {
             expect(($image[0] as HTMLImageElement).naturalWidth).to.eq(400);
           });
-          // Rectangle labels contain nested, clipped text containers. The
-          // visible region row is the user's actual selection target.
-          cy.contains('[role="treeitem"]', "Object").should("be.visible").click();
+          selectBox(locale);
           editBox({ X: 18, Y: 22, W: 41, H: 32 });
           cy.get("#label-studio-dm").contains(/^Other$/).click();
           cy.get('[data-testid="draft-save-retry"]').click();
@@ -115,10 +123,12 @@ describe("Image draft recovery after another page submits or deletes", () => {
             expect(win.Htx.annotationStore.selected.draftId || 0).to.eq(0);
           });
           if (action === "submitted") {
-            cy.contains('[role="treeitem"]', "Object").should("be.visible").click();
+            selectBox(locale);
             assertBox(remoteBox);
           } else {
+            regionTab(locale);
             cy.get('[role="treeitem"]').should("not.exist");
+            cy.window().should((win: any) => expect(win.Htx.annotationStore.selected.serializeAnnotation()).to.deep.eq([]));
           }
           cy.wait(5500);
           cy.request(`/api/tasks/${scope.task_id}/`).then(({ body: task }) => {
