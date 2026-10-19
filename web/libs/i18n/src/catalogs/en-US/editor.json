@@ -190,5 +190,18 @@
   "draftMissingHint": "This draft may have been submitted or deleted in another page. Automatic saving is paused and your edits remain here. Download a copy before loading the latest task. This will not recreate the old draft or change submitted results.",
   "draftReloadTask": "Load latest task",
   "draftReloadTaskFailed": "Could not load the latest task. Your edits remain here; check the connection and try again.",
-  "confirmTextInput": "Text is not confirmed yet. Confirm it in the input, or clear it before leaving."
+  "confirmTextInput": "Text is not confirmed yet. Confirm it in the input, or clear it before leaving.",
+  "textInput": "Text input",
+  "textEntryInput": "Text entry",
+  "textAdd": "Add text",
+  "textAddHint": "Press {{shortcut}} to add text. Then save the draft or submit the annotation.",
+  "textEdit": "Edit text",
+  "textDelete": "Delete text",
+  "textConfirmChanges": "Confirm text changes",
+  "textConfirmHint": "Press {{shortcut}} to confirm changes. Then save the draft or submit the annotation.",
+  "textCharacterCount_one": "{{count}} character",
+  "textCharacterCount_other": "{{count}} characters",
+  "textEntryCount_one": "{{count}} text entry",
+  "textEntryCount_other": "{{count}} text entries",
+  "textEntryLimit": "Text entries: {{count}} / {{max}}"
 }

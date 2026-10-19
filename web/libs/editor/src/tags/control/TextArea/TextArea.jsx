@@ -4,6 +4,7 @@ import { Form, Input } from "antd";
 import { observer } from "mobx-react";
 import { destroy, isAlive, types } from "mobx-state-tree";
 import { IconPlus } from "@humansignal/icons";
+import { useLocaleTranslation } from "@humansignal/i18n";
 
 import InfoModal from "../../../components/Infomodal/Infomodal";
 import Registry from "../../../core/Registry";
@@ -344,6 +345,7 @@ const TextAreaModel = types.compose(
 );
 
 const HtxTextArea = observer(({ item }) => {
+  const { t } = useLocaleTranslation("editor");
   const rows = Number.parseInt(item.rows);
   const onFocus = useCallback(
     (ev, model) => {
@@ -351,9 +353,6 @@ const HtxTextArea = observer(({ item }) => {
     },
     [item],
   );
-
-  // Helper function for pluralization
-  const pluralize = (count, singular, plural) => (count === 1 ? singular : plural);
 
   const props = {
     name: item.name,
@@ -429,9 +428,9 @@ const HtxTextArea = observer(({ item }) => {
         >
           <Form.Item style={itemStyle}>
             {rows === 1 ? (
-              <Input {...props} aria-label="TextArea Input" data-testid="textarea-input" />
+              <Input {...props} aria-label={t("textInput")} data-testid="textarea-input" />
             ) : (
-              <TextArea {...props} aria-label="TextArea Input" data-testid="textarea-input" />
+              <TextArea {...props} aria-label={t("textInput")} data-testid="textarea-input" />
             )}
             {showAddButton && (
               <div
@@ -451,7 +450,7 @@ const HtxTextArea = observer(({ item }) => {
                     className="text-neutral-content-subtler"
                     data-testid="textarea-character-count"
                   >
-                    {item._value?.length ?? 0} {pluralize(item._value?.length ?? 0, "character", "characters")}
+                    {t("textCharacterCount", { count: item._value?.length ?? 0 })}
                   </Typography>
 
                   {/* Region count - use submissionsNum computed view */}
@@ -465,9 +464,9 @@ const HtxTextArea = observer(({ item }) => {
                         className="text-neutral-content-subtler"
                         data-testid="textarea-submission-count"
                       >
-                        {item.submissionsNum}
-                        {item.maxsubmissions && ` / ${item.maxsubmissions}`}{" "}
-                        {pluralize(item.submissionsNum, "submission", "submissions")}
+                        {item.maxsubmissions
+                          ? t("textEntryLimit", { count: item.submissionsNum, max: item.maxsubmissions })
+                          : t("textEntryCount", { count: item.submissionsNum })}
                       </Typography>
                     </>
                   )}
@@ -475,14 +474,13 @@ const HtxTextArea = observer(({ item }) => {
 
                 {/* Instruction text and Add button on the right */}
                 <div className="flex items-center gap-base">
-                  {/* Show instruction for multiline textarea */}
-                  {rows > 1 && (
+                  {item.allowsubmit && (
                     <Typography
                       size="small"
                       className="text-neutral-content-subtler italic"
                       data-testid="textarea-instruction"
                     >
-                      Press Shift + Enter to Add
+                      {t("textAddHint", { shortcut: rows > 1 ? "Shift+Enter" : "Enter" })}
                     </Typography>
                   )}
 
@@ -497,11 +495,16 @@ const HtxTextArea = observer(({ item }) => {
                       htmlType="submit"
                       data-testid="textarea-add-button"
                     >
-                      Add
+                      {t("textAdd")}
                     </Button>
                   </Form.Item>
                 </div>
               </div>
+            )}
+            {!showAddButton && !item.isReadOnly() && item.allowsubmit && (
+              <Typography size="small" className="text-neutral-content-subtler" data-testid="textarea-instruction">
+                {t("textAddHint", { shortcut: rows > 1 ? "Shift+Enter" : "Enter" })}
+              </Typography>
             )}
           </Form.Item>
         </Form>

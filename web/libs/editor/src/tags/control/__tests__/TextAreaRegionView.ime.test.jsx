@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Registry from "../../../core/Registry";
 import "../TextArea/TextAreaRegionView";
+import { createLocaleRuntime } from "@humansignal/i18n";
+
+let runtime;
+beforeEach(() => { runtime = createLocaleRuntime("en-US"); });
+afterEach(() => { runtime.destroy(); });
 
 jest.mock("mobx-state-tree", () => ({ ...jest.requireActual("mobx-state-tree"), isAlive: () => true }));
 
@@ -30,7 +35,8 @@ function setup(rows, existing = false) {
   const area = { results: existing ? [result] : [], isReadOnly: () => false, isSelected: true };
   result.area = area;
   item.perRegionArea = area;
-  const view = render(<RegionView item={item} area={area} collapsed={false} />);
+  const Provider = runtime.provider;
+  const view = render(<Provider><RegionView item={item} area={area} collapsed={false} /></Provider>);
   return { item, result, view };
 }
 

@@ -189,5 +189,16 @@
   "draftMissingHint": "该草稿可能已在另一页面提交或删除。已暂停自动保存，本页修改仍然保留。请先下载本页修改，再载入任务最新状态。此操作不会重建旧草稿，也不会修改已提交结果。",
   "draftReloadTask": "载入任务最新状态",
   "draftReloadTaskFailed": "未能载入任务最新状态。本页修改仍然保留，请检查网络后重试。",
-  "confirmTextInput": "文本尚未确认。请在输入框中确认，或清空内容后再离开。"
+  "confirmTextInput": "文本尚未确认。请在输入框中确认，或清空内容后再离开。",
+  "textInput": "文本输入",
+  "textEntryInput": "文本条目",
+  "textAdd": "添加文本",
+  "textAddHint": "按 {{shortcut}} 添加文本，再保存草稿或提交标注。",
+  "textEdit": "编辑文本",
+  "textDelete": "删除文本",
+  "textConfirmChanges": "确认文本修改",
+  "textConfirmHint": "按 {{shortcut}} 确认修改，再保存草稿或提交标注。",
+  "textCharacterCount_other": "{{count}} 个字符",
+  "textEntryCount_other": "{{count}} 条文本",
+  "textEntryLimit": "文本条数：{{count}} / {{max}}"
 }

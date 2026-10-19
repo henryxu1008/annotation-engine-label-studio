@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { observable, runInAction } from "mobx";
 import { HtxTextArea } from "../TextArea/TextArea";
 import { TextArea } from "../../../common/TextArea/TextArea";
+import { createLocaleRuntime } from "@humansignal/i18n";
 
 jest.mock("../../../core/Tree", () => ({
   ...jest.requireActual("../../../core/Tree").default,
@@ -9,6 +10,9 @@ jest.mock("../../../core/Tree", () => ({
 }));
 
 describe("text annotation composition", () => {
+  let runtime;
+  beforeEach(() => { runtime = createLocaleRuntime("en-US"); });
+  afterEach(() => { runtime.destroy(); });
   function renderControl(rows) {
     const item = observable({
       name: "note",
@@ -31,7 +35,8 @@ describe("text annotation composition", () => {
         }),
       ),
     });
-    render(<HtxTextArea item={item} />);
+    const Provider = runtime.provider;
+    render(<Provider><HtxTextArea item={item} /></Provider>);
     return item;
   }
 

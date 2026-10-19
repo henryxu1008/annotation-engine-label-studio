@@ -4,9 +4,15 @@
  * startEditing, save, cancel, setValue, updateHeight, and button visibility.
  */
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render as renderRTL, screen, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HtxTextBox } from "../HtxTextBox";
+import { createLocaleRuntime } from "@humansignal/i18n";
+
+let runtime;
+const render = (ui) => renderRTL(ui, { wrapper: runtime.provider });
+beforeEach(() => { runtime = createLocaleRuntime("en-US"); });
+afterEach(() => { runtime.destroy(); });
 
 jest.mock("@humansignal/icons", () => {
   const React = require("react");
@@ -42,6 +48,28 @@ const defaultProps = {
 };
 
 describe("HtxTextBox", () => {
+  it.each([1, 3])("keeps the active edit and ref across a language switch with rows=%s", (rows) => {
+    const ref = React.createRef();
+    const annotation = { setPendingTextInput: jest.fn() };
+    render(<HtxTextBox {...defaultProps} rows={rows} ref={ref} annotation={annotation} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    const input = screen.getByTestId("htx-textbox-input");
+    fireEvent.change(input, { target: { value: "尚未确认的修改" } });
+    const instance = ref.current;
+    act(() => { runtime.updateLocale("zh-CN"); });
+    expect(ref.current).toBe(instance);
+    expect(screen.getByTestId("htx-textbox-input")).toBe(input);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("尚未确认的修改");
+    expect(annotation.setPendingTextInput.mock.calls.at(-1)[1]).toBe(true);
+    expect(defaultProps.onChange).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "确认文本修改" });
+    expect(confirm.parentElement).toHaveAttribute("data-tooltip", `按 ${rows > 1 ? "Shift+Enter" : "Enter"} 确认修改，再保存草稿或提交标注。`);
+    fireEvent.click(confirm);
+    expect(defaultProps.onChange).toHaveBeenCalledWith("尚未确认的修改");
+    expect(screen.getByRole("button", { name: "删除文本" })).toBeInTheDocument();
+  });
+
   it("tracks an edited buffer until cancellation and clears only its own registration on unmount", () => {
     const annotation = { setPendingTextInput: jest.fn() };
     const view = render(<HtxTextBox {...defaultProps} annotation={annotation} />);

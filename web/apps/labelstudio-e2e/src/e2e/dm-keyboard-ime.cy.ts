@@ -28,6 +28,34 @@ describe("Keyboard annotation and composition input", () => {
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
 
   for (const locale of ["en-US", "zh-CN"]) {
+    it(`distinguishes confirming text from submitting an annotation in ${locale}`, () => {
+      cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
+        open(scope, locale);
+        const zh = locale === "zh-CN";
+        cy.get('[placeholder="Single-line note"]').parents('[data-testid="textarea-control"]').within(() => {
+          cy.get('[data-testid="textarea-instruction"]').should("contain.text", zh ? "按 Enter 添加文本" : "Press Enter to add text");
+        });
+        cy.get('[placeholder="Multiline note"]').type("One{enter}二");
+        cy.get('[placeholder="Multiline note"]').parents('[data-testid="textarea-control"]').within(() => {
+          cy.get('[data-testid="textarea-character-count"]').should("have.text", zh ? "5 个字符" : "5 characters");
+          cy.get('[data-testid="textarea-instruction"]').should("contain.text", zh ? "按 Shift+Enter 添加文本" : "Press Shift+Enter to add text");
+          cy.get('[data-testid="textarea-add-button"]').should("have.text", zh ? "添加文本" : "Add text").click();
+          cy.get('[data-testid="textarea-submission-count"]').should("have.text", zh ? "1 条文本" : "1 text entry");
+          cy.get('[data-testid="htx-textbox-edit-button"]').should("have.attr", "aria-label", zh ? "编辑文本" : "Edit text").click();
+        });
+        cy.get('[data-testid="htx-textbox-input"]').clear().type("Confirmed 修改");
+        cy.get('[data-testid="htx-textbox-save"]').should("have.attr", "aria-label", zh ? "确认文本修改" : "Confirm text changes").click();
+        result("paragraph", ["Confirmed 修改"]);
+        cy.get('[data-testid="htx-textbox-delete-button"]').should("have.attr", "aria-label", zh ? "删除文本" : "Delete text");
+        cy.intercept({ method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)/ }).as("textActionsDraft");
+        cy.get('[data-testid="draft-save-retry"]').click();
+        cy.wait("@textActionsDraft").its("response.statusCode").should("be.oneOf", [200, 201]);
+        cy.request(`/api/tasks/${scope.task_id}/`).its("body.annotations").should("have.length", 0);
+        cy.reload();
+        result("paragraph", ["Confirmed 修改"]);
+      });
+    });
+
     it(`protects unconfirmed text buffers before leaving in ${locale}`, () => {
       cy.task("createEnterpriseE2EUndoScope", { keyboard: true }).then((scope: any) => {
         open(scope, locale);

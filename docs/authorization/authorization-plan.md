@@ -652,3 +652,12 @@ confirmation/submission behavior; no buffered text is silently added to draft
 serialization, immutable submissions, or recovery-copy downloads.
 Physical Windows IME and native Cancel acceptance remain separate from synthetic
 composition events and beforeunload-hook regression assertions.
+
+TextArea action copy uses the existing per-editor locale runtime. Adding a text
+entry or confirming an existing entry is distinct from saving a draft or
+submitting an annotation; do not label text-entry counts as annotation submissions.
+Shortcut hints must follow the control's actual single-line Enter or multiline
+Shift+Enter behavior. Changing display language must preserve the mounted text
+editor, active input buffer, focus and pending-input registration. Keep custom
+project text/labels unchanged and retain upstream confirmation, blur and save
+semantics; these copy changes do not alter server authorization or submission.
