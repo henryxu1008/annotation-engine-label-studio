@@ -20,7 +20,7 @@ describe("Image draft recovery after another page submits or deletes", () => {
   const input = (name: string) => cy.contains("label.lsf-region-editor__property", new RegExp(`^${name}$`)).find("input");
   const editBox = (values: Record<string, number>) => {
     for (const [name, value] of Object.entries(values)) {
-      input(name).clear().type(String(value)).blur();
+      input(name).scrollIntoView().should("be.visible").clear().type(String(value)).blur();
       input(name).should("have.value", String(value));
     }
   };
@@ -123,10 +123,19 @@ describe("Image draft recovery after another page submits or deletes", () => {
             req => req.continue(() => new Promise<void>(resolve => { responseHeld = true; releaseRecovery = resolve; }))).as("imageRecoveryHeld");
           cy.get('[data-testid="draft-reload-latest"]').click();
           cy.wrap(null).should(() => expect(responseHeld, "image recovery response held").to.eq(true));
+          // At 1000px the Info fields sit below the image, underneath the fixed
+          // recovery panel. Follow its native collapse -> Info -> edit path so
+          // the held response does not time out waiting for an obscured input.
+          cy.get('[data-testid="draft-conflict"] summary').click();
+          cy.get('[data-testid="draft-conflict"]').should("not.have.attr", "open");
+          cy.contains('#label-studio-dm .lsf-panel-tabs__tab', locale === "zh-CN" ? "信息" : "Info")
+            .scrollIntoView().should("be.visible").click();
           editBox({ W: 47, H: 36 });
           cy.then(() => { releaseRecovery!(); releaseRecovery = undefined; });
           cy.wait("@imageRecoveryHeld").its("response.statusCode").should("eq", 200);
           assertBox({ ...localBox, width: 47, height: 36 });
+          cy.get('[data-testid="draft-conflict"] summary').scrollIntoView().click();
+          cy.get('[data-testid="draft-conflict"]').should("have.attr", "open");
           cy.contains(locale === "zh-CN" ? "载入期间本页又有修改，内容仍然保留" : "Your edits changed while loading and remain here").should("be.visible");
           cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
           cy.get('[data-testid="draft-backup"]').click();
