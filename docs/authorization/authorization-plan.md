@@ -684,7 +684,7 @@ after a supplementary Unicode character, outer and internal English spaces, and
 intentional Chinese/English punctuation. Draft save, reload and submission must
 retain the selected code-point range and its exact text; never silently trim data.
 Exact-space templates must opt into the existing Text whitespace contract with
-`<Style>.htx-richtext { white-space: pre-wrap; }</Style>`. The default collapsed
+`<Style>.lsf-richtext__container { white-space: pre-wrap; }</Style>`. The default collapsed
 display remains unchanged. Keep consecutive internal spaces and source offsets
 in the regression fixture; use cypress-real-events for AUT iframe coordinates
 when dispatching native mouse input rather than assuming frameElement is present.

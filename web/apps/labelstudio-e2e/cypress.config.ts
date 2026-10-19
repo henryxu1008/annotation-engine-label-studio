@@ -52,7 +52,7 @@ with transaction.atomic():
     if ${options.entityDraft === true ? 'True' : 'False'}:
         config = '<View><Text name="text" value="$text"/><Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="entity_note" toName="text" perRegion="true" rows="1" editable="true" placeholder="Entity note"/></View>'
     if ${boundary ? 'True' : 'False'}:
-        config = config.replace('<View>', '<View><Style>.htx-richtext { white-space: pre-wrap; }</Style>', 1)
+        config = config.replace('<View>', '<View><Style>.lsf-richtext__container { white-space: pre-wrap; }</Style>', 1)
     if ${options.imageDraft === true ? 'True' : 'False'}:
         config = '<View><RectangleLabels name="bbox" toName="image"><Label value="Object"/><Label value="Other"/></RectangleLabels><Image name="image" value="$image"/></View>'
     if ${options.required === true ? 'True' : 'False'}:

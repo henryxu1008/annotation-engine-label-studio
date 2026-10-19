@@ -72,7 +72,7 @@ describe('Existing text entity boundary handles', () => {
             expect(win.Htx?.annotationStore?.selected?.history?.isFrozen).to.eq(false);
           });
           cy.get('.htx-highlight').click();
-          cy.get('.htx-richtext').should('have.css', 'white-space', 'pre-wrap');
+          cy.get('.lsf-richtext__container').should('have.css', 'white-space', 'pre-wrap');
           resize('left', value.targetStart);
           resize('right', value.targetEnd);
           cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
