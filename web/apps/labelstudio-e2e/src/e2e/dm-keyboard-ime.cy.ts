@@ -39,7 +39,8 @@ describe("Keyboard annotation and composition input", () => {
         cy.get('[placeholder="Multiline note"]').parents('[data-testid="textarea-control"]').within(() => {
           cy.get('[data-testid="textarea-character-count"]').should("have.text", zh ? "5 个字符" : "5 characters");
           cy.get('[data-testid="textarea-instruction"]').should("contain.text", zh ? "按 Shift+Enter 添加文本" : "Press Shift+Enter to add text");
-          cy.get('[data-testid="textarea-add-button"]').should("have.text", zh ? "添加文本" : "Add text").click();
+          cy.get('[data-testid="textarea-add-button"]').should("have.text", zh ? "添加文本" : "Add text")
+            .should(($button) => expect($button[0].scrollWidth).to.be.at.most($button[0].clientWidth)).click();
           cy.get('[data-testid="textarea-submission-count"]').should("have.text", zh ? "1 条文本" : "1 text entry");
           cy.get('[data-testid="htx-textbox-edit-button"]').should("have.attr", "aria-label", zh ? "编辑文本" : "Edit text").click();
         });

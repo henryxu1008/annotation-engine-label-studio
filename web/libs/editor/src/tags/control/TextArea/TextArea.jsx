@@ -491,7 +491,7 @@ const HtxTextArea = observer(({ item }) => {
                       variant="primary"
                       look="outlined"
                       leading={<IconPlus />}
-                      className="w-20 px-tight"
+                      className="min-w-20 shrink-0 px-tight"
                       htmlType="submit"
                       data-testid="textarea-add-button"
                     >
