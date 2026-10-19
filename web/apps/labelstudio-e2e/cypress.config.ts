@@ -23,7 +23,7 @@ export default defineConfig({
         );
       };
       on('task', {
-        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean } = {}) {
+        createEnterpriseE2EUndoScope(options: { required?: boolean; delayedImage?: boolean; taskCount?: number; keyboard?: boolean; entityDraft?: boolean; imageDraft?: boolean } = {}) {
           const taskCount = options.taskCount ?? 1;
           if (!Number.isSafeInteger(taskCount) || taskCount < 1 || taskCount > 3) throw new Error('Expected one to three isolated tasks');
           const fixture = JSON.parse(readFileSync(resolve(__dirname, '.enterprise-e2e.json'), 'utf8'));
@@ -43,6 +43,8 @@ with transaction.atomic():
         config = '<View><Text name="text" value="$text"/><Choices name="single" toName="text" choice="single"><Choice value="Positive"/><Choice value="Negative"/></Choices><Choices name="multiple" toName="text" choice="multiple"><Choice value="One"/><Choice value="Two"/></Choices><TextArea name="note" toName="text" rows="1" editable="true" placeholder="Single-line note"/><TextArea name="paragraph" toName="text" rows="3" editable="true" placeholder="Multiline note"/></View>'
     if ${options.entityDraft === true ? 'True' : 'False'}:
         config = '<View><Text name="text" value="$text"/><Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="entity_note" toName="text" perRegion="true" rows="1" editable="true" placeholder="Entity note"/></View>'
+    if ${options.imageDraft === true ? 'True' : 'False'}:
+        config = '<View><RectangleLabels name="bbox" toName="image"><Label value="Object"/><Label value="Other"/></RectangleLabels><Image name="image" value="$image"/></View>'
     if ${options.required === true ? 'True' : 'False'}:
         config = config.replace('<Choices ', '<Choices required="true" ', 1)
     if ${options.delayedImage === true ? 'True' : 'False'}:
@@ -53,6 +55,14 @@ with transaction.atomic():
     data = {'text': 'Independent undo regression.'}
     if ${options.delayedImage === true ? 'True' : 'False'}:
         data['image'] = '/ls76-delayed-image.png'
+    if ${options.imageDraft === true ? 'True' : 'False'}:
+        # A self-contained synthetic PNG; no external image host or uploads.
+        import base64, struct, zlib
+        def png_chunk(kind, raw):
+            return struct.pack('!I', len(raw)) + kind + raw + struct.pack('!I', zlib.crc32(kind + raw) & 0xffffffff)
+        pixels = (bytes([0]) + bytes([70, 120, 180]) * 400) * 300
+        png = bytes([137,80,78,71,13,10,26,10]) + png_chunk(b'IHDR', struct.pack('!2I5B', 400, 300, 8, 2, 0, 0, 0)) + png_chunk(b'IDAT', zlib.compress(pixels)) + png_chunk(b'IEND', b'')
+        data['image'] = 'data:image/png;base64,' + base64.b64encode(png).decode()
     tasks = []
     for index in range(${taskCount}):
         task_data = dict(data)
@@ -62,6 +72,8 @@ with transaction.atomic():
         assignment = TaskAssignment.objects.create(project=project, task=task, assignee_id=ids['annotator'], assigned_by_id=ids['manager'])
         if ${options.entityDraft === true ? 'True' : 'False'}:
             AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'entity-1', 'from_name': 'entity', 'to_name': 'text', 'type': 'labels', 'value': {'start': 0, 'end': 11, 'text': task_data['text'][:11], 'labels': ['Entity']}}, {'id': 'entity-1', 'from_name': 'entity_note', 'to_name': 'text', 'type': 'textarea', 'value': {'text': ['原始备注']}}])
+        if ${options.imageDraft === true ? 'True' : 'False'}:
+            AnnotationDraft.objects.create(task=task, user_id=ids['annotator'], assignment=assignment, result=[{'id': 'box-1', 'from_name': 'bbox', 'to_name': 'image', 'type': 'rectanglelabels', 'original_width': 400, 'original_height': 300, 'image_rotation': 0, 'value': {'x': 10, 'y': 12, 'width': 30, 'height': 25, 'rotation': 0, 'rectanglelabels': ['Object']}}])
         tasks.append(task)
     project.summary.update_data_columns(tasks)
 print('E2E_UNDO_SCOPE=' + json.dumps({'project_id': project.pk, 'task_id': tasks[0].pk, 'task_ids': [task.pk for task in tasks]}))
