@@ -45,7 +45,9 @@ describe("Image draft recovery after another page submits or deletes", () => {
           cy.get('#label-studio-dm img[alt="image"]').should($image => {
             expect(($image[0] as HTMLImageElement).naturalWidth).to.eq(400);
           });
-          cy.get('[role="treeitem"]').contains("Object").should("be.visible").click();
+          // Rectangle labels contain nested, clipped text containers. The
+          // visible region row is the user's actual selection target.
+          cy.contains('[role="treeitem"]', "Object").should("be.visible").click();
           editBox({ X: 18, Y: 22, W: 41, H: 32 });
           cy.get("#label-studio-dm").contains(/^Other$/).click();
           cy.get('[data-testid="draft-save-retry"]').click();
@@ -113,7 +115,7 @@ describe("Image draft recovery after another page submits or deletes", () => {
             expect(win.Htx.annotationStore.selected.draftId || 0).to.eq(0);
           });
           if (action === "submitted") {
-            cy.get('[role="treeitem"]').contains("Object").click();
+            cy.contains('[role="treeitem"]', "Object").should("be.visible").click();
             assertBox(remoteBox);
           } else {
             cy.get('[role="treeitem"]').should("not.exist");
