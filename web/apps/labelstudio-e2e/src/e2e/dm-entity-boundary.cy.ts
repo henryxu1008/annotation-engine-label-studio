@@ -1,4 +1,5 @@
 /// <reference types="cypress" />
+import { getCypressElementCoordinates } from 'cypress-real-events/getCypressElementCoordinates';
 
 describe('Existing text entity boundary handles', () => {
   let fixture: any;
@@ -28,15 +29,15 @@ describe('Existing text entity boundary handles', () => {
         remaining -= points.length;
       }
       expect(target, 'visible target caret').to.exist;
-      const frame = win.frameElement!.getBoundingClientRect();
-      const scaleX = frame.width / win.innerWidth;
-      const scaleY = frame.height / win.innerHeight;
       const box = handle.getBoundingClientRect();
       const span = handle.closest('.htx-highlight')!.getBoundingClientRect();
       expect(Math.abs(box.left + box.width / 2 - (side === 'left' ? span.left : span.right)), 'handle at its text boundary').to.be.lessThan(4);
       expect(Math.abs(box.top - span.top), 'handle on the same text line').to.be.lessThan(3);
-      const from = { x: frame.left + (box.left + box.width / 2) * scaleX, y: frame.top + (box.top + box.height / 2) * scaleY };
-      const to = { x: frame.left + target!.left * scaleX, y: frame.top + (target!.top + target!.height / 2) * scaleY };
+      const from = getCypressElementCoordinates($handle, 'center', false);
+      const to = getCypressElementCoordinates($handle, {
+        x: target!.left - box.left,
+        y: target!.top + target!.height / 2 - box.top,
+      }, false);
       return (async () => {
         const mouse = (type: string, x: number, y: number, pressed = false) => Cypress.automation('remote:debugger:protocol', {
           command: 'Input.dispatchMouseEvent',
@@ -71,6 +72,7 @@ describe('Existing text entity boundary handles', () => {
             expect(win.Htx?.annotationStore?.selected?.history?.isFrozen).to.eq(false);
           });
           cy.get('.htx-highlight').click();
+          cy.get('.htx-richtext').should('have.css', 'white-space', 'pre-wrap');
           resize('left', value.targetStart);
           resize('right', value.targetEnd);
           cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));

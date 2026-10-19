@@ -51,6 +51,8 @@ with transaction.atomic():
         config = '<View><Text name="text" value="$text"/><Choices name="single" toName="text" choice="single"><Choice value="Positive"/><Choice value="Negative"/></Choices><Choices name="multiple" toName="text" choice="multiple"><Choice value="One"/><Choice value="Two"/></Choices><TextArea name="note" toName="text" rows="1" editable="true" placeholder="Single-line note"/><TextArea name="paragraph" toName="text" rows="3" editable="true" placeholder="Multiline note"/></View>'
     if ${options.entityDraft === true ? 'True' : 'False'}:
         config = '<View><Text name="text" value="$text"/><Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="entity_note" toName="text" perRegion="true" rows="1" editable="true" placeholder="Entity note"/></View>'
+    if ${boundary ? 'True' : 'False'}:
+        config = config.replace('<View>', '<View><Style>.htx-richtext { white-space: pre-wrap; }</Style>', 1)
     if ${options.imageDraft === true ? 'True' : 'False'}:
         config = '<View><RectangleLabels name="bbox" toName="image"><Label value="Object"/><Label value="Other"/></RectangleLabels><Image name="image" value="$image"/></View>'
     if ${options.required === true ? 'True' : 'False'}:
