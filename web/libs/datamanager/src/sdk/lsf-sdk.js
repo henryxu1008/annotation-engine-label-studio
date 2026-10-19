@@ -424,7 +424,9 @@ export class LSFWrapper {
 
     const hasChangedTasks = this.lsf?.task?.id !== task?.id && task?.id;
 
-    this.setLoading(true, hasChangedTasks);
+    // The loading view unmounts text inputs. A guarded recovery must retain
+    // those buffers until its last content check, immediately before reset.
+    if (!beforeReset) this.setLoading(true, hasChangedTasks);
 
     // Let the browser paint the loading indicator before heavy store operations
     await waitForPaint();
@@ -434,9 +436,9 @@ export class LSFWrapper {
     // Recovery must still refer to the backed-up editor at the actual reset,
     // including edits made while the loading indicator was waiting to paint.
     if (beforeReset && !beforeReset()) {
-      this.setLoading(false);
       return false;
     }
+    if (beforeReset) this.setLoading(true, hasChangedTasks);
 
     // Pure data preparation (no MobX mutations)
     const lsfTask = taskToLSFormat(task);

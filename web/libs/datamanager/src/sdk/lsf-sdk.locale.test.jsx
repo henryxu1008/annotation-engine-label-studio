@@ -159,6 +159,9 @@ it.each(['results', 'text input'])("keeps %s entered after recovery returns but 
     const reloading = wrapper.onReloadDraft();
     await Promise.resolve();
     expect(frames).toHaveLength(1);
+    // App.render replaces the editing controls with a loader when this flag
+    // is set. Recovery must leave raw buffers mounted until the final check.
+    expect(wrapper.setLoading).not.toHaveBeenCalled();
     if (change === 'results') annotation.draftBackup = 'new edit while waiting to paint';
     else annotation.hasPendingTextInput = true;
     frames.shift()(0);
@@ -166,7 +169,7 @@ it.each(['results', 'text input'])("keeps %s entered after recovery returns but 
     expect(await reloading).toBe(false);
     expect(editor.resetAnnotationStore).not.toHaveBeenCalled();
     expect(wrapper.currentAnnotation).toBe(annotation);
-    expect(wrapper.setLoading).toHaveBeenLastCalledWith(false);
+    expect(wrapper.setLoading).not.toHaveBeenCalled();
   } finally { frame.mockRestore(); }
 });
 
