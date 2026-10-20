@@ -353,7 +353,9 @@ describe("full enterprise collaboration browser workflow", () => {
     cy.then(() => cy.get(`[data-testid="release-submission-${revision1Id}"]`).click());
     cy.get('[data-testid="release-status"]').should("contain.text", copy.rejected);
     cy.get('[data-testid="release-review-metadata"]').should("contain.text", "Full flow correction required");
-    cy.get('[data-testid="release-result-hash"]').should("contain.text", revision1Hash);
+    cy.then(() => {
+      cy.get('[data-testid="release-result-hash"]').should("contain.text", revision1Hash);
+    });
     cy.get('[data-testid="release-approved-submission"]').should("not.exist");
     cy.get('[data-testid="review-approve"]').should("not.exist");
     closeModal();
