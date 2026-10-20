@@ -688,3 +688,12 @@ Exact-space templates must opt into the existing Text whitespace contract with
 display remains unchanged. Keep consecutive internal spaces and source offsets
 in the regression fixture; use cypress-real-events for AUT iframe coordinates
 when dispatching native mouse input rather than assuming frameElement is present.
+
+Submission history is also a read-only feedback entry for annotators. Reuse the
+existing submission list/object scope and immutable review metadata: an annotator
+can read their own submissions and rejection reasons without gaining reviewer or
+release authority. The shared history component defaults to read-only; only the
+manager entry opts into release actions. Server-side list, object, review and
+release checks remain authoritative, including after role revocation. Keep the
+English/Chinese rejection-to-revision browser flow covered without granting extra
+roles merely to display feedback.

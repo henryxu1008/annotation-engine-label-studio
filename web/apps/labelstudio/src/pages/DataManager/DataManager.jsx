@@ -67,6 +67,7 @@ const CollaborationModalTitle = ({ kind, taskId }) => {
   const { t } = useLocaleTranslation("collaboration");
   if (kind === "assignments") return t("taskAssignmentsTitle", { id: taskId });
   if (kind === "reviews") return t("reviewSubmissionsTitle");
+  if (kind === "submissions") return t("submissionHistory");
   return t("releaseWorkspaceTitle");
 };
 
@@ -402,9 +403,9 @@ DataManagerPage.context = ({ dmRef }) => {
   const openReleases = () => {
     if (!localePreference.ready) return;
     modal({
-      title: <CollaborationModalTitle kind="releases" />,
+      title: <CollaborationModalTitle kind={canManageAssignments ? "releases" : "submissions"} />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <SubmissionReleaseWorkspace projectId={project.id} />,
+      body: <SubmissionReleaseWorkspace projectId={project.id} allowRelease={canManageAssignments} />,
       style: { width: 960 },
     });
   };
@@ -470,17 +471,15 @@ DataManagerPage.context = ({ dmRef }) => {
         </Button>
       )}
 
-      {canManageAssignments && (
-        <Button
-          size="small"
-          look="outlined"
-          onClick={openReleases}
-          disabled={!localePreference.ready}
-          data-testid="open-release-workspace"
-        >
-          {tc("releases")}
-        </Button>
-      )}
+      <Button
+        size="small"
+        look="outlined"
+        onClick={openReleases}
+        disabled={!localePreference.ready}
+        data-testid={canManageAssignments ? "open-release-workspace" : "open-submission-history"}
+      >
+        {tc(canManageAssignments ? "releases" : "submissionHistory")}
+      </Button>
 
       {canReviewSubmissions && (
         <Button

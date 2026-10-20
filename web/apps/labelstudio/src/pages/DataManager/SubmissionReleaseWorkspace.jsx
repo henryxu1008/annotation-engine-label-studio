@@ -13,7 +13,7 @@ const displayIdentity = (user, t) =>
 
 const stableJson = (value) => JSON.stringify(value);
 
-export const SubmissionReleaseWorkspace = ({ projectId }) => {
+export const SubmissionReleaseWorkspace = ({ projectId, allowRelease = false }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const api = useAPI();
   const callApiRef = useRef(api.callApi);
@@ -92,7 +92,7 @@ export const SubmissionReleaseWorkspace = ({ projectId }) => {
   }, [selectedId]);
 
   const release = async () => {
-    if (!selected || selected.status !== "approved") return;
+    if (!allowRelease || !selected || selected.status !== "approved") return;
 
     const releaseSubmissionId = selected.id;
     const generation = generationRef.current;
@@ -226,7 +226,7 @@ export const SubmissionReleaseWorkspace = ({ projectId }) => {
               <code data-testid="release-result-hash">{selected.result_hash}</code>
               <pre data-testid="release-result-snapshot">{JSON.stringify(selected.result_snapshot, null, 2)}</pre>
 
-              {selected.status === "approved" && (
+              {allowRelease && selected.status === "approved" && (
                 <Button
                   data-testid="release-approved-submission"
                   disabled={releasing}

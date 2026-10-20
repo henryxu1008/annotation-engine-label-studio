@@ -347,6 +347,16 @@ describe("full enterprise collaboration browser workflow", () => {
       "Full flow Annotator A task",
       () => annotationId,
     );
+    // The annotator can read feedback through the existing server-scoped history
+    // without acquiring reviewer or release authority.
+    cy.get('[data-testid="open-submission-history"]', { timeout: 30000 }).click();
+    cy.then(() => cy.get(`[data-testid="release-submission-${revision1Id}"]`).click());
+    cy.get('[data-testid="release-status"]').should("contain.text", copy.rejected);
+    cy.get('[data-testid="release-review-metadata"]').should("contain.text", "Full flow correction required");
+    cy.get('[data-testid="release-result-hash"]').should("contain.text", revision1Hash);
+    cy.get('[data-testid="release-approved-submission"]').should("not.exist");
+    cy.get('[data-testid="review-approve"]').should("not.exist");
+    closeModal();
     choose("Negative", fixture.full_flow.tasks.a.id);
     cy.intercept("PATCH", `**/api/annotations/**`).as("submitRevision2");
     cy.get('[data-testid="bottombar-update-button"]', { timeout: 30000 }).should("be.visible").click();
