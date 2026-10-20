@@ -288,6 +288,7 @@ it("hydrates a submitted annotation draft without saving its temporary empty res
   const store = {
     annotations: [annotation],
     selectAnnotation: jest.fn((id, options) => wrapper._invokeSelectAnnotation(annotation, annotation, options)),
+    createAnnotation: jest.fn(() => ({ id: "blank" })),
   };
   wrapper.lsf = { annotationStore: store };
   wrapper.task = { drafts: [{ id: 7, annotation: 17, revision: 3, result }] };
@@ -299,6 +300,9 @@ it("hydrates a submitted annotation draft without saving its temporary empty res
   expect(annotation.draftId).toBe(7);
   expect(annotation.draftRevision).toBe(3);
   expect(annotation.hasUnsavedDraft).toBe(false);
+  await wrapper.setAnnotation();
+  expect(store.createAnnotation).not.toHaveBeenCalled();
+  expect(store.selectAnnotation).toHaveBeenLastCalledWith(annotation.id);
   // A later real annotation switch must still persist this user's edits.
   annotation.hasUnsavedDraft = true;
   await wrapper._invokeSelectAnnotation({ id: "other" }, annotation, {});

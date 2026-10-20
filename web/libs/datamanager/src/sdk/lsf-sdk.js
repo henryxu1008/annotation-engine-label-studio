@@ -718,6 +718,10 @@ export class LSFWrapper {
         annotation = cs.addAnnotationFromPrediction(predictionByModelVersion ?? this.predictions[0]);
       } else if (this.annotations.length > 0 && id && id !== "auto") {
         annotation = this.annotations.find((c) => c.pk === id || c.id === id);
+      } else if (!id && this.annotations.some((c) => c.draftId)) {
+        // A correction draft belongs to its submitted annotation. Restore that
+        // editor instead of creating a blank annotation after refresh/recovery.
+        annotation = this.annotations.find((c) => c.draftId);
       } else if (this.annotations.length > 0 && (id === "auto" || hasAutoAnnotations)) {
         annotation = first;
       } else {

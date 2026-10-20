@@ -704,3 +704,6 @@ deserialization, but that intermediate selection must not flush the temporarily
 cleared result with a pre-hydration draft token. Normal user selection still
 awaits outgoing edits; draft revision checks and real conflict recovery remain
 unchanged. Cover reload of a saved correction before submitting revision 2.
+Without an explicit annotation selection, keep the restored correction's existing
+annotation selected rather than opening a new blank annotation; explicit user
+selection continues to take precedence.
