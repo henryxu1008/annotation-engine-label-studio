@@ -676,7 +676,10 @@ export class LSFWrapper {
             createdDate: draft.created_at,
           });
         }
-        cs.selectAnnotation(c.id);
+        // Selection initializes object/control context before deserialization.
+        // This is server hydration, not leaving an edited annotation: saving
+        // here would capture the temporarily cleared result and old draft token.
+        cs.selectAnnotation(c.id, { hydratingDraft: true });
         c.deserializeResults(draft.result);
         c.setDraftId(draft.id);
         c.setDraftRevision(draft.revision);
@@ -1375,7 +1378,7 @@ export class LSFWrapper {
     // Invoke the DataManager callback first so that history fetch can start immediately.
     // The history endpoint only needs the annotation pk (available on stubs).
     // Hydration (which fetches full annotation data) runs in parallel afterwards.
-    if (nextAnnotation && this.needsDraftSave(nextAnnotation)) {
+    if (!options?.hydratingDraft && nextAnnotation && this.needsDraftSave(nextAnnotation)) {
       this.saveDraft(nextAnnotation).then((saved) => {
         if (saved !== false) this.datamanager.invoke("onSelectAnnotation", prevAnnotation, nextAnnotation, options, this);
       });

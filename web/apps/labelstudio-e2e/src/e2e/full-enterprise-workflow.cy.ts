@@ -358,6 +358,19 @@ describe("full enterprise collaboration browser workflow", () => {
     cy.get('[data-testid="review-approve"]').should("not.exist");
     closeModal();
     choose("Negative", fixture.full_flow.tasks.a.id);
+    saveDraftImmediately(fixture.full_flow.tasks.a.id);
+    cy.window({ timeout: 30000 }).should((win) => {
+      expect(win.Htx?.annotationStore?.selected?.hasUnsavedDraft, "revision draft saved before reload").to.eq(false);
+    });
+    cy.reload();
+    cy.get('#label-studio-dm input[type="checkbox"][name="Negative"]', { timeout: 30000 }).should("be.checked");
+    cy.window({ timeout: 30000 }).should((win) => {
+      const annotation = win.Htx?.annotationStore?.selected;
+      expect(String(annotation?.pk), "restored submitted annotation").to.eq(String(annotationId));
+      expect(annotation?.draftRevision, "restored draft token").to.be.greaterThan(0);
+      expect(annotation?.draftConflict, "hydration is not a concurrent edit").to.eq(false);
+      expect(annotation?.hasUnsavedDraft, "restored draft is saved").to.eq(false);
+    });
     cy.intercept("PATCH", `**/api/annotations/**`).as("submitRevision2");
     cy.get('[data-testid="bottombar-update-button"]', { timeout: 30000 }).should("be.visible").click();
     cy.wait("@submitRevision2").its("response.statusCode").should("eq", 200);

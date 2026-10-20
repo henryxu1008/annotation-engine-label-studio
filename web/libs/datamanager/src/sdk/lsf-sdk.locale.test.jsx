@@ -271,6 +271,40 @@ it("saves an annotation undone to index zero before publishing its selection", a
   expect(wrapper.datamanager.invoke).toHaveBeenCalledWith("onSelectAnnotation", null, outgoing, {}, wrapper);
 });
 
+it("hydrates a submitted annotation draft without saving its temporary empty result and obsolete token", async () => {
+  const wrapper = createDraftWrapper();
+  const result = [{ id: "entity", value: { text: "corrected" } }];
+  const annotation = {
+    id: "local", pk: "17", draftId: 0, draftRevision: 0, hasUnsavedDraft: false,
+    result: [{ value: { text: "submitted" } }],
+    history: { freeze: jest.fn(), safeUnfreeze: jest.fn(), reinit: jest.fn() },
+    addVersions: jest.fn(),
+    deleteAllRegions() { this.result = []; this.hasUnsavedDraft = true; },
+    deserializeResults(value) { this.result = value; },
+    setDraftId(id) { this.draftId = id; },
+    setDraftRevision(revision) { this.draftRevision = revision; },
+    setDraftSaved() { this.hasUnsavedDraft = false; },
+  };
+  const store = {
+    annotations: [annotation],
+    selectAnnotation: jest.fn((id, options) => wrapper._invokeSelectAnnotation(annotation, annotation, options)),
+  };
+  wrapper.lsf = { annotationStore: store };
+  wrapper.task = { drafts: [{ id: 7, annotation: 17, revision: 3, result }] };
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.saveDraft = jest.fn().mockResolvedValue(true);
+  await wrapper.setAnnotation("17");
+  expect(wrapper.saveDraft).not.toHaveBeenCalled();
+  expect(annotation.result).toEqual(result);
+  expect(annotation.draftId).toBe(7);
+  expect(annotation.draftRevision).toBe(3);
+  expect(annotation.hasUnsavedDraft).toBe(false);
+  // A later real annotation switch must still persist this user's edits.
+  annotation.hasUnsavedDraft = true;
+  await wrapper._invokeSelectAnnotation({ id: "other" }, annotation, {});
+  expect(wrapper.saveDraft).toHaveBeenCalledWith(annotation);
+});
+
 it.each([true, false])("uses persisted confirmation, rather than reset/stale Undo history, for draft navigation: %s", async (dirty) => {
   const wrapper = createDraftWrapper();
   const annotation = { hasUnsavedDraft: dirty, history: { hasChanges: !dirty }, saveDraftImmediatelyWithResults: jest.fn().mockResolvedValue({ $meta: { status: 200 } }) };
