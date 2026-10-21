@@ -19,11 +19,25 @@ class AuthorizationService:
 
     @staticmethod
     def project_role(principal: Principal, project):
-        """Return the effective project-scoped role for a principal."""
-        if principal.local_user_id is None:
+        """Resolve live organization membership before project ownership/role.
+
+        UI organization selection is not the authority for background jobs.
+        """
+        if principal.local_user_id is None or getattr(project, 'organization_id', None) is None:
             return None
 
+        from organizations.models import OrganizationMember
         from projects.models import ProjectMember
+
+        # Project ownership/role rows can outlive organization soft deletion.
+        # A cached principal or residual project role is not organization access.
+        if not OrganizationMember.objects.filter(
+            organization_id=project.organization_id,
+            user_id=principal.local_user_id,
+            user__is_active=True,
+            deleted_at__isnull=True,
+        ).exists():
+            return None
 
         if project.created_by_id == principal.local_user_id:
             return ProjectMember.Role.MANAGER

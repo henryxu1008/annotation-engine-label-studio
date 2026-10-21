@@ -23,6 +23,10 @@ advertised by this implementation. Media references remain references, with no
 claim that remote media bytes are frozen, fetched or checksummed.
 
 Actor identity comes from the trusted identity provider and active local mapping.
+Shared project-role resolution requires a live organization membership and active
+local account before either project ownership or a retained role row grants
+authority. Organization soft deletion therefore also closes legacy review/release
+entrypoints; it does not need to delete historical project-role records.
 Creation, worker start, publication and each frozen-content/download request
 recheck live authority. Both the requester and original creator must remain
 authorized for file access. Historical reviewer role removal does not rewrite
@@ -160,7 +164,10 @@ reads. It cannot use these batch routes even if approved Fork records accidental
 exist. This feature neither creates Fork approvals from Core decisions nor starts
 Core integration, grants a reviewer role, or authorizes external delivery on Core's
 behalf. Legacy single-release API behavior remains separately governed; this work
-does not claim to retrofit its integrity predicate or validate a mixed workflow.
+hardens its shared organization authority guard, but does not retrofit its
+integrity predicate, apply the new batch-mode switch to it, or validate a mixed
+workflow. Switching the UI's selected organization does not itself revoke a
+valid project membership for a background job.
 
 ## Verification entrypoints
 

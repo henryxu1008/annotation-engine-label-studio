@@ -15,7 +15,11 @@ authority. Frozen receipts also retain the legacy mutable-delivery boundary if
 source Submissions are later deleted.
 
 The [PR #98 security review](issue79-pr98-security-review.md) records the
-manifest/artifact graph and publication/revocation race fixes. Keep the complete
+shared organization-authority, manifest/artifact graph and publication/revocation
+race fixes. Shared project-role resolution checks active organization membership
+and local account state before ownership or a retained project role can grant
+authority; keep legacy review/release from bypassing organization revocation.
+The selected UI organization is not a background job's authority. Keep the complete
 sealed inventory, attempt/private-key binding and same-request metadata snapshot
 checks across upgrades. Freeze/publication hold the Project fence and local
 authority rows through commit; lock organization membership before User to match

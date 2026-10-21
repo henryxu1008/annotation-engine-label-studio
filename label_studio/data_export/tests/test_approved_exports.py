@@ -753,6 +753,33 @@ class TestApprovedExports(APITestCase):
             for method in (self.client.get, self.client.head):
                 assert method(self.detail(release, suffix), HTTP_RANGE="bytes=0-10").status_code == 403
 
+    def test_legacy_single_release_is_not_an_organization_revocation_bypass(self):
+        user = UserFactory(active_organization=self.organization)
+        ProjectMember.objects.create(project=self.project, user=user, role="manager")
+        self.client.force_authenticate(user)
+        url = f"/api/submissions/{self.sources[0].pk}/release/"
+        assert self.client.get(url).status_code == 200
+        OrganizationMember.objects.get(user=user, organization=self.organization).soft_delete()
+        user.refresh_from_db()
+        self.client.force_authenticate(user)
+        assert self.client.get(url).status_code in (403, 404)
+
+    def test_removed_organization_reviewer_cannot_create_approval_for_batch_release(self):
+        first = self.sources[0]
+        pending = create_submission(
+            assignment=first.assignment, annotation=first.annotation, actor=self.annotator
+        )
+        OrganizationMember.objects.get(user=self.reviewer, organization=self.organization).soft_delete()
+        self.reviewer.refresh_from_db()
+        self.client.force_authenticate(self.reviewer)
+        response = self.client.post(
+            f"/api/submissions/{pending.pk}/review/",
+            {"decision": "approved", "result_hash": pending.result_hash}, format="json",
+        )
+        assert response.status_code in (403, 404)
+        pending.refresh_from_db()
+        assert pending.status == "pending" and not hasattr(pending, "review")
+
     def test_core_only_policy_switch_during_generation_never_publishes(self):
         release = self.frozen()
         original = service.integrity
