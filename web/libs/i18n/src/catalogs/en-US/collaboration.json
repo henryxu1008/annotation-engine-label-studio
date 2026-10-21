@@ -153,5 +153,6 @@
   "batchErrors_ARTIFACT_INTEGRITY_FAILED": "The export file failed its integrity check. Create a new export.",
   "batchErrors_GENERATION_FAILED": "The export could not be generated. Retry or contact the project manager.",
   "batchErrors_PRIVATE_STORAGE_REQUIRED": "The export could not be generated. Retry or contact the project manager.",
-  "batchDownloadManifest": "Download manifest"
+  "batchDownloadManifest": "Download manifest",
+  "batchMoreHistory": "Next page of exports"
 }

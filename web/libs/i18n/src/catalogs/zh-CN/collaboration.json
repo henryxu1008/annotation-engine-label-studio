@@ -153,5 +153,6 @@
   "batchErrors_ARTIFACT_INTEGRITY_FAILED": "导出文件完整性校验失败，请重新创建导出。",
   "batchErrors_GENERATION_FAILED": "无法生成导出，请重试或联系项目管理员。",
   "batchErrors_PRIVATE_STORAGE_REQUIRED": "无法生成导出，请重试或联系项目管理员。",
-  "batchDownloadManifest": "下载冻结清单"
+  "batchDownloadManifest": "下载冻结清单",
+  "batchMoreHistory": "下一页导出记录"
 }

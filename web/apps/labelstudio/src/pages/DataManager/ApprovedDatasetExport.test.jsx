@@ -62,6 +62,22 @@ it("does not download a late body after the project changes", async () => {
   unmount(); runtime.destroy();
 });
 
+it("recovers a receipt beyond the first history page using its server cursor", async () => {
+  mockCallApi.mockImplementation((method, options) => {
+    if (method === "approvedExportListRaw") return Promise.resolve(raw(options.params.cursor
+      ? { results: [receipt], next_cursor: null } : { results: [{ ...receipt, release_id: "earlier" }], next_cursor: "signed-next" }));
+    return defaults(method);
+  });
+  const { unmount, runtime } = mount();
+  await open();
+  fireEvent.click(await screen.findByTestId("batch-more-history"));
+  await waitFor(() => expect(screen.getByTestId("batch-history").querySelector('option[value="batch-1"]')).not.toBeNull());
+  fireEvent.change(screen.getByTestId("batch-history"), { target: { value: receipt.release_id } });
+  await screen.findByTestId("batch-download-JSON");
+  expect(mockCallApi.mock.calls.some(([method, options]) => method === "approvedExportListRaw" && options.params.cursor === "signed-next")).toBe(true);
+  unmount(); runtime.destroy();
+});
+
 it("does not restore artifact controls from an in-flight poll after permission denial", async () => {
   let resolvePoll;
   let queuedReads = 0;

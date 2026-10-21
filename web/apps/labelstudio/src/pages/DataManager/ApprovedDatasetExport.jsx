@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import { useAPI } from "../../providers/ApiProvider";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { downloadFile } from "../../utils/download";
+import { cn } from "../../utils/bem";
 import "./ApprovedDatasetExport.scss";
 
 export const ApprovedDatasetExport = ({ projectId }) => {
@@ -25,6 +26,7 @@ export const ApprovedDatasetExport = ({ projectId }) => {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState([]);
+  const [historyCursor, setHistoryCursor] = useState(null);
   const currentBatch = useRef(null);
 
   const request = useCallback(async (method, options = {}) => {
@@ -61,7 +63,7 @@ export const ApprovedDatasetExport = ({ projectId }) => {
   useEffect(() => {
     generation.current += 1;
     currentBatch.current = null;
-    setEnabled(false); setOpened(false); setRows([]); setSelected({}); setBatch(null); setError(""); setHistory([]);
+    setEnabled(false); setOpened(false); setRows([]); setSelected({}); setBatch(null); setError(""); setHistory([]); setHistoryCursor(null);
     const epoch = generation.current;
     Promise.resolve().then(() => call.current("approvedExportCapabilitiesRaw", { params: { pk: projectId }, errorFilter: () => true }))
       .then(async (response) => {
@@ -79,7 +81,15 @@ export const ApprovedDatasetExport = ({ projectId }) => {
       const value = await readJson(await request("approvedExportCandidates", { params: next ? { cursor: next } : {} }));
       if (value) { setRows(value.results); setCursor(value.next_cursor); }
       const receipts = await readJson(await request("approvedExportList"));
-      if (receipts) setHistory(receipts.results);
+      if (receipts) { setHistory(receipts.results); setHistoryCursor(receipts.next_cursor); }
+    } finally { setBusy(false); }
+  };
+  const moreHistory = async () => {
+    if (!historyCursor) return;
+    setBusy(true); setError("");
+    try {
+      const receipts = await readJson(await request("approvedExportList", { params: { cursor: historyCursor } }));
+      if (receipts) { setHistory(receipts.results); setHistoryCursor(receipts.next_cursor); }
     } finally { setBusy(false); }
   };
 
@@ -153,14 +163,15 @@ export const ApprovedDatasetExport = ({ projectId }) => {
   };
 
   if (!enabled) return null;
-  return <section className="approved-dataset-export" data-testid="approved-batch-export">
+  const visibleHistory = batch && !history.some((item) => item.release_id === batch.release_id) ? [batch, ...history] : history;
+  return <section className={cn("approved-dataset-export").toClassName()} data-testid="approved-batch-export">
     <button type="button" data-testid="open-approved-batch" onClick={() => { setOpened(!opened); if (!opened) load(); }}>
       {t("batchTitle")}
     </button>
     {opened && <div>
       <p>{t("batchBoundary")}</p>
       <p>{t("batchMediaNotice")}</p>
-      {history.length > 0 && <label>{t("batchHistory")} <select data-testid="batch-history" value={batch?.release_id ?? ""}
+      {visibleHistory.length > 0 && <label>{t("batchHistory")} <select data-testid="batch-history" value={batch?.release_id ?? ""}
         disabled={busy}
         onChange={async (event) => {
           const requested = event.target.value;
@@ -172,8 +183,9 @@ export const ApprovedDatasetExport = ({ projectId }) => {
           } finally { setBusy(false); }
         }}>
         <option value="" disabled>{t("batchChooseHistory")}</option>
-        {history.map((receipt) => <option key={receipt.release_id} value={receipt.release_id}>{receipt.created_at} 路 {t(`batchStates_${receipt.state}`)}</option>)}
+        {visibleHistory.map((receipt) => <option key={receipt.release_id} value={receipt.release_id}>{receipt.created_at} | {t(`batchStates_${receipt.state}`)}</option>)}
       </select></label>}
+      {historyCursor && <button type="button" data-testid="batch-more-history" disabled={busy} onClick={moreHistory}>{t("batchMoreHistory")}</button>}
       {error && <div role="alert" data-testid="batch-error">{t(`batchErrors_${error}`, { defaultValue: t("batchFailed") })}</div>}
       <table><thead><tr><th>{t("batchSelect")}</th><th>{t("batchSource")}</th><th>{t("batchReviewer")}</th></tr></thead>
         <tbody>{rows.map((row) => <tr key={row.submission_id}>
@@ -185,7 +197,7 @@ export const ApprovedDatasetExport = ({ projectId }) => {
         </tr>)}</tbody>
       </table>
       {!rows.length && <p>{t("batchEmpty")}</p>}
-      <div className="approved-dataset-export__actions">
+      <div className={cn("approved-dataset-export").elem("actions").toClassName()}>
         <button type="button" disabled={busy} onClick={() => load()}>{t("batchRefresh")}</button>
         <button type="button" disabled={busy || !cursor} onClick={() => load(cursor)}>{t("next")}</button>
         <label>{t("batchFormat")} <select data-testid="batch-format" value={format} disabled={busy}
