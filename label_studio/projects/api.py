@@ -5,8 +5,8 @@ import os
 import pathlib
 
 from access_control.authorization import authorization
-from access_control.project_access import require_project_manager
 from access_control.identity import resolve_principal
+from access_control.project_access import require_project_manager
 from core.feature_flags import flag_set
 from core.filters import ListFilter
 from core.label_config import config_essential_data_has_changed
@@ -41,8 +41,8 @@ from projects.serializers import (
     ProjectCountsSerializer,
     ProjectImportSerializer,
     ProjectLabelConfigSerializer,
-    ProjectModelVersionExtendedSerializer,
     ProjectMemberSerializer,
+    ProjectModelVersionExtendedSerializer,
     ProjectModelVersionParamsSerializer,
     ProjectReimportSerializer,
     ProjectSerializer,
@@ -372,9 +372,15 @@ class ProjectMemberAPI(generics.RetrieveUpdateDestroyAPIView):
         )
 
     def _locked_project(self):
-        project = generics.get_object_or_404(
-            Project.objects.select_for_update().filter(organization=self.request.user.active_organization),
-            pk=self.kwargs['pk'],
+        from access_control.identity import resolve_actor
+        from access_control.project_operations import SECURITY_CANCEL, lock_project_operation
+
+        principal, _ = resolve_actor(self.request)
+        target_ids = ProjectMember.objects.filter(
+            pk=self.kwargs['member_pk'], project_id=self.kwargs['pk'],
+        ).values_list('user_id', flat=True)
+        project, _ = lock_project_operation(
+            self.kwargs['pk'], principal, SECURITY_CANCEL, related_user_ids=list(target_ids),
         )
         self._authorize_locked_project(project)
         return project

@@ -3,12 +3,12 @@
 import hashlib
 import json
 
+from access_control.authorization import authorization
+from access_control.project_operations import REVIEW, SUBMIT, local_principal, lock_project_operation
 from django.db import transaction
 from django.db.models import Max
-from projects.models import Project
 from rest_framework.exceptions import ValidationError
-
-from tasks.models import ReviewDecision, Submission, TaskAssignment
+from tasks.models import ReviewDecision, Submission, Task, TaskAssignment
 
 
 def _canonical_snapshot(annotation, assignment):
@@ -49,19 +49,24 @@ def create_submission(*, assignment, annotation, actor):
     revisions remain immutable historical evidence.
     """
 
-    Project.objects.select_for_update().get(pk=assignment.project_id)
-
-    assignment = (
-        TaskAssignment.objects.select_for_update()
-        # The nullable annotation join cannot participate in PostgreSQL's
-        # FOR UPDATE. Writes are serialized by the locked assignment, and the
-        # snapshot below uses the annotation supplied by the write service.
-        .select_related('task', 'project', 'assignee')
-        .get(pk=assignment.pk)
-    )
+    principal = local_principal(actor)
+    project, actor = lock_project_operation(assignment.project_id, principal, SUBMIT)
+    task = Task.objects.select_for_update().get(pk=assignment.task_id, project=project)
+    # Single-table locks avoid both nullable joins and backend-specific OF
+    # support. Reuse the already locked, fresh task/project for the snapshot.
+    assignment = TaskAssignment.objects.select_for_update().get(pk=assignment.pk)
+    if assignment.project_id != project.pk or assignment.task_id != task.pk:
+        raise ValidationError({'detail': 'Assignment scope changed before submission.'})
+    assignment.task = task
+    assignment.project = project
 
     if assignment.assignee_id != actor.id:
         raise ValidationError({'detail': 'Only the assignment owner can submit this annotation.'})
+    authorization.require(
+        assignment.status in TaskAssignment.ACTIVE_STATUSES
+        and authorization.can_label_task(principal, assignment.task),
+        'An active task assignment is required to submit.',
+    )
     if assignment.annotation_id != annotation.id:
         raise ValidationError({'detail': 'Annotation does not belong to this assignment.'})
     if annotation.task_id != assignment.task_id or annotation.project_id != assignment.project_id:
@@ -96,11 +101,14 @@ def create_submission(*, assignment, annotation, actor):
 
 
 @transaction.atomic
-def review_submission(*, submission, reviewer, decision, reason=''):
+def review_submission(*, submission, reviewer, decision, reason='', principal=None):
+    principal = principal or local_principal(reviewer)
+    project, reviewer = lock_project_operation(submission.assignment.project_id, principal, REVIEW)
+    authorization.require(authorization.can_review_project(principal, project), 'Project reviewer role is required.')
+    Task.objects.select_for_update().get(pk=submission.assignment.task_id, project=project)
+    TaskAssignment.objects.select_for_update().get(pk=submission.assignment_id, project=project)
     # submitted_by is nullable; its ID is sufficient for the self-review check.
-    submission = Submission.objects.select_for_update().select_related('assignment').get(
-        pk=submission.pk
-    )
+    submission = Submission.objects.select_for_update().get(pk=submission.pk)
 
     if submission.status != Submission.Status.PENDING:
         raise ValidationError({'detail': 'Only pending submissions can be reviewed.'})

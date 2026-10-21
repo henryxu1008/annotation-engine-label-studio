@@ -46,6 +46,7 @@ export const displayCollaborationError = (code, t) => {
     case "assignFailed": return t("assignFailed");
     case "cancelAssignmentFailed": return t("cancelAssignmentFailed");
     case "reviewLoadFailed": return t("reviewLoadFailed");
+    case "myWorkLoadFailed": return t("myWorkLoadFailed");
     case "rejectionReasonRequired": return t("rejectionReasonRequired");
     case "reviewSaveFailed": return t("reviewSaveFailed");
     case "submissionHistoryLoadFailed": return t("submissionHistoryLoadFailed");

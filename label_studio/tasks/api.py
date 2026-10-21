@@ -4,6 +4,7 @@ import logging
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
+from access_control.project_operations import EDIT, SUBMIT, lock_project_operation, require_project_operation
 from core.feature_flags import flag_set
 from core.mixins import GetParentObjectMixin
 from core.permissions import ViewClassPermission, all_permissions
@@ -20,14 +21,15 @@ from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
-from projects.functions.stream_history import fill_history_annotation
 from organizations.models import OrganizationMember
+from projects.functions.stream_history import fill_history_annotation
 from projects.models import Project, ProjectMember
 from rest_framework import generics, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from tasks.assignments import cancel_assignment, create_assignment
 from tasks.drafts import check_submission_draft, lock_drafts, require_draft_revision
 from tasks.exceptions import AssignmentConflictError, DraftConflictError
 from tasks.models import Annotation, AnnotationDraft, Prediction, Submission, Task, TaskAssignment
@@ -78,6 +80,14 @@ def require_assignment_token(request, assignment):
 
 def lock_active_assignment(request, principal, task, *, require_token=True):
     """Lock and revalidate the assignment that authorizes a labeling write."""
+    project, _ = lock_project_operation(
+        task.project_id, principal, EDIT, related_user_ids=[getattr(request.user, 'pk', None)],
+    )
+    if bool_from_request(request.data, 'submit_for_review', False):
+        require_project_operation(project, SUBMIT)
+    # Never use the pre-lock project's configuration or a moved task's scope.
+    task = generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
+    task.project = project
     role = authorization.project_role(principal, task.project)
     if role not in (ProjectMember.Role.ANNOTATOR, ProjectMember.Role.MANAGER):
         raise PermissionDenied('An enabled labeling role is required for this task.')
@@ -744,7 +754,6 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
     def update(self, request, *args, **kwargs):
         # Resolve the trusted server-side actor before touching audit fields.
         principal, actor = resolve_actor(request)
-        user = request.user
 
         # save user history with annotator_id, time & annotation result
         annotation = self.get_object()
@@ -924,9 +933,7 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
             authorization.can_label_task(principal, task),
             'An active task assignment is required to create an annotation.',
         )
-        assignment = authorization.active_task_assignment(principal, task)
-        assignment = TaskAssignment.objects.select_for_update().get(pk=assignment.pk)
-        require_assignment_token(self.request, assignment)
+        assignment = lock_active_assignment(self.request, principal, task)
         if assignment.annotation_id is not None:
             raise ValidationError({'detail': 'This assignment already owns an annotation; update it instead.'})
 
@@ -1004,7 +1011,7 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
 
         logger.debug(f'Save activity for user={self.request.user}')
         self.request.user.activity_at = timezone.now()
-        self.request.user.save()
+        self.request.user.save(update_fields=['activity_at'])
 
         # Release task if it has been taken at work (it should be taken by the same user, or it makes sentry error
         logger.debug(f'User={user} releases task={task}')
@@ -1206,7 +1213,7 @@ class SubmissionReviewAPI(generics.GenericAPIView):
             Submission.objects.select_related('assignment__project', 'submitted_by'),
             pk=self.kwargs['pk'],
         )
-        principal = resolve_principal(request)
+        principal, actor = resolve_actor(request)
         authorization.require(
             authorization.can_review_submission(principal, submission),
             'Project reviewer role is required to review this submission.',
@@ -1216,7 +1223,8 @@ class SubmissionReviewAPI(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         review_submission(
             submission=submission,
-            reviewer=request.user,
+            reviewer=actor,
+            principal=principal,
             decision=serializer.validated_data['decision'],
             reason=serializer.validated_data.get('reason', ''),
         )
@@ -1292,12 +1300,10 @@ class TaskAssignmentListCreateAPI(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         task = serializer.validated_data['task']
-        principal = resolve_principal(self.request)
-        authorization.require(
-            authorization.can_manage_task(principal, task),
-            'Project manager role is required to assign tasks.',
+        principal, _ = resolve_actor(self.request)
+        serializer.instance = create_assignment(
+            task=task, assignee=serializer.validated_data['assignee'], principal=principal,
         )
-        serializer.save(project=task.project, assigned_by=self.request.user)
 
 
 class TaskAssignmentEligibleAssigneePagination(PageNumberPagination):
@@ -1367,12 +1373,8 @@ class TaskAssignmentAPI(generics.RetrieveDestroyAPIView):
         )
 
     def perform_destroy(self, instance):
-        principal = resolve_principal(self.request)
-        authorization.require(
-            authorization.can_manage_task(principal, instance.task),
-            'Project manager role is required to cancel task assignments.',
-        )
-        instance.cancel()
+        principal, _ = resolve_actor(self.request)
+        cancel_assignment(assignment=instance, principal=principal)
 
 
 @method_decorator(

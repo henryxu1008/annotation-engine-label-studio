@@ -1,6 +1,7 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license.
 """
 from django.urls import include, path
+from tasks.my_work import MyWorkAPI
 
 from . import api, views
 
@@ -18,6 +19,7 @@ _api_urlpatterns = [
     # CRUD
     path('', api.ProjectListAPI.as_view(), name='project-list'),
     path('<int:pk>/', api.ProjectAPI.as_view(), name='project-detail'),
+    path('<int:pk>/my-work/', MyWorkAPI.as_view(), name='project-my-work'),
     path('<int:pk>/members/', api.ProjectMemberListCreateAPI.as_view(), name='project-member-list'),
     path(
         '<int:pk>/members/candidates/',
