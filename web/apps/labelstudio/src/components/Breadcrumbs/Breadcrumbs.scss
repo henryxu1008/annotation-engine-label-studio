@@ -68,6 +68,11 @@
 
     &:nth-child(2) {
       min-width: 0;
+
+      & > a {
+        min-width: 0;
+        overflow: hidden;
+      }
     }
 
     &:only-child {
