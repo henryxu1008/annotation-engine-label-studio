@@ -47,6 +47,14 @@ private key. Downloads use the validated metadata objects for the subsequent
 file-size/hash check; they do not reload a different artifact row. Inventory,
 metadata, attempt or private-pointer drift quarantines the receipt.
 
+The configured private export root is reserved from generic LocalFiles storage
+even when the batch policy is disabled or Core-only. LocalFiles configuration,
+direct JSON/blob import and recursive scans cannot target private artifacts;
+symlink aliases are resolved before that decision. Generic local-file HTTP
+delivery rejects the private area before ETag/Range handling and checks actual
+directory containment for an authorized storage root, rather than string-prefix
+similarity. Approved artifacts must use the dedicated release download gate.
+
 There is no new release permission for a reviewer, annotator, organization admin
 or unscoped superuser. Server mode and project scope apply to every method,
 including HEAD and OPTIONS. Every resumed Range request authenticates again;
@@ -70,7 +78,7 @@ must supply:
   HTTP health/enqueue connections have three-second connect/read timeouts,
   independently of the worker's normal blocking dequeue connection.
 * `APPROVED_EXPORT_ROOT`: a private filesystem directory outside MEDIA_ROOT and
-  STATIC_ROOT. Default: `BASE_DATA_DIR/approved-exports`. Do not expose it through
+  STATIC_ROOT; an empty root is rejected. Default: `BASE_DATA_DIR/approved-exports`. Do not expose it through
   a static server, signed URL, Nginx alias or cloud storage download link.
 
 The validated background identity provider is the existing local provider.

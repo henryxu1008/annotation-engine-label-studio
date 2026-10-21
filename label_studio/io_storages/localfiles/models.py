@@ -15,6 +15,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+from data_export.boundary import is_approved_export_path
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
@@ -26,6 +27,7 @@ from io_storages.base_models import (
 from io_storages.localfiles.functions import normalize_storage_path
 from io_storages.utils import StorageObject, load_tasks_json
 from tasks.models import Annotation
+from rest_framework.exceptions import PermissionDenied
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +50,14 @@ class LocalFilesMixin(models.Model):
         super().clean()
         if self.path is not None:
             self.path = normalize_storage_path(self.path)
+            if is_approved_export_path(self.path):
+                raise PermissionDenied()
 
     def save(self, *args, **kwargs):
         if self.path is not None:
             self.path = normalize_storage_path(self.path)
+            if is_approved_export_path(self.path):
+                raise PermissionDenied()
         super().save(*args, **kwargs)
 
     def _get_storage_path_or_raise(self, exception_cls=ValueError) -> str:
@@ -66,6 +72,8 @@ class LocalFilesMixin(models.Model):
         normalized = normalize_storage_path(self.path)
         if not normalized:
             raise exception_cls('Path must be set for Local Files storage')
+        if is_approved_export_path(normalized):
+            raise PermissionDenied()
         return normalized
 
     @staticmethod
@@ -131,7 +139,7 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
         # In other words, the task IDs are sorted by filename order.
         iterator = path.rglob('*') if self.recursive_scan else path.glob('*')
         for file in sorted(iterator, key=os.path.basename):
-            if file.is_file():
+            if file.is_file() and not is_approved_export_path(file):
                 key = file.name
                 if regex and not regex.match(key):
                     logger.debug(key + ' is skipped by regex filter')
@@ -152,6 +160,8 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
 
     def get_data(self, key) -> list[StorageObject]:
         path = Path(key)
+        if is_approved_export_path(path):
+            raise PermissionDenied()
         if self.use_blob_urls:
             # include self-hosted links pointed to local resources via
             # {settings.HOSTNAME}/data/local-files?d=<path/to/local/dir>

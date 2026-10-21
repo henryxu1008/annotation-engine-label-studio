@@ -638,7 +638,10 @@ def integrity(release):
 
 
 def private_root():
-    root = Path(settings.APPROVED_EXPORT_ROOT).resolve()
+    configured = getattr(settings, "APPROVED_EXPORT_ROOT", None)
+    if not configured:
+        fail("PRIVATE_STORAGE_REQUIRED", 503)
+    root = Path(configured).resolve()
     for public in (settings.MEDIA_ROOT, settings.STATIC_ROOT):
         if public and (root == Path(public).resolve() or Path(public).resolve() in root.parents):
             fail("PRIVATE_STORAGE_REQUIRED", 503)

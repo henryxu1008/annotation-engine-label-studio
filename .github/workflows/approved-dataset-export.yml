@@ -60,7 +60,7 @@ jobs:
         working-directory: label_studio
         run: |
           poetry run python manage.py makemigrations --check --dry-run
-          poetry run pytest -q data_export/tests/test_approved_exports.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py --junitxml=/tmp/issue79-postgres.xml
+          poetry run pytest -q data_export/tests/test_approved_exports.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py io_storages/tests/test_localfiles_view.py io_storages/tests/test_localfiles_validation.py io_storages/tests/test_localfiles_serializers.py io_storages/tests/test_localfiles_functions.py io_storages/tests/test_localfiles_export.py --junitxml=/tmp/issue79-postgres.xml
       - uses: actions/setup-node@v6
         with:
           node-version: "20"

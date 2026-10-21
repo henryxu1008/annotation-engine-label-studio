@@ -27,6 +27,12 @@ soft deletion. Verify real PostgreSQL revocation races, not only mocked stale
 permission checks. These local authority locks do not define an external identity
 provider's consistency protocol or authorize Core integration.
 
+Reserve the configured approved-export filesystem root from generic LocalFiles
+configuration, scans, JSON/blob imports and HTTP media delivery even with release
+policy disabled. Resolve symlinks, check real directory containment instead of a
+lexical prefix, and deny private paths before conditional/Range processing. An
+import storage owned by another project is not an artifact download capability.
+
 ## Objective
 
 Use Label Studio Community Edition as the annotation execution engine while the host platform remains the source of truth for business identity, project membership, task assignment, review policy, and release decisions.

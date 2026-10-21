@@ -4,6 +4,8 @@ import json
 import tempfile
 import uuid
 import zipfile
+from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 from django.db import connection, IntegrityError, transaction
@@ -792,6 +794,107 @@ class TestApprovedExports(APITestCase):
             self.generate(release)
         assert release.state == "blocked_auth" and not release.artifacts.exists() and not release.manifest
         assert self.client.get(f"/api/submissions/{self.sources[0].pk}/").status_code == 200
+
+    @contextmanager
+    def localfiles_scope(self):
+        from io_storages.localfiles.models import LocalFilesImportStorage
+
+        with override_settings(
+            APPROVED_EXPORT_ROOT=str(Path(self.root.name) / "private"),
+            LOCAL_FILES_SERVING_ENABLED=True,
+            LOCAL_FILES_DOCUMENT_ROOT=str(Path(self.root.name).parent),
+        ):
+            release = self.frozen()
+            self.generate(release)
+            assert release.state == "ready", release.error_code
+            artifact = release.artifacts.get(format="JSON")
+            file = service.artifact_path(artifact.storage_key)
+            other = ProjectFactory(organization=self.organization)
+            user = UserFactory(active_organization=self.organization)
+            ProjectMember.objects.create(project=other, user=user, role="manager")
+            storage = LocalFilesImportStorage.objects.create(
+                project=other, path=self.root.name, recursive_scan=True, use_blob_urls=False
+            )
+            storage.validate_connection()
+            self.client.force_authenticate(user)
+            assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 404
+            yield release, storage, file
+
+    def localfile_url(self, file):
+        return "/data/local-files/?d=" + file.relative_to(Path(self.root.name).parent).as_posix()
+
+    def test_empty_private_root_cannot_default_to_the_working_directory(self):
+        from rest_framework.exceptions import APIException
+
+        with override_settings(APPROVED_EXPORT_ROOT=""):
+            with self.assertRaises(APIException) as caught:
+                service.private_root()
+        assert caught.exception.status_code == 503
+        assert str(caught.exception.detail) == "PRIVATE_STORAGE_REQUIRED"
+
+    def test_localfiles_cannot_serve_foreign_private_exports_or_cached_metadata(self):
+        with self.localfiles_scope() as (release, storage, file):
+            self.policy["projects"][f"{self.organization.pk}:{self.project.pk}"]["mode"] = "core_only_internal"
+            for method in (self.client.get, self.client.head):
+                for headers in ({}, {"HTTP_RANGE": "bytes=0-10"}, {"HTTP_IF_NONE_MATCH": "*"}):
+                    response = method(self.localfile_url(file), **headers)
+                    if response.streaming:
+                        b"".join(response.streaming_content)
+                    denied = (403, 404, 405) if method.__name__ == "head" else (403, 404)
+                    assert response.status_code in denied
+
+    def test_localfiles_import_cannot_scan_or_read_private_exports(self):
+        from rest_framework.exceptions import PermissionDenied
+
+        with self.localfiles_scope() as (release, storage, file):
+            assert not list(storage.iter_keys())
+            for blob in (False, True):
+                storage.use_blob_urls = blob
+                with self.assertRaises(PermissionDenied):
+                    storage.get_data(str(file))
+
+    def test_localfiles_configuration_cannot_target_private_export_directory(self):
+        from rest_framework.exceptions import PermissionDenied
+
+        with self.localfiles_scope() as (release, storage, file):
+            storage.path = str(file.parent)
+            with self.assertRaises(PermissionDenied):
+                storage.validate_connection()
+            with self.assertRaises(PermissionDenied):
+                storage.save(update_fields=["path"])
+
+    def test_localfiles_private_symlink_is_not_a_delivery_or_import_path(self):
+        from rest_framework.exceptions import PermissionDenied
+
+        with self.localfiles_scope() as (release, storage, file):
+            alias = Path(self.root.name) / "alias.json"
+            alias.symlink_to(file)
+            response = self.client.get(self.localfile_url(alias))
+            if response.streaming:
+                b"".join(response.streaming_content)
+            assert response.status_code in (403, 404)
+            assert not list(storage.iter_keys())
+            with self.assertRaises(PermissionDenied):
+                storage.get_data(str(alias))
+
+    def test_localfiles_storage_root_is_a_directory_boundary_not_a_string_prefix(self):
+        with self.localfiles_scope() as (release, storage, file):
+            owned = Path(self.root.name) / "owned"
+            owned.mkdir()
+            own_file = owned / "public.txt"
+            own_file.write_bytes(b"allowed")
+            storage.path = str(owned)
+            storage.save(update_fields=["path"])
+            valid = self.client.get(self.localfile_url(own_file))
+            assert valid.status_code == 200 and b"".join(valid.streaming_content) == b"allowed"
+            sibling = Path(self.root.name) / "owned-other"
+            sibling.mkdir()
+            forbidden = sibling / "foreign.txt"
+            forbidden.write_bytes(b"outside the authorized directory")
+            response = self.client.get(self.localfile_url(forbidden))
+            if response.streaming:
+                b"".join(response.streaming_content)
+            assert response.status_code in (403, 404)
 
 
 class TestApprovedExportConcurrency(TransactionTestCase):
