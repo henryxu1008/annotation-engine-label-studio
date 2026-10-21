@@ -1,5 +1,17 @@
 # Authorization integration plan
 
+## Proposed #79 batch export design (not implemented)
+
+The [approved Submission batch export design](approved-dataset-export-design.md)
+is **PROPOSED / DESIGN_ONLY** against `main@88809e61`. It specifies a separate,
+default-disabled project-scoped batch path, exact approved immutable inputs,
+server-side authority checks at freeze/job/download boundaries, private artifacts
+and a local frozen manifest. It preserves existing mutable export/storage guards
+and keeps Core-only-review ordinary internal acquisition separate from external
+Fork-approved export. Host DatasetVersion and cross-system ReleaseManifest remain
+owned by #80/Host. This proposal grants no implementation, merge, deployment or
+Core integration authority; the user must confirm the design before development.
+
 ## Objective
 
 Use Label Studio Community Edition as the annotation execution engine while the host platform remains the source of truth for business identity, project membership, task assignment, review policy, and release decisions.

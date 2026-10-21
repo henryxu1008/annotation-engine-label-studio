@@ -1,0 +1,26 @@
+{
+  "filters": {
+    "task_id": null
+  },
+  "items": [
+    {
+      "result_hash": "b504321916c83160b83881602b88f73d6d9d1d5714dd7aaf9fd8d23187527d52",
+      "revision": 2,
+      "submission_id": 601
+    },
+    {
+      "result_hash": "e0f52dd36de7a72ba631be92266780c4a591d38d4fa765a3ea7260bf80cf3bbe",
+      "revision": 1,
+      "submission_id": 602
+    },
+    {
+      "result_hash": "01534242774cd26afac6e6a86d0ece559490767e80ab5729bdcf963d0a0df1c0",
+      "revision": 3,
+      "submission_id": 603
+    }
+  ],
+  "output": {
+    "format": "JSONL",
+    "resource_mode": "references_only"
+  }
+}
