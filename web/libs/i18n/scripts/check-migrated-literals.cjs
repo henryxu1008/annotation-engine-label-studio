@@ -7,6 +7,14 @@ const { parse } = require("@babel/parser");
 const scopedFiles = require("./migrated-files.json");
 
 const allowed = {
+  "libs/editor/src/tools/Zoom.jsx": [
+    { text: "pan", line: 19, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+    { text: "zoom-in", line: 30, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+    { text: "zoom-out", line: 58, reason: "Upstream automation selector; visible tool guidance uses the locale catalog." },
+  ],
+  "libs/editor/src/tools/Selection.js": [
+    { text: "move-tool", line: 16, reason: "Upstream tool identifier; visible tool guidance uses the locale catalog." },
+  ],
   "apps/labelstudio/src/pages/Home/HomePage.tsx": [
     { text: "Home", line: 220, reason: "Static route metadata; RoutesProvider translates the root breadcrumb." },
   ],
@@ -20,8 +28,8 @@ const allowed = {
     { text: "Members", line: 523, reason: "Static route metadata; settings menu and breadcrumb translate by fixed child path." },
   ],
   "apps/labelstudio/src/pages/ExportPage/ExportPage.jsx": [
-    { text: "label-studio export", line: 322, reason: "Executable CLI syntax shown verbatim in timeout guidance." },
-    { text: "--export-path=<output-path>", line: 322, reason: "Executable CLI argument syntax shown verbatim in timeout guidance." },
+    { text: "label-studio export", line: 338, reason: "Executable CLI syntax shown verbatim in timeout guidance." },
+    { text: "--export-path=<output-path>", line: 338, reason: "Executable CLI argument syntax shown verbatim in timeout guidance." },
   ],
   "apps/labelstudio/src/pages/Settings/index.jsx": [
     { text: "Settings", line: 90, reason: "Static route metadata; RoutesProvider translates the settings breadcrumb by route path." },
@@ -31,11 +39,11 @@ const allowed = {
     { text: "GitHub", line: 249, reason: "External service brand name." },
   ],
   "apps/labelstudio/src/pages/CreateProject/Import/Import.jsx": [
-    { text: "PDF", line: 466, reason: "The PDF file-format acronym is identical in both locales." },
+    { text: "PDF", line: 468, reason: "The PDF file-format acronym is identical in both locales." },
   ],
   "apps/labelstudio/src/pages/DataManager/DataManager.jsx": [
-    { text: "English", line: 100, reason: "Language names are self-identifying choices." },
-    { text: "简体中文", line: 101, reason: "Language names are self-identifying choices." },
+    { text: "English", line: 105, reason: "Language names are self-identifying choices." },
+    { text: "简体中文", line: 106, reason: "Language names are self-identifying choices." },
   ],
   "libs/app-common/src/pages/AccountSettings/sections/Hotkeys/Import.tsx": [
     { text: '[{"id": 1, "section": "annotation-actions", "element": "button", "label": "Save", "key": "Ctrl+S"}]', line: 191, reason: "Example serialized hotkey payload; values must remain importable." },

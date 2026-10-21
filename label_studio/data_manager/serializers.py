@@ -464,6 +464,7 @@ class DataManagerTaskSerializer(TaskSerializer):
     state = FSMStateField(read_only=True)  # FSM state - automatically uses annotation if present
     assignment_id = serializers.SerializerMethodField(required=False, read_only=True)
     assignment_version = serializers.SerializerMethodField(required=False, read_only=True)
+    can_label = serializers.SerializerMethodField(read_only=True)
 
     CHAR_LIMITS = 500
 
@@ -540,6 +541,10 @@ class DataManagerTaskSerializer(TaskSerializer):
     def get_assignment_version(self, task):
         assignment = self._get_current_assignment(task)
         return assignment.version if assignment else None
+
+    def get_can_label(self, task):
+        request = self.context.get('request')
+        return request is not None and authorization.can_label_task(resolve_principal(request), task)
 
     def _pretty_results(self, task, field, unique=False):
         if not hasattr(task, field) or getattr(task, field) is None:
@@ -658,10 +663,11 @@ class DataManagerTaskSerializer(TaskSerializer):
         if not isinstance(task, Task) or not self.context.get('drafts'):
             return []
 
-        drafts = task.drafts
-        if 'request' in self.context and hasattr(self.context['request'], 'user'):
-            principal = resolve_principal(self.context['request'])
-            drafts = drafts.filter(user_id=principal.local_user_id)
+        assignment = self._get_current_assignment(task)
+        drafts = (
+            task.drafts.filter(user_id=assignment.assignee_id, assignment=assignment)
+            if assignment else task.drafts.none()
+        )
 
         serializer_class = self.get_drafts_serializer()
         return serializer_class(drafts, many=True, read_only=True, default=True, context=self.context).data

@@ -1,5 +1,14 @@
 {
   "tasks": "Tasks",
+  "labelQueueLoadFailed": "Unable to load labeling tasks",
+  "labelQueueLoadFailedDescription": "The labeling queue could not be loaded. Retry or return to the task list.",
+  "retryQueue": "Retry",
+  "backToTaskList": "Back to task list",
+  "projectSummaryStorageSync": "Storage sync",
+  "projectSummaryFilteredTasks": "Filtered tasks",
+  "projectSummaryTotalTasks": "Total tasks in the project",
+  "projectSummarySubmittedAnnotations": "Submitted annotations",
+  "projectSummaryPredictions": "Predictions",
   "missingTask": "The task you are trying to access does not exist or is no longer available.",
   "missingProject": "The project you are trying to access does not exist or is no longer available.",
   "projectUnavailable": "Project was deleted or not yet created",
@@ -282,5 +291,12 @@
   "decreaseColumns": "Decrease columns number",
   "increaseColumns": "Increase columns number",
   "fitImagesToWidth": "Fit images to width",
-  "gridSettings": "Grid settings"
+  "gridSettings": "Grid settings",
+  "draftSaveError": "There was an error saving your draft",
+  "taskAssignmentReadOnly": "This task is read-only. Ask a project manager to assign it to you before labeling.",
+  "exportImmutableTitle": "Export approved submissions through Release",
+  "exportImmutableDescription": "This project has formal submissions, so traditional project export is disabled. Use Release to download approved immutable submissions. Pending submissions cannot be released.",
+  "exportFormatsLoading": "Loading export formats…",
+  "exportFormatsUnavailable": "Export formats could not be loaded. Close this dialog and try again.",
+  "confirmTextBeforeLeaving": "Confirm or clear the text you are entering before leaving this task."
 }

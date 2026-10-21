@@ -6,6 +6,7 @@ import { Spinner } from "../../components";
 import { modal } from "../../components/Modal/Modal";
 import { Space } from "../../components/Space/Space";
 import { useAPI } from "../../providers/ApiProvider";
+import { useAuth } from "@humansignal/core/providers/AuthProvider";
 import { useProject } from "../../providers/ProjectProvider";
 import { useContextProps, useParams } from "../../providers/RoutesProvider";
 import { addCrumb, deleteCrumb } from "../../services/breadrumbs";
@@ -23,9 +24,9 @@ import "./DataManager.scss";
 
 const loadDependencies = () => [import("@humansignal/datamanager"), import("@humansignal/editor")];
 
-const initializeDataManager = async (root, props, params) => {
+const initializeDataManager = (root, props, params) => {
   if (!window.LabelStudio) throw Error("Label Studio Frontend doesn't exist on the page");
-  if (!root && root.dataset.dmInitialized) return;
+  if (!root || root.dataset.dmInitialized) return;
 
   root.dataset.dmInitialized = true;
 
@@ -66,16 +67,20 @@ const CollaborationModalTitle = ({ kind, taskId }) => {
   const { t } = useLocaleTranslation("collaboration");
   if (kind === "assignments") return t("taskAssignmentsTitle", { id: taskId });
   if (kind === "reviews") return t("reviewSubmissionsTitle");
+  if (kind === "submissions") return t("submissionHistory");
   return t("releaseWorkspaceTitle");
 };
 
 const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
   const { t } = useLocaleTranslation("app");
+  const { user } = useAuth();
+  const ready = Boolean(user?.id);
   const [preference, setLocalPreference] = useState(initialPreference ?? "auto");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
 
   const change = async (event) => {
+    if (!ready) return;
     const next = event.target.value;
     if (next !== "auto" && !isDisplayLocale(next)) return;
     setSaving(true);
@@ -93,7 +98,7 @@ const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
       data-testid="collaboration-language-select"
       aria-label={t("displayLanguage")}
       value={preference}
-      disabled={saving}
+      disabled={!ready || saving}
       onChange={change}
     >
       <option value="auto">{t("languageAutomatic")}</option>
@@ -121,7 +126,7 @@ export const DataManagerPage = ({ ...props }) => {
   const dataManagerRef = useRef();
   const projectId = project?.id;
 
-  const init = useCallback(async () => {
+  const init = useCallback(async (isCancelled) => {
     if (!window.LabelStudio) return;
     if (!window.DataManager) return;
     if (!root.current) return;
@@ -132,16 +137,20 @@ export const DataManagerPage = ({ ...props }) => {
       params: { project: project.id },
     });
 
+    // A slow backend response can arrive after navigation or a newer init
+    // effect. Never construct a workspace for the disposed page.
+    if (isCancelled() || !root.current || dataManagerRef.current) return;
+
     const interactiveBacked = (mlBackends ?? []).find(({ is_interactive }) => is_interactive);
 
-    const dataManager = (dataManagerRef.current =
-      dataManagerRef.current ??
-      (await initializeDataManager(root.current, props, {
-        ...params,
-        project,
-        autoAnnotation: isDefined(interactiveBacked),
-        locale: latestLocale.current,
-      })));
+    const dataManager = initializeDataManager(root.current, props, {
+      ...params,
+      project,
+      autoAnnotation: isDefined(interactiveBacked),
+      locale: latestLocale.current,
+    });
+    if (!dataManager) return;
+    dataManagerRef.current = dataManager;
 
     Object.assign(window, { dataManager });
 
@@ -255,9 +264,14 @@ export const DataManagerPage = ({ ...props }) => {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     Promise.all(dependencies)
-      .then(() => setLoading(false))
-      .then(init);
+      .then(() => {
+        if (cancelled) return;
+        setLoading(false);
+        return init(() => cancelled);
+      });
+    return () => { cancelled = true; };
   }, [init]);
 
   useEffect(() => {
@@ -357,6 +371,7 @@ DataManagerPage.context = ({ dmRef }) => {
   }, [project?.id]);
 
   const openAssignments = () => {
+    if (!localePreference.ready) return;
     const taskId = dmRef?.store?.taskStore?.selected?.id;
 
     if (!taskId) {
@@ -376,6 +391,7 @@ DataManagerPage.context = ({ dmRef }) => {
   };
 
   const openReviews = () => {
+    if (!localePreference.ready) return;
     modal({
       title: <CollaborationModalTitle kind="reviews" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
@@ -385,10 +401,11 @@ DataManagerPage.context = ({ dmRef }) => {
   };
 
   const openReleases = () => {
+    if (!localePreference.ready) return;
     modal({
-      title: <CollaborationModalTitle kind="releases" />,
+      title: <CollaborationModalTitle kind={canManageAssignments ? "releases" : "submissions"} />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <SubmissionReleaseWorkspace projectId={project.id} />,
+      body: <SubmissionReleaseWorkspace projectId={project.id} allowRelease={canManageAssignments} />,
       style: { width: 960 },
     });
   };
@@ -446,7 +463,7 @@ DataManagerPage.context = ({ dmRef }) => {
         <Button
           size="small"
           look="outlined"
-          disabled={mode === "explorer"}
+          disabled={mode === "explorer" || !localePreference.ready}
           onClick={openAssignments}
           data-testid="manage-task-assignments"
         >
@@ -454,22 +471,22 @@ DataManagerPage.context = ({ dmRef }) => {
         </Button>
       )}
 
-      {canManageAssignments && (
-        <Button
-          size="small"
-          look="outlined"
-          onClick={openReleases}
-          data-testid="open-release-workspace"
-        >
-          {tc("releases")}
-        </Button>
-      )}
+      <Button
+        size="small"
+        look="outlined"
+        onClick={openReleases}
+        disabled={!localePreference.ready}
+        data-testid={canManageAssignments ? "open-release-workspace" : "open-submission-history"}
+      >
+        {tc(canManageAssignments ? "releases" : "submissionHistory")}
+      </Button>
 
       {canReviewSubmissions && (
         <Button
           size="small"
           look="outlined"
           onClick={openReviews}
+          disabled={!localePreference.ready}
           data-testid="open-review-workspace"
         >
           {tc("reviews")}

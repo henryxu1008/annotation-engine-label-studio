@@ -22,7 +22,7 @@ describe('main application display locale', () => {
   };
 
   const ensureAccountLocale = (value: 'auto' | 'en-US' | 'zh-CN') => {
-    cy.get('[data-testid="language-preference-select"]').then(($select) => {
+    cy.get('[data-testid="language-preference-select"]').should('be.enabled').then(($select) => {
       if ($select.val() !== value) chooseAccountLocale(value);
     });
     cy.get('[data-testid="language-preference-select"]').should('have.value', value);
@@ -77,6 +77,66 @@ describe('main application display locale', () => {
     // The authenticated preference or Accept-Language takes over after login.
     cy.get('body').should('contain.text', 'Enterprise Browser E2E');
   });
+
+  for (const locale of ['en-US', 'zh-CN'] as const) {
+    it(`waits for Whoami before saving menu language ${locale}`, () => {
+      cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
+      ensureAccountLocale('auto');
+      let releaseWhoami!: () => void;
+      const gate = new Promise<void>((resolve) => { releaseWhoami = resolve; });
+      let writes = 0;
+      cy.intercept({ method: 'GET', url: '**/api/current-user/whoami', times: 1 }, (request) =>
+        gate.then(() => { request.continue(); }),
+      ).as('pendingActor');
+      cy.intercept('PATCH', '**/api/current-user/locale*', () => { writes += 1; }).as('confirmedLocale');
+      cy.visit('/projects');
+      cy.get('[data-testid="user-menu-trigger"]').click();
+      cy.get('[data-testid="menu-language-select"]').should('be.disabled');
+      cy.get('[data-testid="menu-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => {
+        expect(writes, 'no language write before authenticated actor').to.eq(0);
+        releaseWhoami();
+      });
+      cy.wait('@pendingActor').its('response.statusCode').should('eq', 200);
+      cy.get('[data-testid="menu-language-select"]').should('be.enabled').select(locale);
+      cy.wait('@confirmedLocale').then(({ request, response }) => {
+        expect(request.body).to.deep.equal({ preference: locale });
+        expect(response?.statusCode).to.eq(200);
+      });
+      cy.get('html').should('have.attr', 'lang', locale);
+      cy.get('[data-testid="menu-language-select"]').should('have.value', locale);
+      cy.get('[data-testid="menu-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => expect(writes, 'one confirmed language save').to.eq(1));
+    });
+
+    it(`saves language ${locale} while a confirmed actor refresh is pending`, () => {
+      cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
+      ensureAccountLocale('auto');
+      let releaseRefresh!: () => void;
+      let refreshSeen = false;
+      const gate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+      cy.intercept('GET', '**/api/current-user/whoami', (request) => {
+        refreshSeen = true;
+        return gate.then(() => { request.continue(); });
+      }).as('actorRefresh');
+      cy.intercept('PATCH', '**/api/current-user/locale*').as('saveDuringRefresh');
+      // The real profile Save invalidates the existing actor query. Hold that
+      // background refresh, rather than replacing the authenticated response.
+      cy.get('input[name="first_name"]').closest('form').find('button').click();
+      cy.wrap(null).should(() => { expect(refreshSeen, 'real actor refresh started').to.eq(true); });
+      cy.get('[data-testid="language-preference-select"]').should('be.enabled').select(locale);
+      cy.wait('@saveDuringRefresh').then(({ request, response }) => {
+        expect(request.body).to.deep.equal({ preference: locale });
+        expect(response?.statusCode).to.eq(200);
+      });
+      cy.get('html').should('have.attr', 'lang', locale);
+      cy.get('[data-testid="account-language-preference"] [role="alert"]').should('not.exist');
+      cy.then(() => { releaseRefresh(); });
+      cy.wait('@actorRefresh').its('response.statusCode').should('eq', 200);
+      cy.get('[data-testid="language-preference-select"]').should('have.value', locale);
+      cy.get('html').should('have.attr', 'lang', locale);
+    });
+  }
 
   it('saves a confirmed account preference and preserves unsaved profile values', () => {
     cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
@@ -410,7 +470,17 @@ describe('main application display locale', () => {
       cy.document().then((document) => { document.documentElement.style.zoom = '200%'; });
       cy.get('[data-testid="home-action-createProject"]').scrollIntoView().should('be.visible');
       cy.get('[data-testid="home-action-inviteMembers"]').scrollIntoView().should('contain.text', copy.invite).click();
-      cy.get(`button[aria-label="${copy.inviteCopy}"]`).scrollIntoView().should('be.visible');
+      const copyButton = `button[aria-label="${copy.inviteCopy}"]`;
+      // Wait for the fixed dialog's geometry to settle before scrolling. Use
+      // native scrolling so root CSS zoom does not distort pixel calculations.
+      cy.get(copyButton).should(($button) => {
+        const modal = $button[0].closest('.lsf-modal-ls')!;
+        const window = modal.ownerDocument.defaultView!;
+        expect(window.getComputedStyle(modal).opacity).to.eq('1');
+        const transform = window.getComputedStyle(modal.firstElementChild!).transform;
+        expect(new window.DOMMatrixReadOnly(transform === 'none' ? undefined : transform).isIdentity).to.eq(true);
+      }).then(($button) => $button[0].scrollIntoView({ block: 'nearest' }));
+      cy.get(copyButton).should('be.visible');
     });
   }
 
@@ -421,5 +491,31 @@ describe('main application display locale', () => {
     cy.get('[data-testid="language-preference-select"]').scrollIntoView().should('be.visible').focus().should('have.focus');
     cy.get('[data-testid="user-menu-trigger"]').scrollIntoView().focus().type('{enter}');
     cy.get('[data-testid="menu-language-select"]').should('be.visible').focus().should('have.focus');
+  });
+
+  it('keeps the user menu usable after rapid open-close-open transitions', () => {
+    cy.loginAs(fixture.users.manager.email, fixture.password, '/user/account/personal-info');
+    ensureAccountLocale('en-US');
+    cy.get('[data-testid="user-menu-trigger"]').should('be.visible').then(($trigger) => {
+      // Native events on successive frames overlap the dropdown animation.
+      // Normal Cypress clicks wait for animations and would miss this schedule.
+      return new Cypress.Promise<void>((resolve) => {
+        const trigger = $trigger[0];
+        const window = trigger.ownerDocument.defaultView!;
+        trigger.click();
+        window.requestAnimationFrame(() => {
+          trigger.click();
+          window.requestAnimationFrame(() => { trigger.click(); resolve(); });
+        });
+      });
+    });
+    cy.get('[data-testid="menu-language-select"]').should('be.visible').select('zh-CN');
+    cy.get('html').should('have.attr', 'lang', 'zh-CN');
+    cy.get('[data-testid="user-menu-trigger"]').click();
+    // A settled close unmounts the menu; do not require a hidden control to exist.
+    cy.get('[data-testid="menu-language-select"]').should('not.exist');
+    cy.get('[data-testid="user-menu-trigger"]').click();
+    cy.get('[data-testid="menu-language-select"]').should('be.visible').select('en-US');
+    cy.get('html').should('have.attr', 'lang', 'en-US');
   });
 });

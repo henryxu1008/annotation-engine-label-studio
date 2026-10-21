@@ -91,6 +91,8 @@
   "libs/editor/src/components/TopBar/Controls.jsx",
   "libs/editor/src/components/TopBar/HistoryActions.jsx",
   "libs/editor/src/components/TreeValidation/TreeValidation.jsx",
+  "libs/editor/src/tools/Zoom.jsx",
+  "libs/editor/src/tools/Selection.js",
   "libs/i18n/src/preference.tsx",
   "libs/i18n/src/runtime.tsx",
   "libs/ui/src/lib/modal/ModalPopup.tsx"

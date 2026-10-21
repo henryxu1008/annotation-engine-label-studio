@@ -94,7 +94,7 @@
   "reviewDecision": "复核决定：{{decision}}",
   "reviewerIdentity": "复核人：{{user}}",
   "reasonText": "原因：{{reason}}",
-  "releaseApprovedRevision": "发布已通过的修订版",
+  "releaseApprovedRevision": "发布并下载已通过的修订版",
   "selectSubmissionRevision": "选择一个提交修订版。",
   "accessDenied": "访问被拒绝。你的项目权限可能已发生变化。",
   "resourceUnavailable": "此资源已不可用。",

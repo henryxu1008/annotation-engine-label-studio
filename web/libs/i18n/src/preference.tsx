@@ -9,6 +9,7 @@ export type LocalePreferenceState = {
 };
 
 export type LocalePreferenceContextValue = LocalePreferenceState & {
+  ready: boolean;
   saving: boolean;
   error: string | null;
   setPreference: (preference: LocalePreference) => Promise<boolean>;

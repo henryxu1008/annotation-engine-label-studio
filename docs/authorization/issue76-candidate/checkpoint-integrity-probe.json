@@ -1,0 +1,9 @@
+{
+  "project": "annotation-engine-issue76-20261009-finalized-checkpoint-2ddd14",
+  "result": "PASS",
+  "traffic": "NEVER_STARTED",
+  "accepted_events_before": 1,
+  "accepted_events_after": 3,
+  "checkpoint_sha256": "93e73e1452990a8088d8c7bd349e3915264180ef943c79f1d7a7a235fcef91f1",
+  "services": "STOPPED_VOLUMES_RETAINED"
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "passed": 92,
+  "runtime": "two native uWSGI application containers behind native nginx TLS gateways",
+  "checkpoint_sha256": "93e73e1452990a8088d8c7bd349e3915264180ef943c79f1d7a7a235fcef91f1",
+  "backup_sha256": "cc3d7a814173e292e14f273c625c7a2e0b236478a8318182bec07f045d8fc785",
+  "release_image": "BUILT_LOCAL_IMMUTABLE",
+  "production_uwsgi_nginx": "PASS",
+  "trusted_browser_https": "NOT_RUN_NO_SYSTEM_TRUST_CHANGE",
+  "full_bilingual_collaboration_browser": "SEE_SEPARATE_BROWSER_SUMMARY",
+  "full_86400_second_schedule_interval": "NOT_RUN",
+  "external_audit_sink": "NOT_CONFIGURED"
+}

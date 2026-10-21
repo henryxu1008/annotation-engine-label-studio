@@ -26,7 +26,14 @@ concurrency:
 env:
   POETRY_VERSION: 2.3.2
   DJANGO_SETTINGS_MODULE: core.settings.label_studio
-  DJANGO_DB: sqlite
+  # Browser journeys exercise concurrent HTTP/session/import writes on the
+  # candidate's database backend. SQLite foundation coverage stays in Fork PR Gate.
+  DJANGO_DB: postgresql
+  POSTGRE_HOST: localhost
+  POSTGRE_PORT: "5432"
+  POSTGRE_NAME: label_studio_browser
+  POSTGRE_USER: postgres
+  POSTGRE_PASSWORD: browser-e2e-test-only
   DEBUG: "true"
   HOSTNAME: "http://localhost:8080"
   COLLECT_ANALYTICS: "false"
@@ -39,7 +46,20 @@ jobs:
   current-ui-validation:
     name: Current enterprise UI validation
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
+    services:
+      browser-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: browser-e2e-test-only
+          POSTGRES_DB: label_studio_browser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d label_studio_browser"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - name: Checkout PR merge commit, pushed main commit or dispatch ref
@@ -94,7 +114,8 @@ jobs:
           yarn nx run app-common:unit
           yarn jest --config libs/ui/jest.config.ts --runInBand --runTestsByPath \
             libs/ui/src/lib/dropdown/dropdown.test.tsx \
-            libs/ui/src/lib/dropdown/dropdown-transition.test.tsx
+            libs/ui/src/lib/dropdown/dropdown-transition.test.tsx \
+            libs/ui/src/lib/toast/toast.test.tsx
           yarn dm:unit
           yarn lsf:unit
 
@@ -137,9 +158,13 @@ jobs:
 
       - name: Run isolated locale component journeys
         run: |
-          for spec in app-locale dm-editor-locale dm-export-locale collaboration-locale; do
+          for spec in dm-entity-boundary auth-tips-timeout app-locale dm-editor-locale dm-task-switch dm-keyboard-ime dm-entity-draft dm-image-draft annotator-label-stream dm-export-locale collaboration-locale; do
             poetry run python label_studio/manage.py seed_enterprise_e2e
-            (cd web && yarn cypress run \
+            limit=()
+            if [[ "$spec" == dm-entity-boundary ]]; then
+              limit=(timeout --signal=INT --kill-after=15s 5m)
+            fi
+            (cd web && "${limit[@]}" yarn cypress run \
               --project apps/labelstudio-e2e \
               --config-file cypress.config.ts \
               --config baseUrl=http://localhost:8080,video=true \
@@ -157,6 +182,15 @@ jobs:
               --env "fullFlowLocale=${locale}" \
               --spec apps/labelstudio-e2e/src/e2e/full-enterprise-workflow.cy.ts)
           done
+
+      - name: Run delayed project import regression
+        run: |
+          poetry run python label_studio/manage.py seed_enterprise_e2e
+          (cd web && yarn cypress run \
+            --project apps/labelstudio-e2e \
+            --config-file cypress.config.ts \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/import-initialization.cy.ts)
 
       - name: Print server logs on browser failure
         if: failure()

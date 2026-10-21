@@ -94,3 +94,16 @@ it("ends initial loading after a reported project error", async () => {
     destroy(store);
   }
 });
+
+it.each(["fetchUsers", "fetchProject", "fetchData"])("ignores a %s response after its workspace is destroyed", async (method) => {
+  const { store, invoke } = makeStore([]);
+  let finish;
+  const response = new Promise((resolve) => { finish = resolve; });
+  store._sdk.api.users.mockReturnValue(response);
+  store._sdk.api.project.mockReturnValue(response);
+  const pending = store[method]({ force: true });
+  destroy(store);
+  finish(method === "fetchProject" ? { id: 7, title: "Obsolete project" } : []);
+  await expect(pending).resolves.toBe(method === "fetchProject" ? false : undefined);
+  expect(invoke).not.toHaveBeenCalled();
+});

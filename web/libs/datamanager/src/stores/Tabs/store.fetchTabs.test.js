@@ -39,3 +39,13 @@ it("rejects malformed successful tab data", async () => {
     destroy(root);
   }
 });
+
+it("ignores successful tabs arriving after their workspace is destroyed", async () => {
+  const root = makeStore([]);
+  let finish;
+  root.apiCall = jest.fn(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = root.viewsStore.fetchTabs();
+  destroy(root);
+  finish([{ id: 9 }]);
+  await expect(pending).resolves.toBeUndefined();
+});

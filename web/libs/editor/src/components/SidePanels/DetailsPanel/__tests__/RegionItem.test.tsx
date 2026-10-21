@@ -1,7 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { act, render as renderView, screen } from "@testing-library/react";
+import { createLocaleRuntime } from "@humansignal/i18n";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { RegionItem } from "../RegionItem";
+
+const runtimes: ReturnType<typeof createLocaleRuntime>[] = [];
+function render(node: React.ReactNode) {
+  const runtime = createLocaleRuntime("en-US");
+  runtimes.push(runtime);
+  const Provider = runtime.provider;
+  return { ...renderView(<Provider>{node}</Provider>), runtime };
+}
+afterEach(() => { runtimes.splice(0).forEach((runtime) => runtime.destroy()); });
 
 jest.mock("../../../../utils/bem", () => ({
   cn: (block: string) => ({
@@ -103,6 +113,20 @@ function createMockRegion(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RegionItem", () => {
+  it("switches selected-region action names without changing the region or delete behavior", async () => {
+    const region = createMockRegion({ hideable: true });
+    const { runtime } = render(<RegionItem region={region} />);
+    act(() => { runtime.updateLocale("zh-CN"); });
+    expect(screen.getByRole("button", { name: "创建关系" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑区域元数据" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "隐藏选中区域" }));
+    expect(region.toggleHidden).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "删除选中区域" }));
+    expect(region.annotation.deleteRegion).toHaveBeenCalledWith(region);
+    act(() => { runtime.updateLocale("en-US"); });
+    expect(screen.getByRole("button", { name: "Delete selected region" })).toBeInTheDocument();
+    expect(screen.getByTestId("region-labels")).toHaveTextContent("r1");
+  });
   it("renders with default props and shows detailed-region", () => {
     const region = createMockRegion();
     render(<RegionItem region={region} />);

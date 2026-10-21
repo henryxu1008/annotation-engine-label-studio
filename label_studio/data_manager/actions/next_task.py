@@ -2,6 +2,8 @@
 """
 import logging
 
+from access_control.authorization import authorization
+from access_control.identity import resolve_principal
 from core.permissions import all_permissions
 from data_manager.actions import DataManagerAction
 from data_manager.functions import filters_ordering_selected_items_exist
@@ -25,7 +27,14 @@ def next_task(project, queryset, **kwargs):
     next_task, queue_info = get_next_task(request.user, queryset, project, dm_queue)
 
     if next_task is None:
-        raise NotFound(f'There are no tasks for {request.user}')
+        error = NotFound('No tasks are currently available in this queue.')
+        error.display_context = {'reason': 'QUEUE_EXHAUSTED'}
+        raise error
+
+    authorization.require(
+        next_task.project_id == project.id and authorization.can_view_task(resolve_principal(request), next_task),
+        'The assigned task is no longer available.',
+    )
 
     # serialize task
     context = {'request': request, 'project': project, 'resolve_uri': True, 'annotations': False}

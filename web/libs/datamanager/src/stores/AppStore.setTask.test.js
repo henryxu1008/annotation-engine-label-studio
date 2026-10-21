@@ -42,9 +42,10 @@ const makeStore = () => {
   const wrapper = Object.create(LSFWrapper.prototype);
   Object.assign(wrapper, { destroyed: false, lsf: editor });
   wrapper.setLSFTask = jest.fn().mockResolvedValue();
+  wrapper.saveDraft = jest.fn().mockResolvedValue(true);
   store.taskStore = { selected: task, setSelected: jest.fn(), loadTask: jest.fn().mockResolvedValue(task) };
   store.annotationStore = { setSelected: jest.fn() };
-  store._sdk = { lsf: wrapper };
+  store._sdk = { lsf: wrapper, setMode: jest.fn() };
   wrapper.datamanager = { store };
   return { store, wrapper, editor, annotation };
 };
@@ -127,6 +128,114 @@ it("selects a prediction from the URL in one awaited reset", async () => {
     expect(wrapper.setLSFTask).toHaveBeenCalledTimes(1);
     expect(wrapper.setLSFTask).toHaveBeenCalledWith(store.taskStore.selected, "71", undefined, true);
   } finally {
+    destroy(store);
+  }
+});
+
+it("keeps the outgoing task selected and its URL unchanged until its draft is confirmed", async () => {
+  const { store, wrapper } = makeStore();
+  const save = deferred();
+  wrapper.saveDraft.mockReturnValue(save.promise);
+  try {
+    const switching = store.setTask({ taskID: 42 });
+    await nextTick();
+    expect(History.navigate).not.toHaveBeenCalled();
+    expect(store._sdk.setMode).not.toHaveBeenCalled();
+    expect(store.taskStore.setSelected).not.toHaveBeenCalled();
+    expect(store.taskStore.loadTask).not.toHaveBeenCalled();
+    save.resolve(true);
+    await switching;
+    expect(store.taskStore.loadTask).toHaveBeenCalledWith(42, expect.anything());
+  } finally {
+    save.resolve(true);
+    await nextTick();
+    destroy(store);
+  }
+});
+
+it("does not discard the outgoing draft on failure and permits an explicit navigation retry", async () => {
+  const { store, wrapper } = makeStore();
+  wrapper.saveDraft.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  try {
+    expect(await store.setTask({ taskID: 42 })).toBe(false);
+    expect(History.navigate).not.toHaveBeenCalled();
+    expect(store.taskStore.loadTask).not.toHaveBeenCalled();
+    expect(wrapper.setLSFTask).not.toHaveBeenCalled();
+    await store.setTask({ taskID: 42 });
+    expect(store.taskStore.loadTask).toHaveBeenCalledTimes(1);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("ignores repeated task choices while the first outgoing draft flush is pending", async () => {
+  const { store, wrapper } = makeStore();
+  const save = deferred();
+  wrapper.saveDraft.mockReturnValue(save.promise);
+  try {
+    const first = store.setTask({ taskID: 42 });
+    const repeated = store.setTask({ taskID: 43 });
+    await nextTick();
+    expect(wrapper.saveDraft).toHaveBeenCalledTimes(1);
+    save.resolve(true);
+    await Promise.all([first, repeated]);
+    expect(store.taskStore.loadTask).toHaveBeenCalledTimes(1);
+    expect(store.taskStore.loadTask).toHaveBeenCalledWith(42, expect.anything());
+  } finally {
+    save.resolve(true);
+    await nextTick();
+    destroy(store);
+  }
+});
+
+it("keeps the task panel open after a failed draft flush", async () => {
+  const { store, wrapper } = makeStore();
+  store.taskStore.unset = jest.fn();
+  store.annotationStore.unset = jest.fn();
+  store._sdk.setMode = jest.fn();
+  store._sdk.destroyLSF = jest.fn();
+  wrapper.saveDraft.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  try {
+    expect(await store.closeLabeling()).toBe(false);
+    expect(store.taskStore.unset).not.toHaveBeenCalled();
+    expect(store._sdk.destroyLSF).not.toHaveBeenCalled();
+    expect(await store.closeLabeling()).toBe(true);
+    expect(store.taskStore.unset).toHaveBeenCalledTimes(1);
+    expect(store._sdk.destroyLSF).toHaveBeenCalledTimes(1);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("restores the accepted task URL when browser history navigation cannot save", async () => {
+  const { store, wrapper } = makeStore();
+  const accepted = { task: "41", annotation: "17", tab: "3" };
+  History.getParams.mockReturnValue(accepted);
+  try {
+    await store.setTask({ taskID: 41 });
+    History.navigate.mockClear();
+    store.taskStore.loadTask.mockClear();
+    wrapper.saveDraft.mockResolvedValue(false);
+    expect(await store.setTask({ taskID: 42, pushState: false })).toBe(false);
+    expect(store.taskStore.loadTask).not.toHaveBeenCalled();
+    expect(History.navigate).toHaveBeenLastCalledWith(expect.objectContaining(accepted), true);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("does not apply an old navigation intent to a replacement editor", async () => {
+  const { store, wrapper } = makeStore();
+  const save = deferred();
+  wrapper.saveDraft.mockReturnValue(save.promise);
+  try {
+    const switching = store.setTask({ taskID: 42 });
+    store._sdk.lsf = null;
+    save.resolve(true);
+    expect(await switching).toBe(false);
+    expect(store.taskStore.loadTask).not.toHaveBeenCalled();
+  } finally {
+    save.resolve(true);
     destroy(store);
   }
 });

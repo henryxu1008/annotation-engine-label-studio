@@ -4,7 +4,8 @@ from users.models import User
 
 
 class UserFactory(factory.django.DjangoModelFactory):
-    email = factory.Faker('email')
+    # email is unique in the database; Faker can repeat even in small batches.
+    email = factory.Sequence(lambda index: f'user-{index}@example.test')
     first_name = factory.Faker('first_name')
     last_name = factory.Faker('last_name')
     username = factory.LazyAttribute(lambda u: u.email.split('@')[0])

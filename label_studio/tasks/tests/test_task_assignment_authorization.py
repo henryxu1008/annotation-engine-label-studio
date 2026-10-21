@@ -1,11 +1,15 @@
 from unittest.mock import patch
+from unittest import skipUnless
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from data_export.models import Export
 from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
-from rest_framework.test import APITestCase
+from django.db import connection, connections, close_old_connections
+from rest_framework.test import APIClient, APITestCase, APITransactionTestCase
 from tasks.models import Annotation, AnnotationDraft, ReviewDecision, Submission, TaskAssignment
 from tasks.submissions import create_submission
 from tasks.tests.factories import TaskFactory
@@ -60,7 +64,7 @@ class TestTaskAssignmentAuthorization(APITestCase):
             assigned_by=cls.manager,
         )
 
-    def _create_annotation(self, user, task):
+    def _create_annotation(self, user, task, *, draft=None):
         assignment = TaskAssignment.objects.get(
             task=task,
             assignee=user,
@@ -73,11 +77,249 @@ class TestTaskAssignmentAuthorization(APITestCase):
                 'result': [],
                 'assignment_id': assignment.id,
                 'assignment_version': assignment.version,
+                **({'draft_id': draft.id, 'draft_revision': draft.revision} if draft is not None else {}),
             },
             format='json',
         )
         assert response.status_code == 201, response.json()
         return Annotation.objects.get(pk=response.json()['id'])
+
+    def test_task_editor_capability_requires_the_current_actors_active_assignment(self):
+        self.client.force_authenticate(user=self.manager)
+        manager_view = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert manager_view.status_code == 200
+        assert manager_view.json()['can_label'] is False
+        denied = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {'result': []}, format='json')
+        assert denied.status_code == 403
+
+        self.client.force_authenticate(user=self.annotator_a)
+        assigned_view = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert assigned_view.status_code == 200
+        assert assigned_view.json()['can_label'] is True
+        assert assigned_view.json()['assignment_id'] == self.assignment_a.pk
+
+        TaskAssignment.objects.filter(pk=self.assignment_a.pk).update(status=TaskAssignment.Status.CANCELLED)
+        revoked = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
+        assert revoked.status_code == 404
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.get(f'/api/tasks/{self.shared_task.pk}/').json()['can_label'] is False
+
+    def _next_toolbar_task(self, user, *, project=None, selected=None, actor_fields=None):
+        self.client.force_authenticate(user=user)
+        data = {'selectedItems': selected or {'all': True, 'excluded': []}}
+        data.update(actor_fields or {})
+        return self.client.post(
+            f'/api/dm/actions/?project={(project or self.project).id}&id=next_task',
+            data=data,
+            format='json',
+        )
+
+    def test_labeling_toolbar_next_task_uses_annotator_assignment_scope(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200, response.data
+        assert response.data['id'] == self.shared_task.id
+
+    def _assert_assignment_in_both_queues(self, user, task):
+        toolbar = self._next_toolbar_task(user, selected={'all': False, 'included': [task.id]})
+        assert toolbar.status_code == 200, toolbar.data
+        assert toolbar.data['id'] == task.id
+        assert toolbar.data['can_label'] is True
+        self.client.force_authenticate(user=user)
+        legacy = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert legacy.status_code == 200, legacy.data
+        assert legacy.data['id'] == task.id
+        return toolbar, legacy
+
+    def test_assigned_queue_keeps_peer_completed_task_available(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.shared_task.refresh_from_db()
+        assert self.shared_task.is_labeled is True
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_assigned_queue_does_not_use_another_assignees_task_lock(self):
+        self.shared_task.set_lock(self.annotator_a)
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_assigned_queue_keeps_postponed_draft_after_peer_completion(self):
+        AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_b, assignment=self.assignment_b,
+            result=[], was_postponed=True,
+        )
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.client.force_authenticate(user=self.annotator_b)
+        fresh = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert fresh.status_code == 200 and fresh.data['id'] == self.other_task.id
+        self.other_assignment.cancel()
+        self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+
+    def test_task_and_queue_restore_only_current_assignment_drafts(self):
+        stale = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[], was_postponed=True,
+        )
+        self.assignment_a.cancel()
+        assignment = TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.annotator_a, assigned_by=self.manager,
+        )
+        unbound = AnnotationDraft.objects.create(task=self.shared_task, user=self.annotator_a, result=[])
+        current = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=assignment, result=[],
+        )
+        peer = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_b, assignment=self.assignment_b, result=[],
+        )
+        toolbar, legacy = self._assert_assignment_in_both_queues(self.annotator_a, self.shared_task)
+        direct = self.client.get(f'/api/tasks/{self.shared_task.id}/')
+        assert direct.status_code == 200
+        for response in (toolbar, legacy, direct):
+            assert [draft['id'] for draft in response.data['drafts']] == [current.id]
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.get(f'/api/tasks/{self.shared_task.id}/').data['drafts'] == []
+        self._create_annotation(self.annotator_a, self.shared_task, draft=current)
+        assert AnnotationDraft.objects.filter(pk__in=[stale.id, unbound.id, peer.id]).count() == 3
+
+    def test_assigned_queue_requeues_current_skip_after_peer_completion(self):
+        self.project.skip_queue = self.project.SkipQueue.REQUEUE_FOR_ME
+        self.project.save(update_fields=['skip_queue'])
+        skipped = self._create_annotation(self.annotator_b, self.shared_task)
+        skipped.was_cancelled = True
+        skipped.save(update_fields=['was_cancelled'])
+        self._create_annotation(self.annotator_a, self.shared_task)
+        self.client.force_authenticate(user=self.annotator_b)
+        fresh = self.client.get(f'/api/projects/{self.project.id}/next/')
+        assert fresh.status_code == 200 and fresh.data['id'] == self.other_task.id
+        self.other_assignment.cancel()
+        toolbar, legacy = self._assert_assignment_in_both_queues(self.annotator_b, self.shared_task)
+        for response in (toolbar, legacy):
+            assert response.data['default_selected_annotation'] == skipped.id
+            assert [annotation['id'] for annotation in response.data['annotations']] == [skipped.id]
+            assert response.data['annotations'][0]['was_cancelled'] is True
+        converted = self.client.post(f'/api/annotations/{skipped.id}/convert-to-draft', data={}, format='json')
+        assert converted.status_code == 201, converted.data
+        draft = AnnotationDraft.objects.get(pk=converted.data['id'])
+        assert draft.assignment_id == self.assignment_b.id
+        self._create_annotation(self.annotator_b, self.shared_task, draft=draft)
+
+    def test_assigned_queue_reassignment_ignores_old_annotation_and_postponed_draft(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[], was_postponed=True,
+        )
+        self.assignment_a.cancel()
+        new_assignment = TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.annotator_a, assigned_by=self.manager,
+        )
+        self._assert_assignment_in_both_queues(self.annotator_a, self.shared_task)
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.data['assignment_id'] == new_assignment.id
+
+    def test_manager_assigned_queue_precedes_unassigned_readonly_fallback(self):
+        self._create_annotation(self.annotator_a, self.shared_task)
+        TaskAssignment.objects.create(
+            project=self.project, task=self.shared_task, assignee=self.manager, assigned_by=self.manager,
+        )
+        self._assert_assignment_in_both_queues(self.manager, self.shared_task)
+        self._create_annotation(self.manager, self.shared_task)
+        fallback = self._next_toolbar_task(self.manager)
+        assert fallback.status_code == 200, fallback.data
+        assert fallback.data['id'] == self.other_task.id
+        assert fallback.data['can_label'] is False
+
+    def test_assignment_queue_preserves_selected_exclusions_and_current_completion(self):
+        excluded = self._next_toolbar_task(
+            self.annotator_a, selected={'all': True, 'excluded': [self.shared_task.id]},
+        )
+        assert excluded.status_code == 404
+        self._create_annotation(self.annotator_a, self.shared_task)
+        completed = self._next_toolbar_task(self.annotator_a)
+        assert completed.status_code == 404
+        self.client.force_authenticate(user=self.annotator_a)
+        assert self.client.get(f'/api/projects/{self.project.id}/next/').status_code == 404
+
+    def test_labeling_toolbar_next_task_preserves_manager_access(self):
+        response = self._next_toolbar_task(self.manager)
+        assert response.status_code == 200, response.data
+        assert response.data['id'] in (self.shared_task.id, self.other_task.id)
+
+    def test_labeling_toolbar_empty_queue_has_explicit_reason(self):
+        empty_project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        ProjectMember.objects.create(project=empty_project, user=self.annotator_a, role=ProjectMember.Role.ANNOTATOR)
+        response = self._next_toolbar_task(self.annotator_a, project=empty_project)
+        assert response.status_code == 404
+        assert response.data['display_context']['reason'] == 'QUEUE_EXHAUSTED'
+
+    def test_labeling_toolbar_invisible_project_is_not_an_empty_queue(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_b)
+        response = self._next_toolbar_task(self.annotator_a, project=other_project)
+        assert response.status_code == 404
+        assert response.data.get('display_context', {}).get('reason') != 'QUEUE_EXHAUSTED'
+
+    def test_labeling_toolbar_selected_ids_cannot_include_another_annotators_task(self):
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [self.other_task.id]},
+        )
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_selected_ids_cannot_include_unassigned_task(self):
+        unassigned = TaskFactory(project=self.project)
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [unassigned.id]},
+        )
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_next_task_does_not_trust_actor_fields(self):
+        response = self._next_toolbar_task(
+            self.annotator_a,
+            actor_fields={'user_id': self.manager.id, 'actor_id': self.annotator_b.id, 'assignee_id': self.annotator_b.id},
+        )
+        assert response.status_code == 200, response.data
+        assert response.data['id'] == self.shared_task.id
+
+    def test_labeling_toolbar_reviewer_cannot_enter_annotation_queue(self):
+        response = self._next_toolbar_task(self.reviewer)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_next_task_rechecks_revoked_membership(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200
+        ProjectMember.objects.filter(project=self.project, user=self.annotator_a).update(enabled=False)
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_next_task_rechecks_cancelled_assignment_after_lock(self):
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 200
+        self.client.force_authenticate(user=self.manager)
+        assert self.client.delete(f'/api/task-assignments/{self.assignment_a.id}/').status_code == 204
+        response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code == 404
+
+    def test_labeling_toolbar_next_task_cannot_cross_project_scope(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_b)
+        other_project_task = TaskFactory(project=other_project)
+        response = self._next_toolbar_task(
+            self.annotator_a, selected={'all': False, 'included': [other_project_task.id]},
+        )
+        assert response.status_code == 404
+        response = self._next_toolbar_task(self.annotator_a, project=other_project)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_rechecks_object_access_after_sampling(self):
+        def revoke_after_sampling(*args):
+            ProjectMember.objects.filter(project=self.project, user=self.annotator_a).update(enabled=False)
+            return self.shared_task, {}
+
+        with patch('data_manager.actions.next_task.get_next_task', side_effect=revoke_after_sampling):
+            response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
+
+    def test_labeling_toolbar_rejects_out_of_project_sampler_result(self):
+        other_project = ProjectFactory(organization=self.organization, created_by=self.annotator_a)
+        other_task = TaskFactory(project=other_project)
+        with patch('data_manager.actions.next_task.get_next_task', return_value=(other_task, {})):
+            response = self._next_toolbar_task(self.annotator_a)
+        assert response.status_code in (403, 404)
 
 
     def test_cancelled_assignment_blocks_annotation_update_and_delete(self):
@@ -1071,3 +1313,177 @@ class TestTaskAssignmentAuthorization(APITestCase):
         )
 
         assert response.status_code == 403
+
+
+class TestDraftContentConcurrency(APITestCase):
+    """Same actor and assignment, but independent page snapshots."""
+    setUpTestData = classmethod(TestTaskAssignmentAuthorization.setUpTestData.__func__)
+    _create_annotation = TestTaskAssignmentAuthorization._create_annotation
+    def _draft(self):
+        return AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a,
+            result=[{'value': 'initial'}],
+        )
+
+    def _write(self, draft, revision, result, method='patch'):
+        self.client.force_authenticate(user=self.annotator_a)
+        data = {'result': result, 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version}
+        if revision is not None:
+            data['draft_revision'] = revision
+        return getattr(self.client, method)(f'/api/drafts/{draft.pk}', data, format='json')
+
+    def test_stale_page_cannot_overwrite_latest_draft_and_fresh_page_can_continue(self):
+        draft = self._draft()
+        revision = draft.revision
+        newer = self._write(draft, revision, [{'value': 'new page'}])
+        assert newer.status_code == 200, newer.data
+        assert newer.data['revision'] == revision + 1
+        stale = self._write(draft, revision, [{'value': 'old offline page'}])
+        assert stale.status_code == 409, stale.data
+        assert stale.data['display_context']['reason'] == 'DRAFT_CONFLICT'
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new page'}]
+        assert draft.revision == revision + 1
+        restored = self.client.get(f'/api/tasks/{self.shared_task.pk}/').data['drafts'][0]
+        recovered = self._write(draft, restored['revision'], [{'value': 'reapplied local change'}])
+        assert recovered.status_code == 200, recovered.data
+        assert recovered.data['revision'] == revision + 2
+
+    def test_missing_content_token_cannot_write_or_delete(self):
+        draft = self._draft()
+        for method in ('patch', 'put', 'delete'):
+            response = self._write(draft, None, [], method)
+            assert response.status_code == 409, response.data
+        draft.refresh_from_db()
+        assert draft.revision == 1 and draft.result == [{'value': 'initial'}]
+
+    def test_stale_delete_and_submit_cannot_consume_newer_draft(self):
+        draft = self._draft()
+        assert self._write(draft, 1, [{'value': 'new page'}]).status_code == 200
+        assert self._write(draft, 1, [], 'delete').status_code == 409
+        for token in ({}, {'draft_id': draft.id, 'draft_revision': 1}):
+            response = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {
+                'result': [], 'assignment_id': self.assignment_a.id,
+                'assignment_version': self.assignment_a.version, **token,
+            }, format='json')
+            assert response.status_code == 409, response.data
+        assert not Annotation.objects.filter(task=self.shared_task, completed_by=self.annotator_a).exists()
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new page'}]
+        self._create_annotation(self.annotator_a, self.shared_task, draft=draft)
+        assert not AnnotationDraft.objects.filter(pk=draft.pk).exists()
+
+    def test_two_pages_without_a_draft_cannot_create_parallel_silent_versions(self):
+        self.client.force_authenticate(user=self.annotator_a)
+        data = {'result': [], 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version, 'draft_revision': 0}
+        first = self.client.post(f'/api/tasks/{self.shared_task.pk}/drafts', data, format='json')
+        assert first.status_code == 201, first.data
+        second = self.client.post(f'/api/tasks/{self.shared_task.pk}/drafts', data, format='json')
+        assert second.status_code == 409, second.data
+        assert AnnotationDraft.objects.filter(assignment=self.assignment_a).count() == 1
+
+    def _assert_old_page_cannot_restore_removed_draft(self, draft, submit_status):
+        for _ in range(2):
+            assert self._write(draft, 1, [{'value': 'old offline page'}]).status_code == 404
+        assert not AnnotationDraft.objects.filter(task=self.shared_task).exists()
+        response = self.client.post(f'/api/tasks/{self.shared_task.pk}/annotations/', {
+            'result': [{'value': 'old offline page'}], 'draft_id': draft.pk, 'draft_revision': 1,
+            'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+        }, format='json')
+        assert response.status_code == submit_status, response.data
+        assert not AnnotationDraft.objects.filter(task=self.shared_task).exists()
+
+    def test_submitted_draft_cannot_be_recreated_or_overwrite_final_results_by_stale_page(self):
+        draft = self._draft()
+        annotation = self._create_annotation(self.annotator_a, self.shared_task, draft=draft)
+        before_annotation = Annotation.objects.filter(pk=annotation.pk).values().get()
+        before_submissions = list(Submission.objects.filter(annotation=annotation).values())
+        self._assert_old_page_cannot_restore_removed_draft(draft, 400)  # Assignment already owns a final annotation.
+        assert Annotation.objects.filter(pk=annotation.pk).values().get() == before_annotation
+        assert list(Submission.objects.filter(annotation=annotation).values()) == before_submissions
+        assert Annotation.objects.filter(task=self.shared_task).count() == 1
+
+    def test_deleted_draft_cannot_be_recreated_by_stale_page(self):
+        draft = self._draft()
+        assert self._write(draft, 1, [], 'delete').status_code == 204
+        self._assert_old_page_cannot_restore_removed_draft(draft, 409)  # Stale draft token cannot be submitted.
+        assert not Annotation.objects.filter(task=self.shared_task).exists()
+
+    def test_stale_annotation_update_cannot_delete_a_newer_attached_draft(self):
+        annotation = self._create_annotation(self.annotator_a, self.shared_task)
+        draft = AnnotationDraft.objects.create(
+            task=self.shared_task, annotation=annotation, user=self.annotator_a,
+            assignment=self.assignment_a, result=[{'value': 'initial attached draft'}],
+        )
+        assert self._write(draft, 1, [{'value': 'new attached draft'}]).status_code == 200
+        body = {'result': [], 'assignment_id': self.assignment_a.pk,
+                'assignment_version': self.assignment_a.version, 'draft_id': draft.pk, 'draft_revision': 1}
+        response = self.client.patch(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert response.status_code == 409, response.data
+        deleted = self.client.delete(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert deleted.status_code == 409, deleted.data
+        converted = self.client.post(f'/api/annotations/{annotation.pk}/convert-to-draft', body, format='json')
+        assert converted.status_code == 409, converted.data
+        draft.refresh_from_db()
+        assert draft.result == [{'value': 'new attached draft'}]
+        body['draft_revision'] = draft.revision
+        response = self.client.patch(f'/api/annotations/{annotation.pk}/', body, format='json')
+        assert response.status_code == 200, response.data
+        assert not AnnotationDraft.objects.filter(pk=draft.pk).exists()
+
+    def test_content_revision_cannot_override_owner_or_assignment_and_cannot_be_set_by_client(self):
+        draft = self._draft()
+        self.client.force_authenticate(user=self.annotator_b)
+        response = self.client.patch(f'/api/drafts/{draft.pk}', {
+            'result': [], 'draft_revision': 1, 'assignment_id': self.assignment_b.pk,
+            'assignment_version': self.assignment_b.version,
+        }, format='json')
+        assert response.status_code == 403, response.data
+        self.client.force_authenticate(user=self.annotator_a)
+        response = self.client.patch(f'/api/drafts/{draft.pk}', {
+            'result': [], 'draft_revision': 1, 'revision': 900,
+            'task': self.other_task.pk, 'user': str(self.annotator_b.pk), 'assignment': self.other_assignment.pk,
+            'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+        }, format='json')
+        assert response.status_code == 200 and response.data['revision'] == 2, response.data
+        draft.refresh_from_db()
+        assert (draft.task_id, draft.user_id, draft.assignment_id) == (
+            self.shared_task.pk, self.annotator_a.pk, self.assignment_a.pk,
+        )
+        self.assignment_a.cancel()
+        assert self._write(draft, 2, []).status_code in (403, 409)
+
+
+@skipUnless(connection.vendor == 'postgresql', 'Row lock race requires PostgreSQL')
+class TestDraftContentConcurrencyRace(APITransactionTestCase):
+    def test_simultaneous_same_revision_has_exactly_one_winner(self):
+        TestTaskAssignmentAuthorization.setUpTestData.__func__(type(self))
+        draft = AnnotationDraft.objects.create(
+            task=self.shared_task, user=self.annotator_a, assignment=self.assignment_a, result=[],
+        )
+        barrier = Barrier(2)
+
+        def save(value):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(user=self.annotator_a)
+                barrier.wait(timeout=10)
+                response = client.patch(f'/api/drafts/{draft.pk}', {
+                    'result': [{'value': value}], 'draft_revision': 1,
+                    'assignment_id': self.assignment_a.pk, 'assignment_version': self.assignment_a.version,
+                }, format='json')
+                return response.status_code, value
+            finally:
+                from core.current_request import CurrentContext
+                CurrentContext.clear()
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(save, ('tab A', 'tab B')))
+        assert sorted(status for status, _ in results) == [200, 409], results
+        draft.refresh_from_db()
+        assert draft.revision == 2
+        assert draft.result == [{'value': next(value for status, value in results if status == 200)}]

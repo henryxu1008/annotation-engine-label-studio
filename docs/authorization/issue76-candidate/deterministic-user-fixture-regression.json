@@ -1,0 +1,10 @@
+{
+  "result": "PASS",
+  "tests_passed": 2,
+  "test_fixture_commit": "9761dd3b08054caa39c84a5df5a7d884ed5b2aa1",
+  "artifact_source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "scope": "existing SQLite parameter-budget regression, both batch sizes, one-off diagnostic container with only factory file mounted read-only",
+  "trial_service_source_override": false,
+  "log_sha256": "09e759a1bdf28fcb5f8ce6db7f0c7c37d3e498197aea9f30269bacac13a7972c",
+  "coverage": "NOT_COLLECTED; slim diagnostic dependencies lacked startup coverage hook"
+}

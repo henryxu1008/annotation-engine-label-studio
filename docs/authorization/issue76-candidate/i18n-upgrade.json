@@ -1,0 +1,37 @@
+{
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "checks": [
+    {
+      "check": "Pre-locale PostgreSQL account retains identity/security version 7 and Automatic without backfill",
+      "result": "PASS"
+    },
+    {
+      "check": "Unsupported language on replica 19643 renders safe English in the current migrated candidate",
+      "result": "PASS"
+    },
+    {
+      "check": "Automatic Chinese remains a read-only display resolution on replica 19643",
+      "result": "PASS"
+    },
+    {
+      "check": "Unsupported language on replica 19681 renders safe English in the current migrated candidate",
+      "result": "PASS"
+    },
+    {
+      "check": "Automatic Chinese remains a read-only display resolution on replica 19681",
+      "result": "PASS"
+    },
+    {
+      "check": "Display fallback preserves account flags, paired security versions and accepted audit ledger",
+      "result": "PASS"
+    },
+    {
+      "check": "Language reads do not backfill preference or change the migrated legacy account",
+      "result": "PASS"
+    }
+  ],
+  "security_state_sha256": "5799b8ccb1c7f87383b020a2098441d6a084ddf3688bdd50564807dd32680677",
+  "result": "PASS",
+  "scope": "current candidate display fallback; no schema reversal or old artifact selected",
+  "old_english_artifact_rollback": "NOT_RUN"
+}

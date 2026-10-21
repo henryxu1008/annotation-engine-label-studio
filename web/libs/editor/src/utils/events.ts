@@ -1,5 +1,20 @@
 type Callback = (...args: any[]) => any;
 
+type CompositionKeyEvent = {
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing?: boolean; keyCode?: number };
+};
+
+// React exposes composition on nativeEvent; older IMEs use the process key (229).
+export const isComposingKeyEvent = (event: CompositionKeyEvent) =>
+  !!(
+    event.isComposing ||
+    event.nativeEvent?.isComposing ||
+    event.keyCode === 229 ||
+    event.nativeEvent?.keyCode === 229
+  );
+
 export class EventInvoker {
   events = new Map<string, Set<Callback>>();
 

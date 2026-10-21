@@ -46,6 +46,13 @@ jest.mock("../stores/AppStore", () => ({
 }));
 
 describe("configureStore", () => {
+  it("shares the owner's live locale runtime with imperative store validation", async () => {
+    const { configureStore } = await import("../configureStore");
+    const localeRuntime = { t: jest.fn() };
+    await configureStore({ config: "<View></View>" }, {}, localeRuntime);
+    expect(mockCreate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ localeRuntime }));
+    expect(mockCreate.mock.calls.at(-1)[0]).not.toHaveProperty("localeRuntime");
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     window.LS_SECURE_MODE = undefined;

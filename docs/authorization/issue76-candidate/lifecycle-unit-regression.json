@@ -1,0 +1,10 @@
+{
+  "result": "PASS",
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "tests_passed": 11,
+  "before_new_cases_failed": 4,
+  "before_existing_cases_passed": 7,
+  "before_log_sha256": "de7affb0ad86ff2cdd61f5dec8aa87f785b7bd1df9103055b0aa8b0166386087",
+  "after_log_sha256": "e958b31f0465a6a00b99f638e557a6f262363399fd30f7f6a9db8e4eff971b25",
+  "runtime": "matching Node20 locked frontend dependencies; changed files mounted read-only; no provider or database"
+}

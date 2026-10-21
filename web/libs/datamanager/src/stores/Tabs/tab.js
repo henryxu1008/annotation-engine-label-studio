@@ -1,5 +1,5 @@
 import deepEqual from "deep-equal";
-import { clone, destroy, flow, getParent, getRoot, getSnapshot, types } from "mobx-state-tree";
+import { clone, destroy, flow, getParent, getRoot, getSnapshot, isAlive, types } from "mobx-state-tree";
 import { guidGenerator } from "../../utils/random";
 import { normalizeFilterValue } from "./filter_utils";
 import { TabFilter } from "./tab_filter";
@@ -490,11 +490,15 @@ export const Tab = types
     },
 
     reload: flow(function* ({ interaction } = {}) {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       if (self.saved) {
         yield self.dataStore.reload({ id: self.id, interaction });
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       }
       if (self.virtual) {
         yield self.dataStore.reload({ query: self.query, interaction });
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       }
 
       getRoot(self).SDK?.invoke?.("tabReloaded", self);
@@ -565,6 +569,7 @@ export const Tab = types
     },
 
     save: flow(function* ({ reload, interaction } = {}) {
+      if (!isAlive(self)) return;
       const serialized = self.serialize();
 
       if (!self.saved || !deepEqual(self.snapshot, serialized)) {
@@ -590,9 +595,11 @@ export const Tab = types
     }),
 
     saveVirtual: flow(function* (options) {
+      if (!isAlive(self)) return;
       const originalId = self.id;
       self.setVirtual(false);
       const newView = yield self.save(options);
+      if (!isAlive(self)) return;
 
       // If a new view was created (different ID), the old view is destroyed
       // Use the new view for navigation

@@ -357,7 +357,9 @@ export const ImportPage = ({
 
   const urlRef = useRef();
 
-  if (!project) return null;
+  // ProjectProvider publishes {} while loading or after a failed fetch.
+  // An upload needs a resolved project identity, not just an object.
+  if (!project?.id) return null;
   if (!show) return null;
 
   const csvProps = {

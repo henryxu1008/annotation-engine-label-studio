@@ -1,5 +1,7 @@
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
-import { destroy, detach, flow, getEnv, getParent, getRoot, isAlive, onSnapshot, types } from "mobx-state-tree";
+import deepEqual from "deep-equal";
+import { observable } from "mobx";
+import { destroy, detach, flow, getEnv, getParent, getRoot, getSnapshot, isAlive, onSnapshot, types } from "mobx-state-tree";
 import { ff } from "@humansignal/core";
 import { errorBuilder } from "../../core/DataValidator/ConfigValidator";
 import { guidGenerator } from "../../core/Helpers";
@@ -368,13 +370,49 @@ const _Annotation = types
     isReadOnly() {
       return self.isNonEditableDraft || self.readonly || !self.editable;
     },
+
+    get hasUnsavedDraft() {
+      if (self.isReadOnly() || !getEnv(self).events.hasEvent("submitDraft")) return false;
+      if (self.isDraftSaving || self.submissionStarted || self.draftSaveError) return true;
+      return !deepEqual(getSnapshot(self.trackedState), self.savedDraftSnapshot, { strict: true });
+    },
+
+    get hasPendingTextInput() {
+      if (self.isReadOnly()) return false;
+      return self.pendingTextInputs.size > 0 || Array.from(self.names.values()).some(
+        (tag) => tag.type === "textarea" && tag.hasPendingInput && !tag.isReadOnly(),
+      );
+    },
+
+    get draftBackup() {
+      // serializeAnnotation is an MST action: reads inside it are untracked.
+      // Observe the content snapshot so later edits invalidate both the copy
+      // and the acknowledgement that permits reloading the server version.
+      getSnapshot(self.trackedState);
+      return JSON.stringify({
+        task_id: self.store.task.id,
+        draft_id: self.draftId,
+        draft_revision: self.draftRevision,
+        result: self.serializeAnnotation(),
+      }, null, 2);
+    },
   }))
-  .volatile(() => ({
+  .volatile((self) => ({
     hidden: false,
     draftId: 0,
+    draftRevision: 0,
+    draftConflict: false,
+    draftConflictReason: null,
     draftSelected: false,
     autosaveDelay: 5000,
     isDraftSaving: false,
+    draftSavePromise: null,
+    // Image/layout initialization can reset Undo history without persisting edits.
+    // Only server hydration and acknowledged saves may advance this baseline.
+    savedDraftSnapshot: getSnapshot(self.trackedState),
+    draftSaveError: false,
+    // UI buffers are not confirmed annotation results and must not enter autosave.
+    pendingTextInputs: observable.map(),
     // This flag indicates that we are accepting suggestions right now (an accepting is started and not finished yet)
     isSuggestionsAccepting: false,
     submissionStarted: 0,
@@ -412,10 +450,21 @@ const _Annotation = types
     },
   }))
   .actions((self) => ({
+    setPendingTextInput(key, pending) {
+      if (pending) self.pendingTextInputs.set(key, true);
+      else self.pendingTextInputs.delete(key);
+    },
+
     reinitHistory(force = true) {
       self.history.reinit(force);
-      self.autosave?.cancel();
+      if (!self.hasUnsavedDraft) self.autosave?.cancel();
       if (self.type === "annotation") self.setInitialValues();
+    },
+
+    confirmSavedState(snapshot = getSnapshot(self.trackedState)) {
+      self.savedDraftSnapshot = snapshot;
+      self.draftSaveError = false;
+      if (!self.hasUnsavedDraft) self.autosave?.cancel();
     },
 
     setEditable(val) {
@@ -795,7 +844,8 @@ const _Annotation = types
           // if autosave is paused, do nothing
           if (self.autosave.paused) return;
 
-          self.saveDraft();
+          // A failed background save must stay retryable, without an unhandled rejection.
+          self.saveDraft().catch(() => {});
         },
         self.autosaveDelay,
         { leading: false },
@@ -804,26 +854,57 @@ const _Annotation = types
       onSnapshot(self.areas, self.autosave);
     }),
 
-    async saveDraft(params) {
+    saveDraft: flow(function* (params) {
+      // Flushes must wait for autosave and then capture edits made during that request.
+      // Do not return a fabricated success while a previous request is pending.
+      while (isAlive(self) && self.draftSavePromise) yield self.draftSavePromise;
+      if (!isAlive(self)) return;
       // There is no draft to save as it was already saved as an annotation
       if (self.submissionStarted) return;
+      // A conflict is not a transient network failure. Never retry with a
+      // newer token while retaining results from the obsolete page.
+      if (self.draftConflict) return { $meta: { status: 409 } };
       // if this is now a history item or prediction don't save it
       if (!self.editable) return;
 
       const result = self.serializeAnnotation({ fast: true });
+      const snapshot = getSnapshot(self.trackedState);
 
       self.setDraftSelected();
       self.versions.draft = result;
       self.setDraftSaving(true);
-      return self.store.submitDraft(self, params).then((res) => {
-        self.onDraftSaved(res);
-
+      self.draftSaveError = false;
+      const savedAt = Utils.UDate.currentISODate();
+      try {
+        self.draftSavePromise = self.store.submitDraft(self, params);
+        const res = yield self.draftSavePromise;
+        const status = res?.$meta?.status;
+        // Standalone editor integrations may return no HTTP metadata.
+        if (isAlive(self)) {
+          if (res === undefined || status === 200 || status === 201) {
+            self.setDraftSaved(savedAt, snapshot);
+          } else {
+            self.draftSaveError = true;
+          }
+        }
         return res;
-      });
-    },
+      } catch (error) {
+        if (isAlive(self)) self.draftSaveError = true;
+        throw error;
+      } finally {
+        if (isAlive(self)) {
+          self.draftSavePromise = null;
+          self.setDraftSaving(false);
+        }
+      }
+    }),
 
     submissionInProgress() {
       self.submissionStarted = Date.now();
+    },
+
+    submissionFinished() {
+      self.submissionStarted = 0;
     },
 
     saveDraftImmediately() {
@@ -831,12 +912,17 @@ const _Annotation = types
     },
 
     async saveDraftImmediatelyWithResults(params) {
-      // There is no draft to save as it was already saved as an annotation
-      if (self.submissionStarted || self.isDraftSaving) return {};
-      self.setDraftSaving(true);
-      const res = await self.saveDraft(params);
-
-      return res;
+      // A successful older request must not release navigation while newer edits
+      // are still only in memory. MST snapshots also detect undo/redo and edits
+      // within the same millisecond, without adding another revision counter.
+      while (isAlive(self) && !self.submissionStarted) {
+        const snapshot = getSnapshot(self.trackedState);
+        const res = await self.saveDraft(params);
+        const status = res?.$meta?.status;
+        if (status !== undefined && status !== 200 && status !== 201) return res;
+        if (!isAlive(self) || getSnapshot(self.trackedState) === snapshot) return res;
+      }
+      return {};
     },
 
     pauseAutosave() {
@@ -853,6 +939,22 @@ const _Annotation = types
       self.draftId = id;
     },
 
+    setDraftRevision(revision) {
+      self.draftRevision = revision;
+    },
+
+    setDraftConflict(reason = "changed") {
+      self.draftConflict = true;
+      self.draftConflictReason = reason;
+      self.draftSaveError = true;
+      self.pauseAutosave();
+    },
+
+    reloadLatestDraft() {
+      if (self.hasPendingTextInput) return Promise.resolve(false);
+      return getEnv(self).events.invokeFirst("reloadDraft", self);
+    },
+
     setDraftSelected(selected = true) {
       self.draftSelected = selected;
     },
@@ -863,20 +965,24 @@ const _Annotation = types
     },
 
     dropDraft() {
-      if (!self.autosave) return;
-      self.autosave.cancel();
+      self.autosave?.cancel();
       self.draftId = 0;
+      self.draftRevision = 0;
+      self.draftConflict = false;
+      self.draftConflictReason = null;
       self.draftSelected = false;
       self.draftSaved = undefined;
       self.versions.draft = undefined;
+      self.confirmSavedState();
     },
 
     setDraftSaving(saving = false) {
       self.isDraftSaving = saving;
     },
 
-    setDraftSaved(date) {
+    setDraftSaved(date, snapshot = getSnapshot(self.trackedState)) {
       self.draftSaved = date;
+      self.confirmSavedState(snapshot);
     },
 
     afterAttach() {

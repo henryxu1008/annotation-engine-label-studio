@@ -170,11 +170,6 @@ const Model = types
 
 const ChoiceModel = types.compose("ChoiceModel", TagParentMixin, TagAttrs, ProcessAttrsMixin, Model, AnnotationMixin);
 
-// `name` can't be passed into bem components
-const nameWrapper = (Component, name) => {
-  return (props) => <Component {...props} name={name} />;
-};
-
 const HtxNewChoiceView = ({ item, store }) => {
   let style = {};
 
@@ -188,13 +183,15 @@ const HtxNewChoiceView = ({ item, store }) => {
   const changeHandler = useCallback((ev) => {
     if (item.isReadOnly()) return;
     item.toggleSelected();
-    ev.nativeEvent.target.blur();
+    // Pointer selection returns focus to editor shortcuts; keyboard selection
+    // must retain focus so Space and Tab can continue operating the choices.
+    if (ev.nativeEvent.detail > 0) ev.nativeEvent.target.blur();
   }, []);
 
   const [collapsed, setCollapsed] = useState(false);
   const toogleCollapsed = useCallback(() => setCollapsed((collapsed) => !collapsed), []);
 
-  const CheckboxComponent = nameWrapper(item.isCheckbox ? Checkbox : Radio, item._value);
+  const CheckboxComponent = item.isCheckbox ? Checkbox : Radio;
 
   return (
     <div
@@ -204,6 +201,7 @@ const HtxNewChoiceView = ({ item, store }) => {
     >
       <div className={cn("choice").elem("item").mod({ notLeaf: !item.isLeaf }).toClassName()} style={style}>
         <CheckboxComponent
+          name={item._value}
           className={cn("choice").elem("checkbox").mod({ notLeaf: !item.isLeaf }).toClassName()}
           checked={item.sel}
           indeterminate={!item.sel && item.indeterminate}

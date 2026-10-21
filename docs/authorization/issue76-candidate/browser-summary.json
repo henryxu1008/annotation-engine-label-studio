@@ -1,0 +1,71 @@
+{
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "transport": "native candidate loopback HTTP; trusted-browser HTTPS NOT_RUN",
+  "suites": [
+    {
+      "suite": "import-initialization",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 14,
+      "log_sha256": "9104e7e2299c1f26480b6336936456e7f9b8332e3099bcb7fe849b5382b0598d",
+      "result": "PASS"
+    },
+    {
+      "suite": "app-locale",
+      "exit_code": 0,
+      "passing": 24,
+      "failing": 0,
+      "duration_seconds": 48,
+      "log_sha256": "d130ceff8bc0a70e8788c0fe78a0a88c9085a500020d91d2dbc77ca19edd85ca",
+      "result": "PASS"
+    },
+    {
+      "suite": "dm-editor-locale",
+      "exit_code": 0,
+      "passing": 2,
+      "failing": 0,
+      "duration_seconds": 12,
+      "log_sha256": "cc062546466cbaeb2753330b1157807d50cfd8df5be030307ae524e3a7c08e6d",
+      "result": "PASS"
+    },
+    {
+      "suite": "dm-export-locale",
+      "exit_code": 0,
+      "passing": 6,
+      "failing": 0,
+      "duration_seconds": 13,
+      "log_sha256": "0b2f9968332e4c4b1bc7d9339d664d9dc2764e8c852591febdb1ca8d5205a31f",
+      "result": "PASS"
+    },
+    {
+      "suite": "collaboration-locale",
+      "exit_code": 0,
+      "passing": 4,
+      "failing": 0,
+      "duration_seconds": 26,
+      "log_sha256": "e372d0ee2fe8729f5ee3b799da7ae7096bc638daf15b7bc7182b64ae365b00b4",
+      "result": "PASS"
+    },
+    {
+      "suite": "full-enterprise-workflow-en-US",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 88,
+      "log_sha256": "c2de8d65973146aaf93cc855ca1ae00ae874517593ff0fb59bfc7f47e3781a62",
+      "result": "PASS"
+    },
+    {
+      "suite": "full-enterprise-workflow-zh-CN",
+      "exit_code": 0,
+      "passing": 1,
+      "failing": 0,
+      "duration_seconds": 90,
+      "log_sha256": "252a1755fed0abed1876d2c80d3930eb1a9951f1a6c98e6869ab1eb34ae0ecd3",
+      "result": "PASS"
+    }
+  ],
+  "passed": 40,
+  "result": "PASS"
+}

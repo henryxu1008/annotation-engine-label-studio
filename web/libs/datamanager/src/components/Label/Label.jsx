@@ -63,9 +63,8 @@ export const Labeling = injector(
       return SDK.mode === "labelstream";
     }, []);
 
-    const closeLabeling = useCallback(() => {
-      delete document.body.dataset.lsfLabeling;
-      store.closeLabeling();
+    const closeLabeling = useCallback(async () => {
+      if ((await store.closeLabeling()) !== false) delete document.body.dataset.lsfLabeling;
     }, [store]);
 
     const initLabeling = useCallback(() => {

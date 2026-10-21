@@ -119,6 +119,26 @@ Exit criteria:
 
 ## Negative authorization matrix
 
+The labeling toolbar uses the hidden Data Manager `next_task` action. That read
+must accept effective Annotators as well as Managers, and intersect prepared
+filters/selected IDs with the authenticated user's existing task-assignment
+queryset before sampling. Reviewer, revoked membership, cancelled assignment,
+unassigned and cross-project task IDs remain denied. Submitted actor fields do
+not select the queue owner. Task locks do not replace this assignment check.
+All other Data Manager actions retain the Manager mutation gate. Queue request
+errors are displayed as recoverable errors in the chosen language; only an
+explicit `404` with `display_context.reason=QUEUE_EXHAUSTED` is presented as
+"no tasks currently available". A project/view 404 after revocation is an error,
+and unavailable work or locks must not be reported as all tasks completed.
+
+PostgreSQL candidate validation must include the existing submission/review,
+assignment and composed collaboration tests as well as session tests. #76
+reproduced PostgreSQL rejecting `FOR UPDATE` over nullable annotation and
+submitted-by joins in the submission services. Those unused joins are excluded
+from the lock queries; assignment/project serialization, actor checks, immutable
+revisions and reviewer authorization remain covered by the same tests. SQLite
+alone cannot detect this database compatibility failure.
+
 | Scenario | Expected |
 |---|---|
 | User changes project ID to unauthorized project | Denied |
@@ -366,6 +386,12 @@ freshness. The handoff does not establish production or trusted-browser acceptan
 
 ## Display locale remains outside authorization
 
+The main app's language controls wait for AuthProvider to confirm the actor;
+an SSR avatar is not authenticated authority. Background refresh of an already
+confirmed actor does not disable the language controls. Pending initial Whoami cannot trigger a
+locale write or a misleading save failure. Imperative collaboration modals
+retain their existing provider boundary and open only after actor readiness.
+
 The request-locale middleware runs after Django session authentication and
 wraps JWT middleware and DRF views. A successful JWT or legacy API-token
 authentication may update only the active display locale for that request.
@@ -396,3 +422,288 @@ synthetic-data commands, receipts and inspection limits.
 Retain complete opaque-token matching, including RFC 6750 `+`, `/` and `~`
 characters. The artifact auditor must reject missing/empty directories,
 media-only text inputs and empty logs; an empty scan is not accepted evidence.
+
+## Candidate UI lifecycle checks
+
+On upstream upgrades, preserve the optional login-tips timeout's bound
+`AbortController.abort` receiver. A slow advisory request must not raise an
+exception or interrupt authentication. The bilingual timeout regression checks
+the actual aborted signal, retained input and successful password login.
+
+Data Manager initialization must ignore dependency/backend completions after
+its React page effect is disposed. Check cancellation after asynchronous work
+and reject an absent/already-initialized DOM root before creating the workspace.
+The bilingual delayed-backend navigation regression exercises this on the real
+page. These guards control UI lifetime only; they do not authorize access or
+replace server-side membership, assignment and revocation checks.
+
+The data-list debounce must resolve without calling a destroyed model. Guard
+collection fetches before accessing their workspace SDK and after asynchronous
+responses, using the existing MST `isAlive` checks. Re-run the five collection
+fetch lifecycle cases and real import/navigation journeys on upgrades; these
+checks retain normal live loading and do not relax server authorization.
+
+Tab selection, reload, creation and save continuations must also stop after
+workspace disposal. A cancelled data-list promise resolving is not permission
+to send a tab-change event or update an old view. Keep the tab lifecycle
+regressions alongside the collection cases and run the whole Data Manager
+unit suite before carrying these patches through an upstream upgrade.
+The enclosing `fetchTabs` initializer must recheck workspace lifetime after
+selection and save as well: a cancelled child flow may resolve normally while
+its parent still owns a disposed model. Do not yield actions from that model
+or start labeling after disposal.
+
+The E2E submission fixture must lock its assignment without joining the nullable
+annotation relation. Lazy annotation access inside the transaction keeps the
+fixture compatible with PostgreSQL; the actual submission service retains its
+own authoritative locks and checks.
+
+### Issue #76 annotation usability, 2026-10-14
+
+Interactive task responses expose `can_label` from the existing server-side
+assignment policy. An unassigned Manager retains task/annotation read access;
+Data Manager makes this editor read-only and explains how to request assignment.
+This projection does not replace the annotation/draft endpoint guards or grant
+Managers authority to edit another actor's assigned annotations. Revocation
+still denies API writes and stale task access on the server.
+
+Export-format discovery now applies the same immutable-release guard as raw
+exports after checking Manager scope. `IMMUTABLE_RELEASE_REQUIRED` distinguishes
+this expected rejection from format-load failure. Both display locales explain
+the existing Release route; pending formal submissions remain unreleasable.
+No Core review authority, approval rule or export-storage boundary is changed.
+
+The Release workspace downloads the original response blob from that same
+authenticated release endpoint after verifying the selected submission ID,
+revision, hash and snapshot. Do not re-serialize its parsed JSON: snapshot
+integers can exceed JavaScript's exact Number range. Failed or stale responses
+(including a changed selection or closed workspace) must not download a file
+or display success. Preserve the bilingual retry feedback and actual file
+checks when rebasing; mutable project export remains closed.
+
+The optimized finished-task aggregate counts distinct task IDs so project
+membership joins cannot inflate completion. Draft navigation feedback uses the
+stable locale runtime; changing locale does not re-register or release a pending
+navigation guard. Selected-region action labels retain the original behavior.
+
+The shared ToastProvider maps its documented `duration=-1` contract to Radix's
+supported `Infinity` duration. Passing -1 through previously closed permanent
+guidance immediately. Mounted-provider tests retain the normal timed-close
+control and verify that dismissing another toast ID cannot remove this guidance.
+
+DraftGuard also depends on ToastProvider's stable `show` callback rather than
+the context value object, which changes when feedback is rendered. Controlled
+context-replacement regressions keep failed and pending saves blocked, including
+a locale change during the request; successful saves release navigation once.
+
+Readonly annotation results also disable submit/update/skip/unskip controls,
+including projects that permit empty annotations. AppStore rejects these editing
+actions before dispatch when called through keyboard/action paths. Review
+accept/reject keeps its separate existing controls and authorization boundary;
+readonly results do not themselves remove a Reviewer's decision authority.
+
+Data Manager refreshes persistent task-access guidance when its existing locale
+runtime changes. This refresh only replaces or dismisses its own toast ID; it
+does not reapply annotation access, recreate stores, save drafts or submit work.
+Destroyed editors cannot show stale guidance. Browser regressions switch both
+languages in the same readonly task while retaining disabled editing controls.
+
+Both existing next-task entry points now prioritize the authenticated actor's
+active TaskAssignments within the prepared filter/selection. The existing
+upstream assigned-mode sampler handles those tasks, so another assignee's
+completion or task lock cannot exhaust the actor's queue. Unassigned Managers
+retain the original automatic read-only exploration fallback; no client field
+selects assigned mode or expands the permitted task scope.
+
+Assigned completion, skipped annotations and postponed drafts are tied to the
+current active assignment. Historical cancelled assignments do not complete or
+postpone a new assignment to the same actor. Assigned skipped/postponed queues
+remain available after another actor completes the task. The existing unassigned
+completion/overlap filters and server-side write/revocation guards remain
+authoritative. Preserve these two-entry-point regressions on upstream upgrades.
+
+Interactive task and queue payloads restore only the current actor's active
+assignment drafts. Cancelled/unbound historical drafts remain stored but cannot
+be carried into a new assignment's save or submission. A requeued skipped task
+returns only its current assignment's owned skipped annotation and selects it
+with the editor's existing `default_selected_annotation`/Unskip mechanism. Keep
+the resume, draft-submit and historical-record retention controls as regressions.
+
+### Issue #76 persisted draft confirmation, 2026-10-15
+
+Refresh/close protection and Data Manager navigation use the annotation's
+server-confirmed snapshot rather than Undo history or timestamps. Initial server
+results, restored drafts, lazy server hydration and successful saves explicitly
+confirm that snapshot. An older draft response confirms only its sent snapshot;
+later edits, undo/redo and failures remain protected until their own save succeeds.
+Image/layout history resets must neither confirm user edits nor cancel a pending
+dirty autosave. Keep the delayed-image and completed-queue browser regressions in
+both display languages when upgrading upstream.
+
+After submitting the last assigned task, the selected annotation may remain alive
+on the queue-completion screen. Confirming that successful submission prevents
+Projects/navigation from sending a redundant draft with an obsolete assignment
+version. The server must still reject stale assignment tokens; no authorization
+policy, Core review authority or IAM operations are changed by this UI fix.
+
+### Issue #76 in-page task navigation, 2026-10-16
+
+Data Manager task-row selection previously fired a draft save without awaiting
+its result. Replacing the outgoing editor while that request failed discarded
+the only copy of its draft. Task selection, closing the task panel and entering
+the labeling queue now share an awaited draft gate in AppStore. Keep the editor,
+task selection and URL intact while saving, preserve failed edits for retry,
+and ignore competing task choices until the first transition finishes. Browser
+history failures restore the last accepted editor URL. The annotation flush must
+still confirm edits made during an older request before releasing navigation.
+
+Retain both-language browser regressions for failed saves, delayed responses,
+newer edits, repeated task choices, separate A/B draft ownership, reload recovery
+and rejected browser Back navigation. This changes client navigation only;
+assignment IDs/versions and server-side draft authorization remain authoritative.
+
+### Issue #76 keyboard focus and IME input, 2026-10-16
+
+Choice controls must keep a stable native input across observable updates and
+retain keyboard focus after Space. Pointer selection still releases focus for
+editor shortcuts. The keymaster filter establishes the originating input scope
+before forwarding numpad digits; text inputs and contenteditable elements must
+not forward typing as label shortcuts. Checkbox/radio focus remains in the
+editor shortcut scope.
+
+Composition keys (`isComposing`, React's native event, or legacy process key 229)
+must not submit, cancel, blur or run editor shortcuts. Single-line annotation
+forms also suppress implicit Enter submission during composition. Preserve the
+normal Enter/Shift+Enter/Ctrl+Enter behavior after composition finishes, including
+existing text result edits and per-region inputs. Keep bilingual browser and
+negative-path component regressions on upstream upgrades. Chromium composition
+events do not establish acceptance of a physical Windows IME candidate window.
+
+### Issue #76 restored entity draft state, 2026-10-16
+
+Plain-text entity global offsets are derived solely from the persisted numeric
+start/end offsets. Initialize this cache with the MST region snapshot, before
+saved-state confirmation and history capture. Lazy first rendering must neither
+report a saved draft as dirty nor enqueue an unnecessary autosave. Preserve
+already-calculated Undo/Redo snapshots and the existing DOM-dependent HTML range
+calculation. Do not relax the generic snapshot comparison or clear dirty state
+after rendering: actual text/boundary edits, failed writes, and edits made during
+an older request must remain protected until their own save succeeds. Keep the
+English/Chinese entity draft restore, failed-save and retry browser regressions
+when upgrading upstream. Server ownership and assignment checks remain unchanged.
+
+### Issue #76 concurrent draft pages, 2026-10-16
+
+Assignment versions protect authorization lifecycles, not draft contents. Each
+draft now exposes a monotonically increasing content `revision`. Updates,
+deletes and annotation writes consuming a draft require `draft_revision` from
+the page's last acknowledged snapshot. Missing or stale tokens return 409 with
+`display_context.reason=DRAFT_CONFLICT`; no remote revision is adopted on error.
+The transaction locks the active assignment, project summary and draft in that
+order, preserving upstream summary-before-draft ordering. The model increments
+the revision for all instance saves. First creation is serialized by assignment
+and rejects an existing draft in the same actor/assignment/annotation scope.
+Draft owner, task and assignment references are server controlled; the annotation
+reference permits only the existing, revision-checked unskip detach operation.
+Unversioned old clients must reload the new editor before writing existing drafts.
+
+On conflict, preserve local results and unsaved navigation protection, cancel
+pending automatic saves and refuse blind retries. The bilingual conflict panel
+offers a local JSON backup, then an explicit reload of the server's latest task.
+Edits made after downloading invalidate that backup acknowledgement. Failed
+reload retains the local editor. Recovery must not merge obsolete annotations
+into the fresh server snapshot. Submission/deletion must not bypass this guard.
+Submit/update must first await this page's own in-flight draft acknowledgement
+before capturing results and its content token, so an ordinary continuous edit
+does not produce a spurious conflict with its own background save.
+The recovery copy must observe the real MST content snapshot: serialization is
+an action and does not by itself subscribe a React observer to later edits. Read
+the current copy again at download/reload action time. Render the recovery panel
+through a body portal so the editor's clipped panes cannot hide its instructions.
+Keep PostgreSQL simultaneous-writer tests and bilingual two-page offline/recovery
+acceptance on upgrades. This is draft concurrency control; immutable review
+decisions, IAM operations and Core business integration remain outside this work.
+
+An existing draft can also disappear when another page submits or deletes it.
+Its update/delete endpoint retains the ordinary 404 response and authorization
+checks. Only a 404 from an existing-draft operation enters the editor's missing
+draft recovery state; a create endpoint's 404, permission denial or transient
+network error must not be misclassified. Keep the stale ID, pause autosave and
+block submission/retries while retaining local edits and navigation protection.
+Do not fall back from PATCH to POST or automatically recreate a removed draft.
+After a current local backup, explicitly load the latest task (which may contain
+a final annotation or no draft). A failed load preserves the local editor.
+When no draft remains, explicitly select the latest returned annotation owned
+by the authenticated editor user, rather than upstream's default blank new
+annotation. Existing drafts retain their normal hydration selection. This is
+display selection only; all read/write authorization stays server controlled.
+Keep bilingual submit/delete recovery tests, including server readback proving
+no draft recreation and no changes to submitted annotation/submission records.
+
+### Unconfirmed text before navigation (#76)
+
+TextArea input buffers and local edits to an existing text result are not yet
+confirmed annotation results. Track them separately from the server-saved draft
+baseline. They must trigger the browser's native unload warning, and prevent
+in-page navigation or recovery reload until the annotator confirms or clears
+the input. Explain the action in both display languages. Unchanged prefilled
+text and read-only views must not be blocked. Retain upstream's explicit text
+confirmation/submission behavior; no buffered text is silently added to draft
+serialization, immutable submissions, or recovery-copy downloads.
+Physical Windows IME and native Cancel acceptance remain separate from synthetic
+composition events and beforeunload-hook regression assertions.
+
+TextArea action copy uses the existing per-editor locale runtime. Adding a text
+entry or confirming an existing entry is distinct from saving a draft or
+submitting an annotation; do not label text-entry counts as annotation submissions.
+Shortcut hints must follow the control's actual single-line Enter or multiline
+Shift+Enter behavior. Changing display language must preserve the mounted text
+editor, active input buffer, focus and pending-input registration. Keep custom
+project text/labels unchanged and retain upstream confirmation, blur and save
+semantics; these copy changes do not alter server authorization or submission.
+
+Recheck pending text after an awaited outgoing draft save, immediately before
+releasing either task selection or router navigation. The saved result snapshot
+does not include raw input entered while the request was pending.
+Conflict recovery must also retain the backed-up editor identity and content
+through the HTTP response and the subsequent paint yield. Check again immediately
+before resetting the annotation store; reject an obsolete recovery if confirmed
+results, pending input, annotation selection or editor identity changed. Fetch
+without changing task selection, keep all local content, and require a current
+copy before retrying. Explain this local-edit outcome separately from a failed
+network load in English and Chinese. No authorization or server revision rules
+change; retain delayed-response text and rectangle browser regressions.
+
+Retain upstream's text span resize handles and symbol granularity. Chromium hides
+the `<area>` elements used for these handles by default; explicitly display them
+as inline within rich-text highlights so the existing native drag selection can
+run with each handle anchored to its text boundary (block breaks static positioning).
+Preserve the same region ID, label and per-region results while adjusting offsets.
+Cover both handles with native browser mouse input, including Chinese characters
+after a supplementary Unicode character, outer and internal English spaces, and
+intentional Chinese/English punctuation. Draft save, reload and submission must
+retain the selected code-point range and its exact text; never silently trim data.
+Exact-space templates must opt into the existing Text whitespace contract with
+`<Style>.lsf-richtext__container { white-space: pre-wrap; }</Style>`. The default collapsed
+display remains unchanged. Keep consecutive internal spaces and source offsets
+in the regression fixture; use cypress-real-events for AUT iframe coordinates
+when dispatching native mouse input rather than assuming frameElement is present.
+
+Submission history is also a read-only feedback entry for annotators. Reuse the
+existing submission list/object scope and immutable review metadata: an annotator
+can read their own submissions and rejection reasons without gaining reviewer or
+release authority. The shared history component defaults to read-only; only the
+manager entry opts into release actions. Server-side list, object, review and
+release checks remain authoritative, including after role revocation. Keep the
+English/Chinese rejection-to-revision browser flow covered without granting extra
+roles merely to display feedback.
+
+When restoring a draft attached to a submitted annotation, select it with an
+explicit hydration marker. Object/control context must be selected before
+deserialization, but that intermediate selection must not flush the temporarily
+cleared result with a pre-hydration draft token. Normal user selection still
+awaits outgoing edits; draft revision checks and real conflict recovery remain
+unchanged. Cover reload of a saved correction before submitting revision 2.
+Without an explicit annotation selection, keep the restored correction's existing
+annotation selected rather than opening a new blank annotation; explicit user
+selection continues to take precedence.

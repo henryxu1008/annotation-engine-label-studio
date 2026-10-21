@@ -1,0 +1,450 @@
+[
+  {
+    "check": "Both authoritative security tables deployed with all users paired",
+    "result": "PASS"
+  },
+  {
+    "check": "Migration from pre-locale/pre-boundary schema preserves existing nonzero security version",
+    "result": "PASS"
+  },
+  {
+    "check": "Locale migration, paired state and durable audit schema are installed together",
+    "result": "PASS"
+  },
+  {
+    "check": "Anonymous replica request rejects authentication and issues no session",
+    "result": "PASS"
+  },
+  {
+    "check": "Anonymous replica request rejects authentication and issues no session",
+    "result": "PASS"
+  },
+  {
+    "check": "Cutover rejects a previously valid legacy signed-session format",
+    "result": "PASS"
+  },
+  {
+    "check": "Cutover rejects a previously valid legacy signed-session format",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Native admin session remains authorized",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US self-scoped preference persists over real HTTPS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US preference is shared by both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US preference is shared by both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Native admin session remains authorized",
+    "result": "PASS"
+  },
+  {
+    "check": "zh-CN self-scoped preference persists over real HTTPS",
+    "result": "PASS"
+  },
+  {
+    "check": "zh-CN preference is shared by both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "zh-CN preference is shared by both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "zh-CN native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "zh-CN native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Two credential logins create independent sessions",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact login cookie authenticates on both replicas before logout",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact login cookie authenticates on both replicas before logout",
+    "result": "PASS"
+  },
+  {
+    "check": "Native logout through replica A succeeds",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact pre-logout cookie cannot authenticate either replica",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact pre-logout cookie cannot authenticate either replica",
+    "result": "PASS"
+  },
+  {
+    "check": "Single-session logout preserves independent session",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact pre-logout cookie cannot authenticate either replica",
+    "result": "PASS"
+  },
+  {
+    "check": "Exact pre-logout cookie cannot authenticate either replica",
+    "result": "PASS"
+  },
+  {
+    "check": "Single-session logout preserves independent session",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Native administrator exposes revoke-all action",
+    "result": "PASS"
+  },
+  {
+    "check": "Trusted native admin action accepts user-wide revocation",
+    "result": "PASS"
+  },
+  {
+    "check": "Revoke-all invalidates both exact old cookies on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Revoke-all invalidates both exact old cookies on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Revoke-all invalidates both exact old cookies on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Revoke-all invalidates both exact old cookies on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Native admin revocation commits one durable accepted audit event",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Fresh login after revocation works on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Fresh login after revocation works on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Real PostgreSQL audit insertion failure rolls back both versions and accepted ledger",
+    "result": "PASS"
+  },
+  {
+    "check": "Older synthetic database backup taken at drained writer barrier",
+    "result": "PASS"
+  },
+  {
+    "check": "Restarted bootstrap preserves existing session and durable accepted ledger",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup single-session logout succeeds",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup authorized disable commits",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "Post-backup logout/revoke/disable cookies fail on both replicas",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "Disabled account cannot create a fresh browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "Expired and live cleanup probes exist",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual scheduled clearsessions deletes expired and preserves live row",
+    "result": "PASS"
+  },
+  {
+    "check": "Cleanup failure exits visibly and restart policy retries during isolated DB outage",
+    "result": "PASS"
+  },
+  {
+    "check": "Cleanup automatically completes again after database recovery",
+    "result": "PASS"
+  },
+  {
+    "check": "Latest complete durable audit checkpoint includes all accepted post-backup transitions",
+    "result": "PASS"
+  },
+  {
+    "check": "Older backup restored into newly created exclusive database volume",
+    "result": "PASS"
+  },
+  {
+    "check": "Missing latest checkpoint refuses restore cutover while traffic stays drained",
+    "result": "PASS"
+  },
+  {
+    "check": "Mismatched paired checkpoint refuses restore cutover",
+    "result": "PASS"
+  },
+  {
+    "check": "Incomplete accepted ledger refuses restore cutover",
+    "result": "PASS"
+  },
+  {
+    "check": "Restore reconciles active flags both counters and complete ledger then deletes ALL restored sessions",
+    "result": "PASS"
+  },
+  {
+    "check": "Restored paired-state barrier passes before accepting traffic",
+    "result": "PASS"
+  },
+  {
+    "check": "Restoring older backup cannot revive an exact pre-restore browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "Restoring older backup cannot revive an exact pre-restore browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "Restoring older backup cannot revive an exact pre-restore browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "Restoring older backup cannot revive an exact pre-restore browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "Disabled account cannot create a fresh browser session",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Fresh login is allowed for an active restored account",
+    "result": "PASS"
+  },
+  {
+    "check": "Complete restored accepted ledger and account/security state match authoritative checkpoint",
+    "result": "PASS"
+  },
+  {
+    "check": "Durable accepted audit ledger survives application restart",
+    "result": "PASS"
+  },
+  {
+    "check": "Captured service logs contain no raw tested session cookies or credentials",
+    "result": "PASS"
+  },
+  {
+    "check": "Every durable accepted audit record carries actor target reason timestamp correlation UUID and revocation type",
+    "result": "PASS"
+  },
+  {
+    "check": "Independent offline B0 restore has only the old accepted ledger prefix",
+    "result": "PASS"
+  },
+  {
+    "check": "External latest-checkpoint digest rejects omitted post-backup events despite a preserved old ledger prefix",
+    "result": "PASS"
+  },
+  {
+    "check": "External latest-checkpoint digest rejects stale active flags even when both versions and all events match",
+    "result": "PASS"
+  },
+  {
+    "check": "Rejected incomplete or altered checkpoints leave the offline restored account state and ledger unchanged",
+    "result": "PASS"
+  },
+  {
+    "check": "Verified independent latest checkpoint reconciles the second new volume and removes every restored session",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native login form over verified TLS",
+    "result": "PASS"
+  },
+  {
+    "check": "en-US native credential login issues a session",
+    "result": "PASS"
+  },
+  {
+    "check": "Actual HTTPS response sets Secure HttpOnly SameSite=Lax host-only session cookie",
+    "result": "PASS"
+  },
+  {
+    "check": "Native nginx serves the fixed frontend version metadata over verified HTTPS",
+    "result": "PASS"
+  },
+  {
+    "check": "Native nginx serves the exact built frontend JavaScript bundle over verified HTTPS",
+    "result": "PASS"
+  },
+  {
+    "check": "Native audit administrator reads every restored accepted event",
+    "result": "PASS"
+  },
+  {
+    "check": "Native audit admin refuses adding fabricated accepted events",
+    "result": "PASS"
+  },
+  {
+    "check": "Native audit event detail exposes read-only fields",
+    "result": "PASS"
+  },
+  {
+    "check": "Direct admin POST cannot modify accepted audit identity",
+    "result": "PASS"
+  },
+  {
+    "check": "Direct admin POST cannot delete accepted audit events",
+    "result": "PASS"
+  },
+  {
+    "check": "Read-only audit inspection attempts preserve all accepted records",
+    "result": "PASS"
+  },
+  {
+    "check": "Deployed auth models revocation service and WSGI code exactly match fixed source snapshot",
+    "result": "PASS"
+  },
+  {
+    "check": "Cleanup log sequence independently confirms a success receipt after the database failure",
+    "result": "PASS"
+  },
+  {
+    "check": "Final native audit-admin and gateway logs contain no tested new session cookie or credentials",
+    "result": "PASS"
+  }
+]

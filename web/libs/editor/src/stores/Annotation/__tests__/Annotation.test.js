@@ -15,9 +15,14 @@ jest.mock("keymaster", () => {
 
 import "../../../tags/visual/View";
 import "../../../tags/object/RichText";
+import "../../../tags/object/Image/Image.js";
+import "../../../tags/control/Rectangle.js";
+import "../../../tags/control/Labels/Labels";
+import "../../../tags/control/TextArea/TextArea";
 import Tree from "../../../core/Tree";
 import Registry from "../../../core/Registry";
 import AppStore from "../../AppStore";
+import { autorun } from "mobx";
 
 const MINIMAL_CONFIG = `<View><Text name="t1" value="$text" /></View>`;
 
@@ -53,6 +58,369 @@ function createStoreWithAnnotation(annotationSnapshot = {}) {
 }
 
 describe("Annotation model", () => {
+  it("protects unconfirmed TextArea buffers without autosaving them as results", async () => {
+    const env = createTestEnv();
+    const store = AppStore.create({ config: '<View><Text name="text" value="$text"/><TextArea name="note" toName="text" editable="true"/></View>',
+      task: { id: 1, data: JSON.stringify({ text: 'Hello 中文' }) }, interfaces: ['basic'] }, env);
+    store.initializeStore({});
+    const annotation = store.annotationStore.addAnnotation({ result: [] });
+    store.annotationStore.selectAnnotation(annotation.id);
+    annotation.confirmSavedState();
+    env.events.hasEvent.mockReturnValue(true);
+    const note = annotation.names.get('note');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.updateLocalValue('unchanged prefill');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('unchanged prefill');
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('尚未确认');
+    expect(annotation.hasPendingTextInput).toBe(true);
+    expect(annotation.hasUnsavedDraft).toBe(false);
+    expect(annotation.serializeAnnotation()).toEqual([]);
+    expect(await annotation.reloadLatestDraft()).toBe(false);
+    note.setValue('');
+    annotation.setPendingTextInput('editing-result', true);
+    expect(annotation.hasPendingTextInput).toBe(true);
+    annotation.setPendingTextInput('editing-result', false);
+    expect(annotation.hasPendingTextInput).toBe(false);
+    note.setValue('明确确认');
+    note.beforeSend();
+    expect(annotation.hasPendingTextInput).toBe(false);
+    expect(annotation.serializeAnnotation()[0].value.text).toEqual(['明确确认']);
+    annotation.setPendingTextInput('editing-result', true);
+    annotation.setReadonly(true);
+    expect(annotation.hasPendingTextInput).toBe(false);
+  });
+
+  describe("restored text entity draft initialization", () => {
+    const createTextDraft = (html = false) => {
+      const env = createTestEnv();
+      const object = html ? '<HyperText name="text" value="$text"/>' : '<Text name="text" value="$text"/>';
+      const store = AppStore.create({
+        config: `<View>${object}<Labels name="entity" toName="text"><Label value="Entity"/></Labels><TextArea name="note" toName="text" perRegion="true" editable="true"/></View>`,
+        task: { id: 1, data: JSON.stringify({ text: html ? '<p>Hello 中文</p>' : 'Hello 中文' }) },
+        interfaces: ["basic"],
+      }, env);
+      store.initializeStore({});
+      const position = html ? { start: '/p[1]/text()[1]', end: '/p[1]/text()[1]', startOffset: 0, endOffset: 5 } : { start: 0, end: 5 };
+      const result = [
+        { id: 'entity-1', from_name: 'entity', to_name: 'text', type: 'labels', value: { ...position, labels: ['Entity'], text: 'Hello' } },
+        { id: 'entity-1', from_name: 'note', to_name: 'text', type: 'textarea', value: { ...position, text: ['原始备注'] } },
+      ];
+      const annotation = store.annotationStore.addAnnotation({ result });
+      store.annotationStore.selectAnnotation(annotation.id);
+      annotation.deserializeResults(annotation.versions.result);
+      annotation.reinitHistory(false);
+      annotation.confirmSavedState();
+      env.events.hasEvent.mockReturnValue(true);
+      const region = annotation.regions[0];
+      const note = region.results.find((r) => r.type === 'textarea');
+      return { annotation, region, note, env };
+    };
+
+    it.each(["changed", "missing"])("retains %s draft edits and refuses queued autosaves or manual retries until reload", async (reason) => {
+      const { annotation, note, env } = createTextDraft();
+      annotation.autosave = { cancel: jest.fn() };
+      note.setValue(['旧页修改']);
+      env.events.invokeFirst = jest.fn().mockImplementationOnce(async () => {
+        annotation.setDraftConflict(reason);
+        return { $meta: { status: 409 } };
+      });
+      await annotation.saveDraftImmediatelyWithResults();
+      note.setValue(['冲突后继续编辑']);
+      await annotation.saveDraft();
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(env.events.invokeFirst).toHaveBeenCalledTimes(1);
+      expect(annotation.autosave.cancel).toHaveBeenCalled();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      expect(annotation.draftConflict).toBe(true);
+      expect(annotation.draftConflictReason).toBe(reason);
+      expect(note.value.text).toEqual(['冲突后继续编辑']);
+    });
+
+    it("updates the observed recovery copy after edits inside real MST serialization actions", () => {
+      const { annotation, note } = createTextDraft();
+      annotation.setDraftId(7);
+      annotation.setDraftRevision(1);
+      const copies = [];
+      const stop = autorun(() => copies.push(annotation.draftBackup));
+      const first = copies[copies.length - 1];
+      note.setValue(['冲突后的最新备注']);
+      const latest = JSON.parse(copies[copies.length - 1]);
+      expect(copies[copies.length - 1]).not.toEqual(first);
+      expect(latest.result.find(r => r.from_name === 'note').value.text).toEqual(['冲突后的最新备注']);
+      expect(latest.draft_id).toBe(7);
+      stop();
+    });
+
+    it("keeps a restored entity clean when its text range is initialized", () => {
+      const { annotation, region } = createTextDraft();
+      const result = annotation.serializeAnnotation();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.initRangeAndOffsets();
+      expect(annotation.serializeAnnotation()).toEqual(result);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it("does not turn plain-text range initialization into an autosave", async () => {
+      jest.useFakeTimers();
+      try {
+        const { annotation, region, env } = createTextDraft();
+        env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 201 } });
+        annotation.startAutosave();
+        await jest.advanceTimersByTimeAsync(0);
+        region.initRangeAndOffsets();
+        await jest.advanceTimersByTimeAsync(5001);
+        expect(env.events.invokeFirst).not.toHaveBeenCalled();
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.autosave.cancel();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it.each([503, 'offline'])("retains a real note edit and failed %s save through range initialization", async (failure) => {
+      const { annotation, region, note, env } = createTextDraft();
+      note.setValue(['编辑未保存']);
+      env.events.invokeFirst = jest.fn();
+      if (failure === 'offline') env.events.invokeFirst.mockRejectedValueOnce(new Error('offline'));
+      else env.events.invokeFirst.mockResolvedValueOnce({ $meta: { status: failure } });
+      env.events.invokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+      await annotation.saveDraftImmediatelyWithResults().catch(() => {});
+      region.initRangeAndOffsets();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      expect(annotation.draftSaveError).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      expect(note.value.text).toEqual(['编辑未保存']);
+    });
+
+    it("does not confirm newer text edits when an older save completes", async () => {
+      const { annotation, region, note, env } = createTextDraft();
+      note.setValue(['第一版']);
+      let complete;
+      env.events.invokeFirst = jest.fn().mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }))
+        .mockResolvedValue({ $meta: { status: 200 } });
+      const saving = annotation.saveDraft();
+      note.setValue(['第二版']);
+      region.initRangeAndOffsets();
+      complete({ $meta: { status: 200 } });
+      await saving;
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.undo();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.redo();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it("still protects changed entity boundaries", () => {
+      const { annotation, region } = createTextDraft();
+      region.updateTextOffsets(0, 4);
+      region.initRangeAndOffsets();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      expect(annotation.serializeAnnotation().find((r) => r.type === 'labels').value.end).toBe(4);
+    });
+
+    it("leaves HTML range calculation dependent on its DOM", () => {
+      const { region } = createTextDraft(true);
+      expect(region.isText).toBe(false);
+      expect(region.globalOffsets).toBeNull();
+    });
+  });
+  describe("browser unload draft confirmation", () => {
+    const createDraft = () => {
+      const env = createTestEnv();
+      const store = AppStore.create({ config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>', task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) }, interfaces: ["basic"] }, env);
+      store.initializeStore({});
+      const annotation = store.annotationStore.addAnnotation({ result: [{ from_name: "rect", to_name: "img", type: "rectangle", value: { x: 0, y: 0, width: 20, height: 20 } }] });
+      annotation.deserializeResults(annotation.versions.result);
+      annotation.reinitHistory(false);
+      annotation.confirmSavedState();
+      env.events.hasEvent.mockReturnValue(true);
+      return { annotation, env, region: annotation.regions[0] };
+    };
+
+    it("does not confirm unsaved edits when media initialization resets Undo", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.reinitHistory(false);
+      expect(annotation.history.hasChanges).toBe(false);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+    });
+
+    it("keeps a pending autosave through the actual image-load callback", async () => {
+      jest.useFakeTimers();
+      try {
+        const env = createTestEnv();
+        env.events.hasEvent.mockReturnValue(true);
+        env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 201 } });
+        const store = AppStore.create({ config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>', task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) }, interfaces: ["basic"] }, env);
+        store.initializeStore({ annotations: [{ result: [{ from_name: "rect", to_name: "img", type: "rectangle", value: { x: 0, y: 0, width: 20, height: 20 } }] }] });
+        const annotation = store.annotationStore.selected;
+        await jest.advanceTimersByTimeAsync(0);
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.regions[0].setProperty("width", 22);
+        const image = annotation.names.get("img");
+        image.setContainerRef({ offsetWidth: 600, offsetHeight: 400 });
+        image.updateImageSize({ target: { naturalWidth: 600, naturalHeight: 400 } });
+        await jest.advanceTimersByTimeAsync(1);
+        expect(annotation.hasUnsavedDraft).toBe(true);
+        expect(env.events.invokeFirst).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(5000);
+        expect(env.events.invokeFirst).toHaveBeenCalledTimes(1);
+        expect(annotation.hasUnsavedDraft).toBe(false);
+        annotation.autosave.cancel();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("uses a restored server draft as the baseline without confirming later media edits", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      annotation.setDraftSaved("2026-10-15T00:00:00Z");
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.setProperty("width", 23);
+      annotation.reinitHistory(false);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+    });
+
+    it("confirms a formal save even without an autosave handler", () => {
+      const { annotation, region } = createDraft();
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.dropDraft();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      expect(annotation.history.hasChanges).toBe(true);
+    });
+
+    it("does not treat an older successful save as confirmation of newer edits", async () => {
+      const { annotation, env, region } = createDraft();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      region.setProperty("width", 22);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      let complete;
+      env.events.invokeFirst = jest.fn().mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }))
+        .mockResolvedValue({ $meta: { status: 200 } });
+      const first = annotation.saveDraft();
+      region.setProperty("width", 23);
+      complete({ $meta: { status: 200 } });
+      await first;
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.undo();
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      annotation.redo();
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+
+    it.each([503, "offline", "unconfirmed"])("keeps unload protection after %s and clears it only on retry success", async (failure) => {
+      const { annotation, env, region } = createDraft();
+      region.setProperty("width", 22);
+      env.events.invokeFirst = jest.fn();
+      if (failure === "offline") env.events.invokeFirst.mockRejectedValueOnce(new Error("offline"));
+      else env.events.invokeFirst.mockResolvedValueOnce(failure === "unconfirmed" ? {} : { $meta: { status: failure } });
+      env.events.invokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+      await annotation.saveDraftImmediatelyWithResults().catch(() => {});
+      expect(annotation.draftSaveError).toBe(true);
+      expect(annotation.hasUnsavedDraft).toBe(true);
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.draftSaveError).toBe(false);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+      annotation.setReadonly(true);
+      expect(annotation.hasUnsavedDraft).toBe(false);
+    });
+  });
+  describe("draft failure recovery", () => {
+    it.each([200, 403, "offline"])("flushes edits made during an explicit save, with follow-up result %s", async (status) => {
+      const env = createTestEnv();
+      const store = AppStore.create({
+        config: '<View><Image name="img" value="$img"/><Rectangle name="rect" toName="img"/></View>',
+        task: { id: 1, data: JSON.stringify({ img: "/test.jpg" }) },
+        interfaces: ["basic"],
+      }, env);
+      store.initializeStore({});
+      const annotation = store.annotationStore.addAnnotation({ result: [{
+        from_name: "rect", to_name: "img", type: "rectangle",
+        value: { x: 0, y: 0, width: 20, height: 20 },
+      }] });
+      annotation.deserializeResults(annotation.versions.result);
+      const region = annotation.regions[0];
+      const pending = [];
+      const sent = [];
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn(() => {
+        sent.push(annotation.serializeAnnotation({ fast: true }));
+        return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+      });
+      const flush = annotation.saveDraftImmediatelyWithResults();
+      const settled = jest.fn();
+      // Observe rejection immediately, including the follow-up offline case.
+      const outcome = flush.then((res) => ({ res }), (error) => ({ error })).then((value) => { settled(); return value; });
+      region.setProperty("width", 22);
+      pending[0].resolve({ $meta: { status: 200 } });
+      // Drain the real MST flow and promise continuations without running timers.
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      expect(sent.map((result) => result[0].value.width)).toEqual([20, 22]);
+      if (status === "offline") pending[1].reject(new Error("offline"));
+      else pending[1].resolve({ $meta: { status } });
+      const result = await outcome;
+      if (status === "offline") expect(result.error.message).toBe("offline");
+      else expect(result.res.$meta.status).toBe(status);
+      expect(region.width).toBe(22);
+      expect(annotation.isDraftSaving).toBe(false);
+    });
+
+    it("propagates a network failure, releases saving, and retries without marking the failed draft saved", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn().mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValueOnce({ $meta: { status: 200 } });
+      await expect(annotation.saveDraftImmediatelyWithResults()).rejects.toThrow("offline");
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeUndefined();
+      await expect(annotation.saveDraftImmediatelyWithResults()).resolves.toMatchObject({ $meta: { status: 200 } });
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeDefined();
+    });
+
+    it("does not mark a rejected HTTP response as saved", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      env.events.invokeFirst = jest.fn().mockResolvedValue({ $meta: { status: 403 } });
+      await annotation.saveDraftImmediatelyWithResults();
+      expect(annotation.isDraftSaving).toBe(false);
+      expect(annotation.draftSaved).toBeUndefined();
+    });
+
+    it("waits for an autosave then serializes the latest edits before confirming navigation", async () => {
+      const { annotation, env } = createStoreWithAnnotation();
+      env.events.hasEvent.mockReturnValue(true);
+      let complete;
+      const sent = [];
+      let value = "before";
+      annotation.serializeAnnotation = jest.fn(() => [value]);
+      env.events.invokeFirst = jest.fn(() => {
+        sent.push(value);
+        return sent.length === 1 ? new Promise((resolve) => { complete = resolve; }) : Promise.resolve({ $meta: { status: 200 } });
+      });
+      const first = annotation.saveDraft();
+      value = "latest";
+      const leave = annotation.saveDraftImmediatelyWithResults();
+      let left = false;
+      leave.then(() => { left = true; });
+      await Promise.resolve();
+      expect(left).toBe(false);
+      complete({ $meta: { status: 200 } });
+      await first;
+      await leave;
+      expect(sent).toEqual(["before", "latest"]);
+      expect(annotation.isDraftSaving).toBe(false);
+    });
+  });
   describe("creation and snapshot", () => {
     it("creates annotation with default type and editable", () => {
       const { annotation } = createStoreWithAnnotation();

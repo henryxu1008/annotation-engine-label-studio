@@ -1,0 +1,27 @@
+{
+  "status": "PASS_LOCAL_BILINGUAL_RECHECK",
+  "source_commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+  "test_HEAD": "0253cc4d6a5a00a103e4d7b600641ee34276740a",
+  "passed": 48,
+  "failed": 0,
+  "PR77": "OPEN_DRAFT",
+  "review_threads_unresolved": 0,
+  "remote_CI": "Separate live PR checks; not inferred from local receipts",
+  "previous_source": "38bc51f9211388e47b000851badffdab60e4144f",
+  "intermediate_source": "a85c0f63ac643702cbb6e725645e7d5ba7076234",
+  "new_Compose": 0,
+  "trust_changes": 0,
+  "production": false,
+  "merged": false,
+  "Core_business": "PAUSED",
+  "IAM_operations": "PAUSED",
+  "old_operational_112": "HISTORICAL_ONLY; not inherited by the new artifact",
+  "new_schema_migration": false,
+  "remaining": [
+    "Trusted-browser HTTPS",
+    "Receiving environment",
+    "Complete second 86400-second cleanup cycle",
+    "Authorized old security/schema rollback target",
+    "Formal current-head review"
+  ]
+}

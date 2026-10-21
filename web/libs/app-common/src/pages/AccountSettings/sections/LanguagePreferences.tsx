@@ -2,7 +2,7 @@ import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@hum
 
 export const LanguagePreferences = ({ compact = false }: { compact?: boolean }) => {
   const { t } = useLocaleTranslation("app");
-  const { preference, saving, error, setPreference } = useLocalePreference();
+  const { preference, ready, saving, error, setPreference } = useLocalePreference();
   const inputId = compact ? "menu-display-language" : "account-display-language";
   const descriptionId = `${inputId}-description`;
 
@@ -18,7 +18,7 @@ export const LanguagePreferences = ({ compact = false }: { compact?: boolean }) 
           const selected = event.target.value;
           if (selected === "auto" || isDisplayLocale(selected)) void setPreference(selected === "auto" ? null : selected);
         }}
-        disabled={saving}
+        disabled={!ready || saving}
         data-testid={compact ? "menu-language-select" : "language-preference-select"}
         className="h-9 w-fit rounded-md border border-neutral-border bg-primary text-primary-content px-3"
       >

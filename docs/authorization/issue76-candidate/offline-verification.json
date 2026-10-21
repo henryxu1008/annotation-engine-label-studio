@@ -1,0 +1,9 @@
+{
+  "result": "PASS",
+  "archive_sha256": "8602dd1e4eb761de9dfbbf693aad6b311fcede895c141bfec59d298e38ad0b6b",
+  "verified_blobs": 26,
+  "oci_index_digest": "sha256:887f17229d79f3ab11a279cd6bf76b40885abd28b124027401a77fb4c8848380",
+  "platform_manifest_digest": "sha256:0e18ea502f9f530ece0846c83afe71cd6344cbe67c29e1f288d5f4417ec80604",
+  "image_config_digest": "sha256:2e5f9727217c6f64ecf40fa76409778d936044eb6460876d6ebfcd8253fb587d",
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f"
+}

@@ -199,7 +199,7 @@ The browser journey:
 4. Annotator A edits the real Label Studio Editor; autosave creates a draft while Submission history remains empty.
 5. Explicit Editor Submit creates immutable revision 1 using the current assignment id/version and `submit_for_review=true`.
 6. Reviewer rejects revision 1 with a reason.
-7. Annotator A reopens the real Editor, changes the result, and Editor Update creates revision 2.
+7. Annotator A reads the rejection reason in Submission history, reopens the real Editor, changes the result, and Editor Update creates revision 2. This reuses the server-scoped submission list: annotators see their own history without reviewer or release actions; the release view requires an explicit manager capability.
 8. Revision 1 remains rejected and immutable; revision 2 has a distinct hash/snapshot.
 9. Reviewer approves revision 2.
 10. Manager opens Releases and releases exactly approved revision 2.

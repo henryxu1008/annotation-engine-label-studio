@@ -1,6 +1,6 @@
 /* global LSF_VERSION */
 
-import { destroy, detach, flow, getEnv, getParent, getSnapshot, isRoot, types, walk } from "mobx-state-tree";
+import { destroy, detach, flow, getEnv, getParent, getSnapshot, isAlive, isRoot, types, walk } from "mobx-state-tree";
 
 import { uniqBy } from "@humansignal/core/lib/utils/lodash-replacements";
 import InfoModal from "../components/Infomodal/Infomodal";
@@ -370,15 +370,15 @@ export default types
           if (entity.isReadOnly()) return;
           if (entity.hasIncompletePolygons) return;
 
-          entity?.submissionInProgress();
-
           if (self.hasInterface("annotation:bulk")) {
             const customButtons = self.customButtons?.get("_replace");
             const submitButton = customButtons?.find((btn) => btn.name === "submit");
             if (submitButton && !submitButton.disabled) {
+              entity.submissionInProgress();
               self.handleCustomButton?.(submitButton);
             }
           } else if (isReview) {
+            entity.submissionInProgress();
             self.acceptAnnotation();
           } else if (!isUpdate && self.hasInterface("submit")) {
             self.submitAnnotation();
@@ -576,13 +576,13 @@ export default types
     /* eslint-enable no-unused-vars */
 
     function submitDraft(c, params = {}) {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         const events = getEnv(self).events;
 
         if (!events.hasEvent("submitDraft")) return resolve();
         const res = events.invokeFirst("submitDraft", self, c, params);
 
-        if (res && res.then) res.then(resolve);
+        if (res && res.then) res.then(resolve, reject);
         else resolve(res);
       });
     }
@@ -602,22 +602,46 @@ export default types
 
     // Set `isSubmitting` flag to block [Submit] and related buttons during request
     // to prevent from sending duplicating requests.
-    // Better to return request's Promise from SDK to make this work perfect.
-    function handleSubmittingFlag(fn, defaultMessage = "Error during submit") {
+    // Submit/update SDK handlers return their actual API response.
+    function handleSubmittingFlag(fn, defaultMessage = "Error during submit", annotation) {
       if (self.isSubmitting) return;
       self.setFlags({ isSubmitting: true });
       const res = fn();
 
       self.commentStore.setAddedCommentThisSession(false);
 
-      // Wait for request, max 5s to not make disabled forever broken button;
-      // but block for at least 0.2s to prevent from double clicking.
-      Promise.race([Promise.all([res, delay(200)]), delay(5000)])
+      // Block for at least 0.2s to prevent double clicking. Other legacy actions
+      // retain their five-second fallback; formal submit/update waits for I/O.
+      const settled = Promise.all([res, delay(200)]);
+      // A formal annotation request is still pending after five seconds. Keep
+      // duplicate submission blocked until its real response (or rejection).
+      const pending = annotation ? settled : Promise.race([settled, delay(5000)]);
+      return pending
         .catch((err) => {
-          showModal(err?.message || err || defaultMessage);
+          if (annotation) {
+            const runtime = getEnv(self).localeRuntime;
+            InfoModal.warning(
+              runtime?.t("editor:submissionFailed") || "Annotation could not be saved. Your edits are still here. Please retry.",
+              runtime?.t("editor:warningTitle") || "Warning",
+            );
+          } else {
+            showModal(err?.message || err || defaultMessage);
+          }
           console.error(err);
         })
-        .then(() => self.setFlags({ isSubmitting: false }));
+        .finally(() => {
+          if (annotation && isAlive(annotation)) annotation.submissionFinished();
+          if (isAlive(self)) self.setFlags({ isSubmitting: false });
+        });
+    }
+
+    function annotationSaved(responses) {
+      // Standalone integrations may not return HTTP metadata. SDK event
+      // handlers return a Promise.all array containing the actual API result.
+      return (Array.isArray(responses) ? responses : [responses]).every((response) => {
+        const status = response?.$meta?.status;
+        return status === undefined || status === 200 || status === 201;
+      });
     }
 
     function incrementQueuePosition(number = 1) {
@@ -628,42 +652,48 @@ export default types
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
+      if (!entity || entity.isReadOnly() || entity.draftConflict) return;
       const event = entity.exists ? "updateAnnotation" : "submitAnnotation";
 
       entity.beforeSend();
 
-      if (!entity.validate()) return;
-
-      if (!isFF(FF_CUSTOM_SCRIPT)) {
-        entity.sendUserGenerate();
+      if (!entity.validate()) {
+        entity.submissionFinished();
+        return;
       }
+
+      entity.submissionInProgress();
+
       handleSubmittingFlag(async () => {
         if (isFF(FF_CUSTOM_SCRIPT)) {
           await self.waitForDraftSubmission();
           const allowedToSave = await getEnv(self).events.invoke("beforeSaveAnnotation", self, entity, { event });
           if (allowedToSave && allowedToSave.some((x) => x === false)) return;
-
-          entity.sendUserGenerate();
         }
-        await getEnv(self).events.invoke(event, self, entity);
+        const result = await getEnv(self).events.invoke(event, self, entity);
+        if (!annotationSaved(result)) return;
         self.incrementQueuePosition();
-        if (isFF(FF_CUSTOM_SCRIPT)) {
+        if (isAlive(entity)) {
+          entity.sendUserGenerate();
           entity.dropDraft();
         }
-      });
-      if (!isFF(FF_CUSTOM_SCRIPT)) {
-        entity.dropDraft();
-      }
+      }, undefined, entity);
     }
 
     function updateAnnotation(extraData) {
       if (self.isSubmitting) return;
 
       const entity = self.annotationStore.selected;
+      if (!entity || entity.isReadOnly() || entity.draftConflict) return;
 
       entity.beforeSend();
 
-      if (!entity.validate()) return;
+      if (!entity.validate()) {
+        entity.submissionFinished();
+        return;
+      }
+
+      entity.submissionInProgress();
 
       handleSubmittingFlag(async () => {
         if (isFF(FF_CUSTOM_SCRIPT)) {
@@ -672,21 +702,18 @@ export default types
           });
           if (allowedToSave && allowedToSave.some((x) => x === false)) return;
         }
-        await getEnv(self).events.invoke("updateAnnotation", self, entity, extraData);
+        const result = await getEnv(self).events.invoke("updateAnnotation", self, entity, extraData);
+        if (!annotationSaved(result)) return;
         self.incrementQueuePosition();
-        if (isFF(FF_CUSTOM_SCRIPT)) {
+        if (isAlive(entity)) {
           entity.dropDraft();
           !entity.sentUserGenerate && entity.sendUserGenerate();
         }
-      });
-      if (!isFF(FF_CUSTOM_SCRIPT)) {
-        entity.dropDraft();
-        !entity.sentUserGenerate && entity.sendUserGenerate();
-      }
+      }, undefined, entity);
     }
 
     function skipTask(extraData) {
-      if (self.isSubmitting) return;
+      if (self.isSubmitting || self.annotationStore.selected?.isReadOnly()) return;
       const isEnterprise = window.APP_SETTINGS?.billing?.enterprise;
 
       // Manager roles that can force-skip unskippable tasks (OW=Owner, AD=Admin, MA=Manager)
@@ -707,7 +734,7 @@ export default types
     }
 
     function unskipTask() {
-      if (self.isSubmitting) return;
+      if (self.isSubmitting || self.annotationStore.selected?.isReadOnly()) return;
       handleSubmittingFlag(() => {
         getEnv(self).events.invoke("unskipTask", self);
       }, "Error during cancel skipping task, try again");
@@ -887,6 +914,7 @@ export default types
           const obj = as.addAnnotation(c);
 
           obj.deserializeResults(c.draft || c.result, { hidden: true });
+          obj.confirmSavedState();
         });
 
         window.STORE_INIT_OK = true;
@@ -905,6 +933,7 @@ export default types
           // looks like we still need it anyway, but it's fast and harmless,
           // and we only call it once on already visible annotation
           current.reinitHistory();
+          current.confirmSavedState();
         } else if (currentPrediction) {
           as.selectPrediction(currentPrediction.id);
         }
@@ -930,6 +959,7 @@ export default types
           as.selectAnnotation(obj.id);
           obj.deserializeResults(c.draft || c.result);
           obj.reinitHistory();
+          obj.confirmSavedState();
         });
 
         const current = as.annotations.at(-1);

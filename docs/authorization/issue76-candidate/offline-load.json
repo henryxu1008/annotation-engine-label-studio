@@ -1,0 +1,9 @@
+{
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "result": "PASS",
+  "local_load": "PASS",
+  "index_identity": "sha256:887f17229d79f3ab11a279cd6bf76b40885abd28b124027401a77fb4c8848380",
+  "native_metadata_matches": true,
+  "network": "none",
+  "receiving_environment": "NOT_RUN"
+}

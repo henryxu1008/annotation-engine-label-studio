@@ -1,0 +1,49 @@
+{
+  "source_commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+  "source_tree": "856c93430dd59395a848e573c58d368fde149866",
+  "version": "1.23.0+fork.rc76.af1cb115",
+  "platform": "linux/amd64",
+  "tag": "annotation-engine-label-studio:1.23.0-fork-rc76-af1cb115",
+  "branch": "codex/ls-issue76-candidate",
+  "source_archive_sha256": "8735f5c81b394dca0c18be28056097ea1c55026ce73826c28f6c7312d9e24c34",
+  "context_sha256": "b44d59068267bc1bb6123478f98fc00cd71c72b6d52427fe5883530aeddbe7ee",
+  "dockerfile_sha256": "98d57bfa2c944a7de5916f54bfe90853f0eb7ff2ebb52816912246057b475b78",
+  "installer": {
+    "url": "https://install.python-poetry.org",
+    "sha256": "75745ca71373a7b22fa150953543f03d826a52f8e4bc4350328a33bddd668026"
+  },
+  "bases": {
+    "node": {
+      "requested": "mirror.gcr.io/library/node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "index_digest": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "platform_manifest_digest": "sha256:afdf98210b07b586eb71fa22ba2e432e058e4cd1304d31ed60888755b8c865fb",
+      "pinned": "mirror.gcr.io/library/node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+    },
+    "python": {
+      "requested": "mirror.gcr.io/library/python@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89",
+      "index_digest": "sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89",
+      "platform_manifest_digest": "sha256:8a00ecb83ed9d0864dfd102a1bdb2067fda907ceb30bb86d09da9ee558b19590",
+      "pinned": "mirror.gcr.io/library/python@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89"
+    }
+  },
+  "verified_git_blob_count": 5376,
+  "executable_file_count": 23,
+  "git_tracked_links": {
+    "deploy/docker-entrypoint.d/app-docker/05-check-data-permissions.sh": "../common/05-check-data-permissions.sh",
+    "deploy/docker-entrypoint.d/app-init/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+    "deploy/docker-entrypoint.d/app-init/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+    "deploy/docker-entrypoint.d/app/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+    "deploy/docker-entrypoint.d/app/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+    "deploy/docker-entrypoint.d/app/30-run-db-migrations.sh": "../common/30-run-db-migrations.sh",
+    "deploy/docker-entrypoint.d/nginx/10-configure-nginx.sh": "../common/10-configure-nginx.sh",
+    "docs/themes/v2/source/images/templates": "../../../../../label_studio/core/static/templates/"
+  },
+  "frontend_history": "depth-1 source snapshot; candidate identity",
+  "lockfiles": {
+    "poetry.lock": "4edef02bcf35c17d0c71e27f0114957c52a65bbdf15029cc9a3ece774d34d95f",
+    "pyproject.toml": "7e97d3e9fcc7e3359ad5edfe91c8363a0f5713044d06b0711ed187581368a5a9",
+    "web/yarn.lock": "e6c64f1c076f9ca1be3ef47675c149df3511d11a1e238d713c9f25cac19062eb",
+    "web/package.json": "cada6a126a6a469f71b193087bc3f653d8b5f644d387c140b97be743f26449a7"
+  },
+  "bit_for_bit_rebuild_promised": false
+}

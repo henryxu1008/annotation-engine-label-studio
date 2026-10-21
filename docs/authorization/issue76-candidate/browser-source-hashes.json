@@ -1,0 +1,97 @@
+{
+  "cypress_version": "14.5.0",
+  "typescript_version": "5.8.3",
+  "transport": "loopback HTTP; trusted-browser HTTPS acceptance remains separate",
+  "receipts": [
+    {
+      "source": "support/commands.ts",
+      "generated": "support/commands.js",
+      "source_sha256": "eec91b6841c8386085effb6445cfdc87284e3bf781b3d78719fb0e002452558a",
+      "generated_sha256": "1b13e9e264da7a5750f8b21e6cd0721a05951fef54941965753555e0d639024d"
+    },
+    {
+      "source": "support/e2e.ts",
+      "generated": "support/e2e.js",
+      "source_sha256": "7ebc21900f4296cca2e138bf9769bd2d5aacd6d47b2558e04100114a39a59dde",
+      "generated_sha256": "d37ee20b6d5ee2c53c419e5a328f99d35c03cd0d5683d3aadc8df2d9f254d822"
+    },
+    {
+      "source": "support/failure-diagnostics.cjs",
+      "generated": "support/failure-diagnostics.cjs",
+      "source_sha256": "0852e4a27529720284f6cb6a96f155901a7fe7520de20df0bca4f53ace70e396",
+      "generated_sha256": "0852e4a27529720284f6cb6a96f155901a7fe7520de20df0bca4f53ace70e396"
+    },
+    {
+      "source": "e2e/app-locale.cy.ts",
+      "generated": "e2e/app-locale.cy.js",
+      "source_sha256": "f86ccf9eff8db0f78fd11c887331e9e072aeb5e11e602fc2dfa95c76c152ffb3",
+      "generated_sha256": "78a50fa4b2ca6a0c98af59c96c36b7c9642558e6c88b6e7f67ae461907eb2cb3"
+    },
+    {
+      "source": "e2e/app.cy.ts",
+      "generated": "e2e/app.cy.js",
+      "source_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "generated_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "e2e/collaboration-locale.cy.ts",
+      "generated": "e2e/collaboration-locale.cy.js",
+      "source_sha256": "2fa6b9cf0d0f88c919010a4b6ef5d52154b6fe82b775905e86debca70fbd18c3",
+      "generated_sha256": "27ec450faf7be41591540149807f68067446b7619b9b35a56078ffc788a23251"
+    },
+    {
+      "source": "e2e/dm-editor-locale.cy.ts",
+      "generated": "e2e/dm-editor-locale.cy.js",
+      "source_sha256": "0c1d311cce3b0243a1884d1c44772087a559ff723bb02c94c53f2f60479a5644",
+      "generated_sha256": "1c0956c15cd7858795a98c35f4d88874cb2bafbe2dc41bb4cf52d710216f461e"
+    },
+    {
+      "source": "e2e/dm-export-locale.cy.ts",
+      "generated": "e2e/dm-export-locale.cy.js",
+      "source_sha256": "e537efd3cf2f5c7e9c871c0e8f1b0637da893eab66289a8ca5f63eb780c0f558",
+      "generated_sha256": "b6a440f45a9421ad468007edbd399a531232a46c8a4c26cf72835eaef5be5a18"
+    },
+    {
+      "source": "e2e/enterprise-current-ui.cy.ts",
+      "generated": "e2e/enterprise-current-ui.cy.js",
+      "source_sha256": "7789435223dde1a9009f53dde88569c2fabfe6f77a532502c8ada781b38ac4a5",
+      "generated_sha256": "2b5751c0595e3de597d0a19ccd910be56cabf68a0434abad2ae476a9159c3172"
+    },
+    {
+      "source": "e2e/full-enterprise-workflow.cy.ts",
+      "generated": "e2e/full-enterprise-workflow.cy.js",
+      "source_sha256": "6f227ec3d1aded1eafbb082a7b680688954a404caa796bff1bc3e8ac9a414967",
+      "generated_sha256": "af311b9945afc5ca39c956485c167fcbb7f3ba837709b6ba4b7d66661ad1a98f"
+    },
+    {
+      "source": "e2e/import-initialization.cy.ts",
+      "generated": "e2e/import-initialization.cy.js",
+      "source_sha256": "9fee86f336ac35ae94ac193c370af1bcbb6e7d2784125aa37d67797539aa560d",
+      "generated_sha256": "ee6c7f16a7f7a35ece2770adb6d58465e177925ee386b7579028f71befc29b38"
+    },
+    {
+      "source": "e2e/project-members.cy.ts",
+      "generated": "e2e/project-members.cy.js",
+      "source_sha256": "bb062e098e0a2c9023d1f868804f38f59dd91e0c09b10a75bff42587f58bc1ea",
+      "generated_sha256": "9d436cea5ec413c1656fc2665437611a94546dcadbe6c754c32e2d1d247aa3b3"
+    },
+    {
+      "source": "e2e/reviewer-workspace.cy.ts",
+      "generated": "e2e/reviewer-workspace.cy.js",
+      "source_sha256": "c97106b62ccc70abe50859500882de67e866bb922d270a0702c5159c6c2144db",
+      "generated_sha256": "7aa04611bbdb2ac3ecba5d2dd3ccf4114321de8b449a3f2b9d825e22dc753707"
+    },
+    {
+      "source": "e2e/submission-release.cy.ts",
+      "generated": "e2e/submission-release.cy.js",
+      "source_sha256": "30bf70a5fb4f144ce46af1cd77e041938e942f4464165cf56d6e31f7247a6f7d",
+      "generated_sha256": "da43697628257b996228eb8e6202cef3f029486cadac5014d9441dd15f54e1c1"
+    },
+    {
+      "source": "e2e/task-assignments.cy.ts",
+      "generated": "e2e/task-assignments.cy.js",
+      "source_sha256": "f7278dd7fc605bb5eead833f726ce083b4248188ab031f8fcb3b05ae1b27300f",
+      "generated_sha256": "982d5e085e6539c587fa4d0e869cf77ead2f7c8decccab3f2b2912c0935c364e"
+    }
+  ]
+}

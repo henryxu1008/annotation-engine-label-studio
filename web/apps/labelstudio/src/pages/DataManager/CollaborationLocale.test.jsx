@@ -4,10 +4,12 @@ import { AssignmentManager } from "./AssignmentManager";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { MembersSettings } from "../Settings/MembersSettings";
+import { downloadFile } from "../../utils/download";
 
 const mockCallApi = jest.fn();
 const mockReplace = jest.fn();
 const mockHistory = { replace: mockReplace };
+jest.mock("../../utils/download", () => ({ downloadFile: jest.fn() }));
 jest.mock("@humansignal/ui", () => {
   const React = require("react");
   return {
@@ -48,6 +50,7 @@ describe("collaboration locale projections", () => {
   beforeEach(() => {
     mockCallApi.mockReset();
     mockReplace.mockReset();
+    downloadFile.mockReset();
   });
 
   it("changes member labels while preserving role code and member identity", async () => {
@@ -131,12 +134,39 @@ describe("collaboration locale projections", () => {
     runtime.destroy();
   });
 
+  it("shows rejection feedback in read-only history without granting release actions", async () => {
+    const rejected = { ...submission, status: "rejected", review: {
+      decision: "rejected", reason: "请补标遗漏的人名 / Add the missing person",
+      reviewer: { email: "reviewer@example.invalid" },
+    } };
+    mockCallApi.mockImplementation((method) => {
+      if (method === "projectSubmissions") return Promise.resolve({ results: [rejected, { ...submission, id: 22, status: "approved" }] });
+      throw new Error(`unexpected ${method}`);
+    });
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} />);
+    const metadata = await screen.findByTestId("release-review-metadata");
+    expect(metadata.textContent).toContain(rejected.review.reason);
+    expect(screen.getByTestId("release-status").textContent).toBe("Rejected");
+    act(() => runtime.updateLocale("zh-CN"));
+    expect(screen.getByTestId("release-status").textContent).toBe("已驳回");
+    expect(metadata.textContent).toContain(rejected.review.reason);
+    fireEvent.click(screen.getByTestId("release-submission-22"));
+    expect(screen.getByTestId("release-status").textContent).toBe("已通过");
+    expect(screen.queryByTestId("release-approved-submission")).toBeNull();
+    expect(screen.queryByTestId("review-approve")).toBeNull();
+    expect(screen.queryByTestId("review-reject")).toBeNull();
+    expect(mockCallApi.mock.calls.every(([method]) => method === "projectSubmissions")).toBe(true);
+    expect(downloadFile).not.toHaveBeenCalled();
+    unmount();
+    runtime.destroy();
+  });
+
   it("keeps release authority and snapshot bound to approved revision", async () => {
     mockCallApi.mockImplementation((method) => {
       if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved" }] });
       throw new Error(`unexpected ${method}`);
     });
-    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} />);
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
     await screen.findByTestId("release-approved-submission");
     const hash = screen.getByTestId("release-result-hash").textContent;
     const snapshot = screen.getByTestId("release-result-snapshot").textContent;
@@ -145,7 +175,7 @@ describe("collaboration locale projections", () => {
     expect(screen.getByTestId("release-status").textContent).toBe("已通过");
     expect(screen.getByTestId("release-result-hash").textContent).toBe(hash);
     expect(screen.getByTestId("release-result-snapshot").textContent).toBe(snapshot);
-    expect(screen.getByTestId("release-approved-submission").textContent).toBe("发布已通过的修订版");
+    expect(screen.getByTestId("release-approved-submission").textContent).toBe("发布并下载已通过的修订版");
     expect(mockCallApi).toHaveBeenCalledTimes(count);
     unmount();
     runtime.destroy();
@@ -175,10 +205,10 @@ describe("collaboration locale projections", () => {
   it("does not present a failed release as a success in either language", async () => {
     mockCallApi.mockImplementation((method) => {
       if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved" }] });
-      if (method === "releaseSubmission") return Promise.resolve({ status: 403, $meta: { ok: false }, response: { detail: "Forbidden" } });
+      if (method === "releaseSubmissionRaw") return Promise.resolve({ status: 403, ok: false });
       throw new Error(`unexpected ${method}`);
     });
-    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} />);
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
     fireEvent.click(await screen.findByTestId("release-approved-submission"));
     const alert = await screen.findByTestId("release-error");
     await waitFor(() => expect(alert.textContent).toContain("Access was denied"));
@@ -186,8 +216,109 @@ describe("collaboration locale projections", () => {
     act(() => runtime.updateLocale("zh-CN"));
     expect(alert.textContent).toContain("访问被拒绝");
     expect(screen.queryByTestId("release-success")).toBeNull();
-    expect(mockCallApi.mock.calls.filter(([method]) => method === "releaseSubmission")).toHaveLength(1);
+    expect(mockCallApi.mock.calls.filter(([method]) => method === "releaseSubmissionRaw")).toHaveLength(1);
+    expect(downloadFile).not.toHaveBeenCalled();
     unmount();
+    runtime.destroy();
+  });
+
+  for (const locale of ["en-US", "zh-CN"]) {
+    it(`downloads the verified server blob without rounding snapshot integers in ${locale}`, async () => {
+      const body = '{"submission_id":21,"revision":3,"result_hash":"immutable-hash-21","result_snapshot":{"project":{"label_config_hash":3917739503358554699},"annotation":{"result":[{"value":{"rectanglelabels":["物体"]}}]}}}';
+      const result = JSON.parse(body);
+      const blob = new Blob([body], { type: "application/json" });
+      mockCallApi.mockImplementation((method) => {
+        if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved", result_snapshot: result.result_snapshot }] });
+        if (method === "releaseSubmissionRaw") return Promise.resolve({ ok: true, clone: () => ({ json: async () => result }), blob: async () => blob });
+        throw new Error(`unexpected ${method}`);
+      });
+      const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
+      act(() => runtime.updateLocale(locale));
+      fireEvent.click(await screen.findByTestId("release-approved-submission"));
+      await screen.findByTestId("release-success");
+      expect(downloadFile).toHaveBeenCalledTimes(1);
+      expect(downloadFile).toHaveBeenCalledWith(blob, "submission-21-revision-3.json");
+      expect(mockCallApi.mock.calls.find(([method]) => method === "releaseSubmissionRaw")[1].params).toEqual({ submissionPk: 21 });
+      // Re-serializing the parsed response would change this exact integer.
+      expect(JSON.stringify(result)).not.toBe(body);
+      unmount();
+      runtime.destroy();
+    });
+  }
+
+  it.each([
+    { submission_id: 22 },
+    { revision: 4 },
+    { result_hash: "different-hash" },
+    { result_snapshot: { changed: true } },
+  ])("does not download a mismatched immutable response %j", async (change) => {
+    const result = { submission_id: 21, revision: 3, result_hash: submission.result_hash, result_snapshot: submission.result_snapshot, ...change };
+    const blob = jest.fn();
+    mockCallApi.mockImplementation((method) => {
+      if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved" }] });
+      if (method === "releaseSubmissionRaw") return Promise.resolve({ ok: true, clone: () => ({ json: async () => result }), blob });
+      throw new Error(`unexpected ${method}`);
+    });
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
+    fireEvent.click(await screen.findByTestId("release-approved-submission"));
+    await waitFor(() => expect(screen.getByTestId("release-error").textContent).toContain("did not match"));
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("release-success")).toBeNull();
+    unmount();
+    runtime.destroy();
+  });
+
+  it.each(["network", "json", "blob", "download"])("keeps %s failures retryable without a success notice", async (failure) => {
+    const result = { submission_id: 21, revision: 3, result_hash: submission.result_hash, result_snapshot: submission.result_snapshot };
+    const blob = new Blob(["server bytes"], { type: "application/json" });
+    let attempts = 0;
+    mockCallApi.mockImplementation((method) => {
+      if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved" }] });
+      if (method === "releaseSubmissionRaw") {
+        const fail = attempts++ === 0;
+        if (fail && failure === "network") return Promise.reject(new Error("offline"));
+        return Promise.resolve({ ok: true,
+          clone: () => ({ json: async () => { if (fail && failure === "json") throw new Error("invalid JSON"); return result; } }),
+          blob: async () => { if (fail && failure === "blob") throw new Error("interrupted body"); return blob; },
+        });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    if (failure === "download") downloadFile.mockImplementationOnce(() => { throw new Error("download failed"); });
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
+    fireEvent.click(await screen.findByTestId("release-approved-submission"));
+    await waitFor(() => expect(screen.getByTestId("release-error").textContent).toContain("could not be released"));
+    expect(screen.queryByTestId("release-success")).toBeNull();
+    act(() => runtime.updateLocale("zh-CN"));
+    expect(screen.getByTestId("release-error").textContent).toContain("无法发布");
+    fireEvent.click(screen.getByTestId("release-approved-submission"));
+    await screen.findByTestId("release-success");
+    expect(downloadFile).toHaveBeenLastCalledWith(blob, "submission-21-revision-3.json");
+    expect(attempts).toBe(2);
+    unmount();
+    runtime.destroy();
+  });
+
+  it.each(["selection", "unmount"])("does not download a stale body after %s", async (change) => {
+    const result = { submission_id: 21, revision: 3, result_hash: submission.result_hash, result_snapshot: submission.result_snapshot };
+    let finishBody;
+    const body = new Promise((resolve) => { finishBody = resolve; });
+    const blob = jest.fn(() => body);
+    mockCallApi.mockImplementation((method) => {
+      if (method === "projectSubmissions") return Promise.resolve({ results: [{ ...submission, status: "approved" }, { ...submission, id: 22, status: "approved" }] });
+      if (method === "releaseSubmissionRaw") return Promise.resolve({ ok: true, clone: () => ({ json: async () => result }), blob });
+      throw new Error(`unexpected ${method}`);
+    });
+    const { runtime, unmount } = mount(<SubmissionReleaseWorkspace projectId={4} allowRelease />);
+    fireEvent.click(await screen.findByTestId("release-approved-submission"));
+    await waitFor(() => expect(blob).toHaveBeenCalledTimes(1));
+    if (change === "selection") fireEvent.click(screen.getByTestId("release-submission-22"));
+    else unmount();
+    await act(async () => { finishBody(new Blob(["late response"])); await body; });
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("release-success")).toBeNull();
+    if (change === "selection") unmount();
     runtime.destroy();
   });
 });

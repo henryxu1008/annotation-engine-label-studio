@@ -17,6 +17,20 @@
     align-items: stretch;
   }
 
+  &__draft-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-inline: 8px;
+    min-width: 0;
+
+    [role="status"] {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   &__section {
     display: flex;
     align-items: center;
@@ -34,5 +48,24 @@
         }
       }
     }
+  }
+
+  &__draft-conflict {
+    position: fixed;
+    z-index: 1100;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(600px, calc(100% - 32px));
+    max-height: min(420px, calc(100vh - 32px));
+    overflow: auto;
+    box-sizing: border-box;
+    padding: 12px;
+    border: 1px solid var(--color-neutral-border);
+    background: var(--color-neutral-background);
+    user-select: text;
+
+    textarea { width: 100%; box-sizing: border-box; }
+    button { margin: 4px; }
   }
 }

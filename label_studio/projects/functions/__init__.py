@@ -11,7 +11,8 @@ def annotate_task_number(queryset):
 
 def annotate_finished_task_number(queryset):
     if flag_set('fflag_fix_back_plt_811_finished_task_number_01072025_short', user='auto'):
-        return queryset.annotate(finished_task_number=Count('tasks', filter=Q(tasks__is_labeled=True)))
+        # Membership joins can multiply task rows for project owners/managers.
+        return queryset.annotate(finished_task_number=Count('tasks', filter=Q(tasks__is_labeled=True), distinct=True))
     else:
         tasks = Task.objects.filter(project=OuterRef('id'), is_labeled=True).values_list('id')
         return queryset.annotate(finished_task_number=SQCount(tasks))

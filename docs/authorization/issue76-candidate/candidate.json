@@ -1,0 +1,20 @@
+{
+  "format": "issue76-offline-v1",
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "source_tree": "1c5889592a9b43419ba90f55bbdeda9162e13589",
+  "version": "1.23.0+fork.rc76.38bc51f9",
+  "branch": "codex/ls-issue76-candidate",
+  "platform": "linux/amd64",
+  "tag": "annotation-engine-label-studio:1.23.0-fork-rc76-38bc51f9",
+  "oci_index_digest": "sha256:887f17229d79f3ab11a279cd6bf76b40885abd28b124027401a77fb4c8848380",
+  "platform_manifest_digest": "sha256:0e18ea502f9f530ece0846c83afe71cd6344cbe67c29e1f288d5f4417ec80604",
+  "image_config_digest": "sha256:2e5f9727217c6f64ecf40fa76409778d936044eb6460876d6ebfcd8253fb587d",
+  "archive_file": "label-studio-rc76.tar",
+  "archive_sha256": "8602dd1e4eb761de9dfbbf693aad6b311fcede895c141bfec59d298e38ad0b6b",
+  "archive_bytes": 410092032,
+  "availability": "LOCAL_OFFLINE_PACKAGE_ONLY",
+  "registry_publish": "NOT_RUN",
+  "receiving_environment": "NOT_RUN_NO_DESTINATION_CONFIRMED",
+  "signed_attestation": false,
+  "private_runtime_material_included": false
+}

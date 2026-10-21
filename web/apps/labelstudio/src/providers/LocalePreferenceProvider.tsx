@@ -32,6 +32,9 @@ function csrfToken(): string | null {
 export const LocalePreferenceProvider = ({ children }: PropsWithChildren) => {
   const runtime = useLocaleRuntime();
   const { user, isLoading } = useAuth();
+  // AuthProvider exposes a user only after the actor query succeeds. Its
+  // loading flag also covers background refreshes of that confirmed actor.
+  const ready = Boolean(user?.id);
   const { callApi } = useAPI();
   const stableCallApi = useRef(callApi).current;
   const [state, setState] = useState(initialState);
@@ -75,8 +78,10 @@ export const LocalePreferenceProvider = ({ children }: PropsWithChildren) => {
 
   const setPreference = useCallback(async (preference: LocalePreference) => {
     if (preference !== null && !isDisplayLocale(preference)) return false;
+    // SSR menu visibility does not confirm the session's authenticated actor.
+    if (!ready || !user?.id || userId.current !== user.id) return false;
     const token = csrfToken();
-    if (!token || !user?.id) {
+    if (!token) {
       setError("saveFailed");
       return false;
     }
@@ -103,8 +108,8 @@ export const LocalePreferenceProvider = ({ children }: PropsWithChildren) => {
     } finally {
       if (currentRequest === requestId.current) setSaving(false);
     }
-  }, [user?.id, stableCallApi, apply]);
+  }, [ready, user?.id, stableCallApi, apply]);
 
-  const value = useMemo(() => ({ ...state, saving, error, setPreference }), [state, saving, error, setPreference]);
+  const value = useMemo(() => ({ ...state, ready, saving, error, setPreference }), [state, ready, saving, error, setPreference]);
   return <LocalePreferenceContext value={value}>{children}</LocalePreferenceContext>;
 };

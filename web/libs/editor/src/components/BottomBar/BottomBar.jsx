@@ -5,6 +5,7 @@ import { FF_BULK_ANNOTATION, isFF } from "../../utils/feature-flags";
 import { Actions } from "./Actions";
 import { Controls } from "./Controls";
 import { CurrentTask } from "./CurrentTask";
+import { DraftSaveStatus } from "./DraftSaveStatus";
 import "./BottomBar.scss";
 
 export const BottomBar = observer(({ store }) => {
@@ -20,6 +21,7 @@ export const BottomBar = observer(({ store }) => {
       <div className={cn("bottombar").elem("group").toClassName()}>
         {!isBulkMode && <CurrentTask store={store} />}
         <Actions store={store} />
+        <DraftSaveStatus annotation={entity} />
       </div>
       <div className={cn("bottombar").elem("group").toClassName()}>
         {store.hasInterface("controls") && (store.hasInterface("review") || !isPrediction) && (

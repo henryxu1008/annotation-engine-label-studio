@@ -113,6 +113,7 @@ const HtxTextAreaRegionView = ({ item, onFocus }) => {
   return (
     <div {...divAttrs} className={cn("row").toClassName()} data-testid="textarea-region">
       <HtxTextBox
+        annotation={item.annotation}
         isEditable={editable}
         isDeleteable={deleteable}
         onlyEdit={parent.transcription}

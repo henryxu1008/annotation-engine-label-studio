@@ -1,0 +1,24 @@
+{
+  "result": "PASS_LOCAL_SCOPE",
+  "source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "version": "1.23.0+fork.rc76.38bc51f9",
+  "browser_tests": 40,
+  "native_operations_checks": 112,
+  "postgres_upgrade_display_checks": 7,
+  "lifecycle_unit_tests": 11,
+  "deterministic_fixture_tests": 2,
+  "acceptance_test_commit": "ce6de9dd4e2fca7bb01f97788f81ab4657187550",
+  "fixture_test_commit": "9761dd3b08054caa39c84a5df5a7d884ed5b2aa1",
+  "browser_transport": "native production assets over loopback HTTP",
+  "https_verification": "process-local CA with normal certificate and hostname validation",
+  "not_run": [
+    "trusted-browser HTTPS",
+    "receiving destination verification",
+    "second complete 86400-second cleanup interval",
+    "old security/schema artifact rollback",
+    "production deployment",
+    "registry publication",
+    "Core integration"
+  ],
+  "historical_pass_inherited": false
+}

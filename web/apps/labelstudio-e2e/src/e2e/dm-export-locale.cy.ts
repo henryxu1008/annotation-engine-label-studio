@@ -15,9 +15,18 @@ describe("Data Manager export locale", () => {
 
   const chooseLocale = (locale: "en-US" | "zh-CN") => {
     cy.loginAs(fixture.users.manager.email, fixture.password, "/user/account/personal-info");
+    cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("exportLocaleSaved");
     cy.get('[data-testid="language-preference-select"]').then(($select) => {
-      if ($select.val() !== locale) cy.wrap($select).select(locale);
+      if ($select.val() !== locale) {
+        cy.get('[data-testid="language-preference-select"]').should('be.enabled').select(locale);
+        cy.wait("@exportLocaleSaved").then(({ response }) => {
+          expect(response?.statusCode).to.eq(200);
+          expect(response?.body.preference).to.eq(locale);
+        });
+      }
     });
+    cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+    cy.request("/api/current-user/locale/").its("body.preference").should("eq", locale);
     cy.get("html").should("have.attr", "lang", locale);
   };
 
@@ -41,6 +50,9 @@ describe("Data Manager export locale", () => {
       }).as("download");
 
       cy.visit(`/projects/${fixture.project_id}/data/export`);
+      // The parent data workspace can finish initialization after the modal
+      // first renders. Act on the settled workspace, not a replaced button.
+      cy.window().its("dataManager").should("exist");
       cy.wait("@formats");
       cy.get(`[aria-label="${copy.heading}"]`).should("be.visible");
       cy.get('[data-testid="export-format-COCO_WITH_IMAGES"]')
@@ -85,10 +97,13 @@ describe("Data Manager export locale", () => {
         if (pathname.endsWith("/sample-task")) previewRequests += 1;
         else projectWrites.push(`${request.method} ${pathname}`);
       });
+      cy.intercept({ method: "POST", pathname: `/api/projects/${fixture.project_id}/sample-task` }).as("samplePreview");
       cy.visit(`/projects/${fixture.project_id}/data/import`);
       cy.get("body").should("contain.text", copy.heading);
       cy.get(`[aria-label="${copy.cancel}"]`).should("be.visible");
       cy.get(`[aria-label="${copy.finish}"]`).should("exist");
+      // The modal shell can render before the project and its preview are ready.
+      cy.wait("@samplePreview").its("response.statusCode").should("eq", 200);
       cy.then(() => {
         expect(previewRequests, "sample preview loaded").to.be.greaterThan(0);
         expect(projectWrites, "opening import must not persist project data").to.deep.equal([]);
@@ -120,7 +135,29 @@ describe("Data Manager export locale", () => {
     }).as("formatsUnavailable");
     cy.visit(`/projects/${fixture.project_id}/data/export`);
     cy.wait("@formatsUnavailable");
-    cy.get('[aria-label="导出数据"]').should("exist");
+    cy.get('[aria-label="导出数据"]').should("be.disabled");
+    cy.get('[role="status"]').should("contain.text", "无法读取导出格式");
     cy.get('[data-testid^="export-format-"]').should("not.exist");
   });
+
+  for (const [locale, title, guidance] of [
+    ["en-US", "Export data", "Export approved submissions through Release"],
+    ["zh-CN", "导出数据", "请通过“发布”导出已获批提交"],
+  ] as const) {
+    it(`explains immutable export protection in ${locale} without requesting raw export`, () => {
+      chooseLocale(locale);
+      let rawRequests = 0;
+      cy.intercept({ method: "GET", pathname: `/api/projects/${fixture.project_id}/export` }, () => { rawRequests++; });
+      cy.intercept({ method: "GET", pathname: `/api/projects/${fixture.project_id}/export/formats` }, {
+        statusCode: 400,
+        body: { status_code: 400, detail: "Validation error", display_context: { reason: "IMMUTABLE_RELEASE_REQUIRED" } },
+      }).as("immutableFormats");
+      cy.visit(`/projects/${fixture.project_id}/data/export`);
+      cy.wait("@immutableFormats");
+      cy.get('[role="status"]').should("contain.text", guidance);
+      cy.get(`[aria-label="${title}"]`).should("be.disabled");
+      cy.get('[data-testid^="export-format-"]').should("not.exist");
+      cy.then(() => { expect(rawRequests).to.eq(0); });
+    });
+  }
 });

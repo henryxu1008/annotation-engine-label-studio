@@ -25,6 +25,7 @@ class TestTaskAPI(APITestCase):
 
         assert response.json() == {
             'id': task.id,
+            'can_label': False,
             'project': self.project.id,
             'created_at': task.created_at.isoformat().replace('+00:00', 'Z'),
             'updated_at': task.updated_at.isoformat().replace('+00:00', 'Z'),

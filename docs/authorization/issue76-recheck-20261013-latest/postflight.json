@@ -1,0 +1,143 @@
+{
+  "status": "PASS",
+  "at": "2026-10-13T18:55:59.395718+00:00",
+  "source": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+  "original_rows_unchanged": 161,
+  "original_models": 11,
+  "old_evidence_unchanged": 57,
+  "db_container_unchanged": true,
+  "healthy_services": 6,
+  "served_bundle_sha256": "0eac037901fbe39d65b2d7f3cd91faa76d305b1606118ac46494f7d9c948a71f",
+  "native_both_replicas": {
+    "app": {
+      "backend": {
+        "message": "fix: stop enclosing tab initialization after workspace disposal",
+        "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+        "date": "2026/10/14 02:25:31",
+        "branch": "codex/ls-issue76-candidate",
+        "version": "1.23.0+fork.rc76.af1cb115"
+      },
+      "frontends": {
+        "labelstudio": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        },
+        "editor": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        },
+        "datamanager": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        }
+      },
+      "python": "3.11.17",
+      "binaries": {
+        "uwsgi": "2.0.28",
+        "nginx": "nginx version: nginx/1.22.1"
+      },
+      "compiled_locales": {
+        "en_US": {
+          "label_studio/locale/en_US/LC_MESSAGES/django.mo": "b62b2bbef724df7e9c8dab7f00a8ce8d4e8370ba17bffc83f7aea791f0afad3d"
+        },
+        "zh_Hans": {
+          "label_studio/locale/zh_Hans/LC_MESSAGES/django.mo": "ff8ecc8c74606a8db471658fa88ab80f27355b8973a9fb476b1fc4dc70b7d8e8"
+        }
+      },
+      "dependency_hashes": {
+        "pyproject.toml": "7e97d3e9fcc7e3359ad5edfe91c8363a0f5713044d06b0711ed187581368a5a9",
+        "poetry.lock": "4edef02bcf35c17d0c71e27f0114957c52a65bbdf15029cc9a3ece774d34d95f"
+      },
+      "native_entrypoint_symlinks": {
+        "deploy/docker-entrypoint.d/nginx/10-configure-nginx.sh": "../common/10-configure-nginx.sh",
+        "deploy/docker-entrypoint.d/app-init/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+        "deploy/docker-entrypoint.d/app-init/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+        "deploy/docker-entrypoint.d/app-docker/05-check-data-permissions.sh": "../common/05-check-data-permissions.sh",
+        "deploy/docker-entrypoint.d/app/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+        "deploy/docker-entrypoint.d/app/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+        "deploy/docker-entrypoint.d/app/30-run-db-migrations.sh": "../common/30-run-db-migrations.sh"
+      },
+      "main_bundle_sha256": "0eac037901fbe39d65b2d7f3cd91faa76d305b1606118ac46494f7d9c948a71f"
+    },
+    "app-b": {
+      "backend": {
+        "message": "fix: stop enclosing tab initialization after workspace disposal",
+        "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+        "date": "2026/10/14 02:25:31",
+        "branch": "codex/ls-issue76-candidate",
+        "version": "1.23.0+fork.rc76.af1cb115"
+      },
+      "frontends": {
+        "labelstudio": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        },
+        "editor": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        },
+        "datamanager": {
+          "message": "fix: stop enclosing tab initialization after workspace disposal",
+          "commit": "af1cb115c96dcd1b9a5b179938752d8b750fbab9",
+          "date": "2026-10-13T18:25:31.000Z",
+          "branch": "codex/ls-issue76-candidate"
+        }
+      },
+      "python": "3.11.17",
+      "binaries": {
+        "uwsgi": "2.0.28",
+        "nginx": "nginx version: nginx/1.22.1"
+      },
+      "compiled_locales": {
+        "en_US": {
+          "label_studio/locale/en_US/LC_MESSAGES/django.mo": "b62b2bbef724df7e9c8dab7f00a8ce8d4e8370ba17bffc83f7aea791f0afad3d"
+        },
+        "zh_Hans": {
+          "label_studio/locale/zh_Hans/LC_MESSAGES/django.mo": "ff8ecc8c74606a8db471658fa88ab80f27355b8973a9fb476b1fc4dc70b7d8e8"
+        }
+      },
+      "dependency_hashes": {
+        "pyproject.toml": "7e97d3e9fcc7e3359ad5edfe91c8363a0f5713044d06b0711ed187581368a5a9",
+        "poetry.lock": "4edef02bcf35c17d0c71e27f0114957c52a65bbdf15029cc9a3ece774d34d95f"
+      },
+      "native_entrypoint_symlinks": {
+        "deploy/docker-entrypoint.d/nginx/10-configure-nginx.sh": "../common/10-configure-nginx.sh",
+        "deploy/docker-entrypoint.d/app-init/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+        "deploy/docker-entrypoint.d/app-init/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+        "deploy/docker-entrypoint.d/app-docker/05-check-data-permissions.sh": "../common/05-check-data-permissions.sh",
+        "deploy/docker-entrypoint.d/app/20-wait-for-db.sh": "../common/20-wait-for-db.sh",
+        "deploy/docker-entrypoint.d/app/11-configure-custom-cabundle.sh": "../common/11-configure-custom-cabundle.sh",
+        "deploy/docker-entrypoint.d/app/30-run-db-migrations.sh": "../common/30-run-db-migrations.sh"
+      },
+      "main_bundle_sha256": "0eac037901fbe39d65b2d7f3cd91faa76d305b1606118ac46494f7d9c948a71f"
+    }
+  },
+  "app_resources": {
+    "BlockIO": "352kB / 106kB",
+    "CPUPerc": "0.01%",
+    "Container": "annotation-engine-issue76-20261009-finalized-app-1",
+    "ID": "c135ee166eca",
+    "MemPerc": "1.22%",
+    "MemUsage": "390.3MiB / 31.35GiB",
+    "Name": "annotation-engine-issue76-20261009-finalized-app-1",
+    "NetIO": "66.1MB / 97.5MB",
+    "PIDs": "28"
+  },
+  "existing_compose_project": "annotation-engine-issue76-20261009-finalized",
+  "new_compose": 0,
+  "trust_changes": 0,
+  "Core_business": "PAUSED",
+  "IAM_operations": "PAUSED",
+  "production": false,
+  "merge": false
+}

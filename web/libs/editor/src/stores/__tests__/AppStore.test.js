@@ -17,6 +17,7 @@ jest.mock("../../core/Hotkey", () => {
   const mockHotkey = {
     unbindAll: jest.fn(),
     addNamed: jest.fn(),
+    makeComb: jest.fn(() => null),
   };
   const HotkeyFn = () => mockHotkey;
   HotkeyFn.setScope = jest.fn();
@@ -55,6 +56,9 @@ import "../../tags/object/RichText";
 import Tree from "../../core/Tree";
 import Registry from "../../core/Registry";
 import AppStore from "../AppStore";
+import "../../tags/control/Choices";
+import { createLocaleRuntime } from "@humansignal/i18n";
+import InfoModal from "../../components/Infomodal/Infomodal";
 
 const MINIMAL_CONFIG = `<View><Text name="t1" value="$text" /></View>`;
 
@@ -89,6 +93,19 @@ function createStore(snapshot = {}, envOverrides) {
 }
 
 describe("AppStore", () => {
+  it.each(["submitAnnotation", "updateAnnotation", "skipTask", "unskipTask"])("does not dispatch %s for a readonly selection through keyboard/action calls", (action) => {
+    const store = createStore({ queueTotal: 5, queuePosition: 1 });
+    store.initializeStore({ annotations: [{ result: [] }] });
+    const selected = store.annotationStore.selected;
+    selected.setReadonly(true);
+    const position = store.queuePosition;
+    mockInvoke.mockClear();
+    store[action]();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(store.queuePosition).toBe(position);
+    expect(selected.readonly).toBe(true);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockHasEvent.mockReturnValue(false);
@@ -726,6 +743,165 @@ describe("AppStore", () => {
   });
 
   describe("submitAnnotation when validate fails", () => {
+    it("uses the current instance locale for required choices and preserves a custom requiredmessage", () => {
+      const runtime = createLocaleRuntime("zh-CN");
+      try {
+        const store = createStore({ config: '<View><Text name="t1" value="$text"/><Choices name="quality" toName="t1" required="true"><Choice value="Checked"/></Choices></View>' }, { localeRuntime: runtime });
+        store.initializeStore({ annotations: [{ result: [] }] });
+        const entity = store.annotationStore.selected;
+        store.submitAnnotation();
+        expect(InfoModal.warning).toHaveBeenLastCalledWith('提交前请为“quality”选择一个选项。', "提示");
+        expect(entity.submissionStarted).toBe(0);
+        runtime.updateLocale("en-US");
+        store.submitAnnotation();
+        expect(InfoModal.warning).toHaveBeenLastCalledWith('Select an option for "quality" before submitting.', "Warning");
+        const custom = createStore({ config: '<View><Text name="t1" value="$text"/><Choices name="quality" toName="t1" required="true" requiredMessage="Business instruction"><Choice value="Checked"/></Choices></View>' }, { localeRuntime: runtime });
+        custom.initializeStore({ annotations: [{ result: [] }] });
+        custom.submitAnnotation();
+        expect(InfoModal.warning).toHaveBeenLastCalledWith("Business instruction", "Warning");
+      } finally { runtime.destroy(); }
+    });
+
+    it.each(["en-US", "zh-CN"])("recovers from a rejected request with %s retry guidance", async (locale) => {
+      jest.useFakeTimers();
+      const runtime = createLocaleRuntime(locale);
+      const error = jest.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const store = createStore({ queueTotal: 5 }, { localeRuntime: runtime });
+        store.initializeStore({ annotations: [{ result: [] }] });
+        const entity = store.annotationStore.selected;
+        entity.beforeSend = jest.fn();
+        entity.validate = jest.fn().mockReturnValue(true);
+        entity.autosave = { cancel: jest.fn() };
+        entity.setDraftId(17);
+        mockInvoke.mockRejectedValueOnce(new Error("Failed to fetch"));
+        store.submitAnnotation();
+        await jest.advanceTimersByTimeAsync(250);
+        expect(InfoModal.warning).toHaveBeenLastCalledWith(runtime.t("editor:submissionFailed"), runtime.t("editor:warningTitle"));
+        expect(entity.submissionStarted).toBe(0);
+        expect(entity.draftId).toBe(17);
+        expect(store.isSubmitting).toBe(false);
+        expect(store.queuePosition).toBe(0);
+        mockHasEvent.mockReturnValue(true);
+        mockInvokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+        const saving = entity.saveDraftImmediatelyWithResults();
+        await jest.advanceTimersByTimeAsync(0);
+        await expect(saving).resolves.toMatchObject({ $meta: { status: 200 } });
+        mockInvoke.mockResolvedValueOnce([{ $meta: { status: 201 } }]);
+        store.submitAnnotation();
+        await jest.advanceTimersByTimeAsync(250);
+        expect(entity.draftId).toBe(0);
+        expect(store.queuePosition).toBe(1);
+      } finally {
+        error.mockRestore();
+        runtime.destroy();
+        mockInvoke.mockReset();
+        jest.useRealTimers();
+      }
+    });
+    it.each(["submitAnnotation", "updateAnnotation"])("restores draft saving after %s fails validation", async (action) => {
+      const store = createStore();
+      store.initializeStore({ annotations: [{ result: [] }] });
+      const entity = store.annotationStore.selected;
+      entity.submissionInProgress(); // The current button/keyboard entry path.
+      entity.validate = jest.fn().mockReturnValue(false);
+      store[action]();
+      expect(entity.submissionStarted).toBe(0);
+      mockHasEvent.mockReturnValue(true);
+      mockInvokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+      await expect(entity.saveDraftImmediatelyWithResults()).resolves.toMatchObject({ $meta: { status: 200 } });
+    });
+
+    it.each(["submitAnnotation", "updateAnnotation"])("preserves draft state and permits editing/saving after %s HTTP failure", async (action) => {
+      jest.useFakeTimers();
+      try {
+        const store = createStore({ queueTotal: 5, queuePosition: 0 });
+        store.initializeStore({ annotations: [{ result: [] }] });
+        const entity = store.annotationStore.selected;
+        entity.beforeSend = jest.fn();
+        entity.validate = jest.fn().mockReturnValue(true);
+        entity.autosave = { cancel: jest.fn() };
+        entity.setDraftId(17);
+        entity.addVersions({ draft: [] });
+        entity.setDraftSelected(true);
+        entity.submissionInProgress();
+        mockInvoke.mockResolvedValue([{ $meta: { status: 503 } }]);
+        store[action]();
+        await jest.advanceTimersByTimeAsync(250);
+        expect(entity.submissionStarted).toBe(0);
+        expect(entity.draftId).toBe(17);
+        expect(entity.draftSelected).toBe(true);
+        expect(entity.versions.draft).toEqual([]);
+        expect(store.queuePosition).toBe(0);
+        expect(store.isSubmitting).toBe(false);
+        mockHasEvent.mockReturnValue(true);
+        mockInvokeFirst.mockResolvedValue({ $meta: { status: 200 } });
+        const saving = entity.saveDraftImmediatelyWithResults();
+        await jest.advanceTimersByTimeAsync(0);
+        await expect(saving).resolves.toMatchObject({ $meta: { status: 200 } });
+      } finally {
+        mockInvoke.mockReset();
+        jest.useRealTimers();
+      }
+    });
+
+    it("keeps a slow real submission pending without dropping its draft or accepting a duplicate", async () => {
+      jest.useFakeTimers();
+      try {
+        const store = createStore({ queueTotal: 5, queuePosition: 0 });
+        store.initializeStore({ annotations: [{ result: [] }] });
+        const entity = store.annotationStore.selected;
+        entity.beforeSend = jest.fn();
+        entity.validate = jest.fn().mockReturnValue(true);
+        entity.autosave = { cancel: jest.fn() };
+        entity.setDraftId(17);
+        let complete;
+        mockInvoke.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
+        store.submitAnnotation();
+        await jest.advanceTimersByTimeAsync(6000);
+        expect(store.isSubmitting).toBe(true);
+        expect(entity.draftId).toBe(17);
+        store.submitAnnotation();
+        expect(mockInvoke.mock.calls.filter(([name]) => name === "submitAnnotation")).toHaveLength(1);
+        complete([{ $meta: { status: 201 } }]);
+        await jest.advanceTimersByTimeAsync(250);
+        expect(entity.submissionStarted).toBe(0);
+        expect(entity.draftId).toBe(0);
+        expect(store.isSubmitting).toBe(false);
+        expect(store.queuePosition).toBe(1);
+      } finally {
+        mockInvoke.mockReset();
+        jest.useRealTimers();
+      }
+    });
+
+    it("retries a failed new annotation as create instead of updating an annotation that does not exist", async () => {
+      jest.useFakeTimers();
+      try {
+        const store = createStore({ queueTotal: 5 });
+        store.initializeStore({ annotations: [] });
+        const entity = store.annotationStore.addAnnotation({ userGenerate: true });
+        store.annotationStore.selectAnnotation(entity.id);
+        entity.beforeSend = jest.fn();
+        entity.validate = jest.fn().mockReturnValue(true);
+        mockInvoke.mockResolvedValueOnce([{ $meta: { status: 503 } }]);
+        store.submitAnnotation();
+        await jest.advanceTimersByTimeAsync(250);
+        expect(entity.exists).toBe(false);
+        expect(entity.sentUserGenerate).toBe(false);
+        mockInvoke.mockClear();
+        mockInvoke.mockResolvedValueOnce([{ $meta: { status: 201 } }]);
+        store.submitAnnotation();
+        await jest.advanceTimersByTimeAsync(250);
+        expect(mockInvoke).toHaveBeenCalledWith("submitAnnotation", store, entity);
+        expect(mockInvoke).not.toHaveBeenCalledWith("updateAnnotation", store, entity);
+        expect(entity.sentUserGenerate).toBe(true);
+      } finally {
+        mockInvoke.mockReset();
+        jest.useRealTimers();
+      }
+    });
+
     it("does not invoke event when entity.validate returns false", () => {
       const store = createStore();
       store.initializeStore({ annotations: [{ result: [] }] });

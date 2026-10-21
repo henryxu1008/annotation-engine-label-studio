@@ -1,6 +1,8 @@
 import { useContext, useEffect } from "react";
 import { useHistory } from "react-router-dom";
 import { ToastContext } from "@humansignal/ui";
+import { useLocaleRuntime } from "@humansignal/i18n";
+import { isAlive, isStateTreeNode } from "mobx-state-tree";
 
 export const DRAFT_GUARD_KEY = "DRAFT_GUARD";
 
@@ -9,10 +11,23 @@ export const draftGuardCallback = {
 };
 
 export const DraftGuard = () => {
-  const toast = useContext(ToastContext);
+  const { show: showToast } = useContext(ToastContext);
   const history = useHistory();
+  const runtime = useLocaleRuntime();
 
   useEffect(() => {
+    // Hard navigation cannot wait for an async draft flush. The browser owns
+    // this dialog's wording; cancel leaves the editable page available to retry.
+    const beforeUnload = (event) => {
+      const editor = window.Htx;
+      if (isStateTreeNode(editor) && !isAlive(editor)) return;
+      const selected = editor?.annotationStore?.selected;
+      if (isStateTreeNode(selected) && !isAlive(selected)) return;
+      if (!selected?.hasUnsavedDraft && !selected?.hasPendingTextInput) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener("beforeunload", beforeUnload);
     const unblock = () => {
       draftGuardCallback.current?.(true);
       draftGuardCallback.current = null;
@@ -28,23 +43,33 @@ export const DraftGuard = () => {
      * unsuccessful draft saves.
      */
     const unsubscribe = history.block(() => {
-      const selected = window.Htx?.annotationStore?.selected;
+      const editor = window.Htx;
+      if (isStateTreeNode(editor) && !isAlive(editor)) return;
+      const selected = editor?.annotationStore?.selected;
+      if (isStateTreeNode(selected) && !isAlive(selected)) return;
+      if (selected?.hasPendingTextInput) {
+        showToast({ message: runtime.t("datamanager:confirmTextBeforeLeaving"), type: "error" });
+        return DRAFT_GUARD_KEY;
+      }
       const submissionInProgress = !!selected?.submissionStarted;
-      const hasChanges = !!selected?.history.undoIdx && !submissionInProgress;
+      const hasChanges = !!selected?.hasUnsavedDraft && !submissionInProgress;
 
       if (hasChanges) {
+        const showSaveError = () => showToast({ message: runtime.t("datamanager:draftSaveError"), type: "error" });
         selected.saveDraftImmediatelyWithResults()?.then((res) => {
           const status = res?.$meta?.status;
 
           if (status === 200 || status === 201) {
-            toast.show({ message: "Draft saved successfully", type: "info" });
+            if (selected.hasPendingTextInput) {
+              showToast({ message: runtime.t("datamanager:confirmTextBeforeLeaving"), type: "error" });
+              return;
+            }
+            showToast({ message: runtime.t("datamanager:draftSaved"), type: "info" });
             unblock();
-          } else if (status !== undefined) {
-            toast.show({ message: "There was an error saving your draft", type: "error" });
           } else {
-            unblock();
+            showSaveError();
           }
-        });
+        }).catch(showSaveError);
 
         return DRAFT_GUARD_KEY;
       }
@@ -53,8 +78,9 @@ export const DraftGuard = () => {
     return () => {
       unblock();
       unsubscribe();
+      window.removeEventListener("beforeunload", beforeUnload);
     };
-  }, []);
+  }, [history, runtime, showToast]);
 
   return <></>;
 };

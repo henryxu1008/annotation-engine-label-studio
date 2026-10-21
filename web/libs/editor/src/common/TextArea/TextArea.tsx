@@ -2,6 +2,7 @@ import { type FC, type FocusEvent, type MutableRefObject, type RefObject, useCal
 import { debounce } from "@humansignal/core/lib/utils/debounce";
 import { cn } from "../../utils/bem";
 import { isMacOS } from "../../utils/utilities";
+import { isComposingKeyEvent } from "../../utils/events";
 
 import "./TextArea.scss";
 import mergeRefs from "../Utils/mergeRefs";
@@ -148,7 +149,7 @@ export const TextArea: FC<TextAreaProps> = ({
     if (!onSubmit) return;
 
     const listener = (event: KeyboardEvent) => {
-      if (!textAreaRef.current) return;
+      if (!textAreaRef.current || isComposingKeyEvent(event)) return;
       if (event.key === "Enter" && (event.ctrlKey || (isMacOS() && event.metaKey))) {
         onSubmit(textAreaRef.current.value);
       }

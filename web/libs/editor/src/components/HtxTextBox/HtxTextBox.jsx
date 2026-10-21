@@ -3,11 +3,16 @@ import { IconPencil, IconTrashAlt, IconCheck } from "@humansignal/icons";
 import { Button, Tooltip, Typography } from "@humansignal/ui";
 import { throttle } from "@humansignal/core/lib/utils/lodash-replacements";
 import { cn } from "../../utils/bem";
+import { isComposingKeyEvent } from "../../utils/events";
+import { isAlive, isStateTreeNode } from "mobx-state-tree";
+import { guidGenerator } from "../../core/Helpers";
+import { useLocaleTranslation } from "@humansignal/i18n";
 
 // used for correct auto-height calculation
 const BORDER_WIDTH = 1;
 
-export class HtxTextBox extends React.Component {
+class HtxTextBoxView extends React.Component {
+  pendingInputKey = guidGenerator();
   state = {
     editing: false,
     height: 0,
@@ -32,11 +37,30 @@ export class HtxTextBox extends React.Component {
 
   componentDidMount() {
     window.addEventListener("click", this.handleGlobalClick, { capture: true });
+    this.syncPendingInput();
+  }
+
+  componentDidUpdate(previousProps) {
+    if (previousProps.annotation !== this.props.annotation) this.clearPendingInput(previousProps.annotation);
+    this.syncPendingInput();
   }
 
   componentWillUnmount() {
     window.removeEventListener("click", this.handleGlobalClick, { capture: true });
+    this.clearPendingInput(this.props.annotation);
   }
+
+  clearPendingInput = (annotation) => {
+    if (isStateTreeNode(annotation) && !isAlive(annotation)) return;
+    annotation?.setPendingTextInput?.(this.pendingInputKey, false);
+  };
+
+  syncPendingInput = () => {
+    const annotation = this.props.annotation;
+    if (isStateTreeNode(annotation) && !isAlive(annotation)) return;
+    annotation?.setPendingTextInput?.(this.pendingInputKey,
+      (this.state.editing || !!this.props.onlyEdit) && this.state.value !== this.props.text);
+  };
 
   handleGlobalClick = (e) => {
     const el = e?.target;
@@ -109,6 +133,8 @@ export class HtxTextBox extends React.Component {
       isEditable: __,
       isDeleteable: ___,
       ignoreShortcuts: ____,
+      annotation: _____,
+      t,
     } = this.props;
     const { height, value } = this.state;
 
@@ -129,6 +155,10 @@ export class HtxTextBox extends React.Component {
         this.updateHeight();
       },
       onKeyDown: (e) => {
+        if (isComposingKeyEvent(e)) {
+          if (e.key === "Enter") e.preventDefault();
+          return;
+        }
         const { key, shiftKey } = e;
 
         if (key === "Enter") {
@@ -152,7 +182,7 @@ export class HtxTextBox extends React.Component {
       <div className={cn("textarea").elem("region").toClassName()} data-testid="htx-textbox-edit">
         {rows > 1 ? <textarea {...inputProps} /> : <input {...inputProps} />}
         {!onlyEdit && (
-          <Tooltip title="Save: [shift+enter]">
+          <Tooltip title={t("textConfirmHint", { shortcut: rows > 1 ? "Shift+Enter" : "Enter" })}>
             <Button
               type="text"
               variant="primary"
@@ -160,7 +190,7 @@ export class HtxTextBox extends React.Component {
               size="small"
               className="absolute right-tight top-tighter"
               icon={<IconCheck />}
-              aria-label="Save"
+              aria-label={t("textConfirmChanges")}
               data-testid="htx-textbox-save"
               onClick={this.save}
             />
@@ -181,6 +211,8 @@ export class HtxTextBox extends React.Component {
       // don't pass non-DOM props to Paragraph
       ignoreShortcuts: _,
       onlyEdit: __,
+      annotation: ___,
+      t,
 
       ...props
     } = this.props;
@@ -206,10 +238,10 @@ export class HtxTextBox extends React.Component {
               variant="neutral"
               look="outlined"
               size="small"
-              tooltip="Edit"
+              tooltip={t("textEdit")}
               tooltipTheme="Dark"
               leading={<IconPencil />}
-              aria-label="Edit Region"
+              aria-label={t("textEdit")}
               data-testid="htx-textbox-edit-button"
               onClick={this.startEditing}
             />
@@ -220,10 +252,10 @@ export class HtxTextBox extends React.Component {
               variant="negative"
               look="outlined"
               size="small"
-              tooltip="Delete"
+              tooltip={t("textDelete")}
               tooltipTheme="Dark"
               leading={<IconTrashAlt />}
-              aria-label="Delete Region"
+              aria-label={t("textDelete")}
               data-testid="htx-textbox-delete-button"
               onClick={onDelete}
             />
@@ -237,3 +269,9 @@ export class HtxTextBox extends React.Component {
     return (this.state.editing || this.props.onlyEdit) && this.props.isEditable ? this.renderEdit() : this.renderView();
   }
 }
+
+export const HtxTextBox = React.forwardRef((props, ref) => {
+  const { t } = useLocaleTranslation("editor");
+  return <HtxTextBoxView {...props} t={t} ref={ref} />;
+});
+HtxTextBox.displayName = "HtxTextBox";

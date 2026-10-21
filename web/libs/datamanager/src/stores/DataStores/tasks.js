@@ -35,6 +35,7 @@ export const create = (columns) => {
     assigned_task: false,
     assignment_id: types.optional(types.maybeNull(types.number), null),
     assignment_version: types.optional(types.maybeNull(types.number), null),
+    can_label: types.maybe(types.boolean),
     queue: types.optional(types.maybeNull(types.string), null),
     // annotation to select on rejected queue
     default_selected_annotation: types.maybeNull(types.number),
@@ -206,7 +207,7 @@ export const create = (columns) => {
           reload: false,
         });
 
-        if (taskData?.$meta?.status === 404) {
+        if (taskData?.$meta?.status === 404 && taskData?.response?.display_context?.reason === "QUEUE_EXHAUSTED") {
           getRoot(self).SDK.invoke("labelStreamFinished");
           return null;
         }
@@ -214,7 +215,10 @@ export const create = (columns) => {
         const responseStatus = taskData?.$meta?.status;
 
         if (!taskData || taskData.error || (responseStatus && responseStatus >= 400)) {
-          return null;
+          // null is reserved for an explicitly exhausted queue. A project or
+          // view may also return 404 after revocation; that is a request failure.
+          // must not render "all tasks completed" in the labeling editor.
+          return false;
         }
 
         const labelStreamModeChanged =

@@ -1,14 +1,16 @@
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { isAlive } from "mobx-state-tree";
 
 import { Button, Form, Input } from "antd";
 
 import { IconTrash } from "@humansignal/icons";
+import { useLocaleTranslation } from "@humansignal/i18n";
 import styles from "../../../components/HtxTextBox/HtxTextBox.module.scss";
 import Registry from "../../../core/Registry";
 import { PER_REGION_MODES } from "../../../mixins/PerRegion";
 import { cn } from "../../../utils/bem";
+import { isComposingKeyEvent } from "../../../utils/events";
 
 import "./TextArea.scss";
 
@@ -16,9 +18,18 @@ const { TextArea } = Input;
 
 const HtxTextAreaResultLine = forwardRef(
   ({ idx, value, readOnly, onChange, onDelete, onFocus, validate, control, collapsed, canDelete = true }, ref) => {
+    const { t } = useLocaleTranslation("editor");
     const rows = Number.parseInt(control.rows);
     const isTextarea = rows > 1;
     const [stateValue, setStateValue] = useState(value ?? "");
+    const pendingInputKey = useId();
+    const annotation = control.annotation;
+    useLayoutEffect(() => {
+      annotation?.setPendingTextInput?.(pendingInputKey, !readOnly && !collapsed && stateValue !== (value ?? ""));
+      return () => {
+        if (annotation && isAlive(annotation)) annotation.setPendingTextInput?.(pendingInputKey, false);
+      };
+    }, [annotation, pendingInputKey, stateValue, value, readOnly, collapsed]);
 
     useEffect(() => {
       if (value !== stateValue) {
@@ -58,11 +69,16 @@ const HtxTextAreaResultLine = forwardRef(
       onChange: changeHandler,
       readOnly: readOnly || collapsed,
       onFocus,
+      "aria-label": t("textEntryInput"),
     };
 
     inputProps.onBlur = blurHandler;
 
     inputProps.onKeyDown = (e) => {
+      if (isComposingKeyEvent(e)) {
+        if (e.key === "Enter") e.preventDefault();
+        return;
+      }
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -82,7 +98,7 @@ const HtxTextAreaResultLine = forwardRef(
             className={cn("textarea-tag").elem("action").toClassName()}
             size="small"
             look="string"
-            aria-label="Delete Region"
+            aria-label={t("textDelete")}
             data-testid="textarea-region-delete"
             leading={<IconTrash />}
             onClick={() => {
@@ -142,6 +158,7 @@ const HtxTextAreaResult = observer(({ item, control, firstResultInputRef, onFocu
 });
 
 const HtxTextAreaRegionView = observer(({ item, area, collapsed, setCollapsed, outliner, color, canDelete = true }) => {
+  const { t } = useLocaleTranslation("editor");
   const rows = Number.parseInt(item.rows);
   const isTextArea = rows > 1;
   const isActive = item.perRegionArea === area;
@@ -195,6 +212,7 @@ const HtxTextAreaRegionView = observer(({ item, area, collapsed, setCollapsed, o
 
   const props = {
     ref: mainInputRef,
+    "aria-label": t("textInput"),
     value,
     rows: item.rows,
     className: `is-search ${cn("textarea-tag").elem("input").toClassName()}`,
@@ -215,11 +233,18 @@ const HtxTextAreaRegionView = observer(({ item, area, collapsed, setCollapsed, o
         area.annotation.selectArea(area);
       }
     },
+    onKeyDown: (e) => {
+      if (isComposingKeyEvent(e) && e.key === "Enter") e.preventDefault();
+    },
   };
 
   if (isTextArea) {
     // allow to add multiline text with shift+enter
     props.onKeyDown = (e) => {
+      if (isComposingKeyEvent(e)) {
+        if (e.key === "Enter") e.preventDefault();
+        return;
+      }
       if (((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") && !item.annotation.isReadOnly()) {
         e.preventDefault();
         e.stopPropagation();

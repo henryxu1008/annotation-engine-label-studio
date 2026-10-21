@@ -10,7 +10,7 @@ from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, QuerySet,
 from django.db.models.fields import DecimalField
 from projects.functions.stream_history import add_stream_history
 from projects.models import Project
-from tasks.models import Annotation, Task
+from tasks.models import Annotation, Task, TaskAssignment
 from users.models import User
 
 logger = logging.getLogger(__name__)
@@ -203,11 +203,22 @@ def get_not_solved_tasks_qs(
     queue_info: str,
 ) -> Tuple[QuerySet[Task], List[int], str, bool]:
     user_solved_tasks_array = user.annotations.filter(project=project, task__isnull=False)
+    if assigned_flag:
+        # A cancelled assignment's annotation must not complete a new assignment
+        # of the same task to the same actor.
+        user_solved_tasks_array = user_solved_tasks_array.filter(
+            task_assignment__assignee=user,
+            task_assignment__status__in=TaskAssignment.ACTIVE_STATUSES,
+        )
     user_solved_tasks_array = user_solved_tasks_array.distinct().values_list('task__pk', flat=True)
     not_solved_tasks = prepared_tasks.exclude(pk__in=user_solved_tasks_array)
 
     # annotation can't have postponed draft, so skip annotation__project filter
     postponed_drafts = user.drafts.filter(task__project=project, was_postponed=True)
+    if assigned_flag:
+        postponed_drafts = postponed_drafts.filter(
+            assignment__assignee=user, assignment__status__in=TaskAssignment.ACTIVE_STATUSES,
+        )
     if postponed_drafts.exists():
         user_postponed_tasks = postponed_drafts.distinct().values_list('task__pk', flat=True)
         not_solved_tasks = not_solved_tasks.exclude(pk__in=user_postponed_tasks)
@@ -359,7 +370,11 @@ def get_next_task_without_dm_queue(
 
 def skipped_queue(next_task, prepared_tasks, project, user, assigned_flag, queue_info):
     if not next_task and project.skip_queue == project.SkipQueue.REQUEUE_FOR_ME:
-        q = Q(project=project, task__isnull=False, was_cancelled=True, task__is_labeled=False)
+        q = Q(project=project, task__isnull=False, was_cancelled=True)
+        if assigned_flag:
+            q &= Q(task_assignment__assignee=user, task_assignment__status__in=TaskAssignment.ACTIVE_STATUSES)
+        else:
+            q &= Q(task__is_labeled=False)
         skipped_tasks = user.annotations.filter(q).order_by('updated_at').values_list('task__pk', flat=True)
         if skipped_tasks.exists():
             preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(skipped_tasks)])
@@ -380,7 +395,11 @@ def skipped_queue(next_task, prepared_tasks, project, user, assigned_flag, queue
 
 def postponed_queue(next_task, prepared_tasks, project, user, assigned_flag, queue_info):
     if not next_task:
-        q = Q(task__project=project, task__isnull=False, was_postponed=True, task__is_labeled=False)
+        q = Q(task__project=project, task__isnull=False, was_postponed=True)
+        if assigned_flag:
+            q &= Q(assignment__assignee=user, assignment__status__in=TaskAssignment.ACTIVE_STATUSES)
+        else:
+            q &= Q(task__is_labeled=False)
         postponed_tasks = user.drafts.filter(q).order_by('updated_at').values_list('task__pk', flat=True)
         if postponed_tasks.exists():
             preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(postponed_tasks)])
@@ -440,9 +459,24 @@ def get_next_task(
 ) -> Tuple[Union[Task, None], str]:
     logger.debug(f'get_next_task called. user: {user}, project: {project}, dm_queue: {dm_queue}')
 
+    if assigned_flag is None:
+        # Explicit fork assignments take precedence over the upstream automatic
+        # overlap/completion sampler. Intersect with the prepared selection so
+        # this does not admit excluded, unassigned or cross-project tasks.
+        assigned_ids = TaskAssignment.objects.filter(
+            project=project, assignee=user, status__in=TaskAssignment.ACTIVE_STATUSES,
+        ).values_list('task_id', flat=True)
+        assigned_tasks = prepared_tasks.filter(pk__in=assigned_ids)
+        if assigned_tasks.exists():
+            next_task, queue_info = get_next_task(user, assigned_tasks, project, dm_queue, assigned_flag=True)
+            if next_task is not None:
+                return next_task, queue_info
+        # Managers retain their original unassigned, read-only exploration path.
+        prepared_tasks = prepared_tasks.exclude(pk__in=assigned_ids)
+
     with conditional_atomic(predicate=db_is_not_sqlite):
         next_task = None
-        use_task_lock = True
+        use_task_lock = not assigned_flag
         queue_info = ''
 
         not_solved_tasks, user_solved_tasks_array, queue_info, prioritized_low_agreement = get_not_solved_tasks_qs(

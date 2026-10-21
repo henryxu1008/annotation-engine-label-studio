@@ -1,0 +1,158 @@
+name: ${ISSUE76_COMPOSE_PROJECT:?Explicit exclusive test project name required}
+x-app: &app
+  image: ${ISSUE76_CANDIDATE_IMAGE:?Verified release candidate digest required}
+  pull_policy: never
+  restart: unless-stopped
+  command: label-studio-uwsgi
+  env_file: ./private/runtime.env
+  environment: &env
+    DJANGO_DB: default
+    POSTGRE_HOST: db
+    POSTGRE_PORT: "5432"
+    POSTGRE_NAME: labelstudio
+    POSTGRE_USER: labelstudio
+    LABEL_STUDIO_HOST: ""
+    SESSION_ENGINE: django.contrib.sessions.backends.db
+    SESSION_COOKIE_NAME: issue76_session
+    SESSION_COOKIE_SECURE: "true"
+    SESSION_COOKIE_SAMESITE: Lax
+    CSRF_COOKIE_SECURE: "1"
+    CSRF_COOKIE_HTTPONLY: "1"
+    CSRF_TRUSTED_ORIGINS: https://localhost:19643,https://localhost:19681,https://localhost:19682,http://localhost:19680
+    DISABLE_SIGNUP_WITHOUT_LINK: "true"
+    LABEL_STUDIO_BASE_DATA_DIR: /label-studio/data
+    BASE_DATA_DIR: /label-studio/data
+    COLLECT_ANALYTICS: "false"
+    LATEST_VERSION_CHECK: "false"
+    SENTRY_DSN: ""
+    FRONTEND_SENTRY_DSN: ""
+    SENTRY_RATE: "0"
+    JSON_LOG: "1"
+    UWSGI_PROCESSES: "2"
+  volumes:
+    - app-data:/label-studio/data
+    - ./private:/private:ro
+    - ./scripts:/acceptance:ro
+  healthcheck:
+    test: [CMD, curl, --fail, --silent, http://localhost:8000/health/]
+    interval: 5s
+    timeout: 7s
+    retries: 20
+    start_period: 30s
+services:
+  db:
+    image: postgres@sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96
+    pull_policy: never
+    restart: unless-stopped
+    env_file: ./private/runtime.env
+    environment:
+      POSTGRES_DB: labelstudio
+      POSTGRES_USER: labelstudio
+      POSTGRES_PASSWORD: ${POSTGRE_PASSWORD:?Private test credentials required}
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, labelstudio, -d, labelstudio]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+  bootstrap:
+    <<: *app
+    restart: "no"
+    healthcheck: {disable: true}
+    depends_on:
+      db: {condition: service_healthy}
+    command: [/bin/sh, -ec, "python /acceptance/db_ops.py migrate-legacy && python /label-studio/label_studio/manage.py locked_migrate && label-studio init -q && python /acceptance/db_ops.py prepare"]
+  app:
+    <<: *app
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+  app-b:
+    <<: *app
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+  session-cleanup:
+    <<: *app
+    healthcheck: {disable: true}
+    depends_on:
+      app: {condition: service_healthy}
+      app-b: {condition: service_healthy}
+    command: [/bin/sh, -ec, "while true; do echo 'session-cleanup: running clearsessions'; python /label-studio/label_studio/manage.py clearsessions; echo 'session-cleanup: completed; next run in 86400 seconds'; sleep 86400; done"]
+  restored-db:
+    profiles: [restore]
+    image: postgres@sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96
+    pull_policy: never
+    restart: unless-stopped
+    env_file: ./private/runtime.env
+    environment:
+      POSTGRES_DB: labelstudio
+      POSTGRES_USER: labelstudio
+      POSTGRES_PASSWORD: ${POSTGRE_PASSWORD:?Private test credentials required}
+    volumes: [restore-pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, labelstudio, -d, labelstudio]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+  restored-app:
+    <<: *app
+    profiles: [restore]
+    environment:
+      <<: *env
+      POSTGRE_HOST: restored-db
+    volumes:
+      - restore-app-data:/label-studio/data
+      - ./private:/private:ro
+      - ./scripts:/acceptance:ro
+    depends_on:
+      restored-db: {condition: service_healthy}
+  nginx: &gateway
+    image: ${ISSUE76_CANDIDATE_IMAGE:?Verified release candidate digest required}
+    pull_policy: never
+    restart: unless-stopped
+    command: nginx
+    environment:
+      APP_HOST: app
+      LABEL_STUDIO_HOST: ""
+      NGINX_SSL_CERT: /private/tls-cert.pem
+      NGINX_SSL_CERT_KEY: /private/tls-key.pem
+    volumes:
+      - app-data:/label-studio/data:ro
+      - ./private:/private:ro
+    ports: [127.0.0.1:19643:8086, 127.0.0.1:19680:8085]
+    depends_on:
+      app: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --cacert, /private/tls-cert.pem, https://localhost:8086/health/]
+      interval: 5s
+      timeout: 7s
+      retries: 20
+      start_period: 30s
+  nginx-b:
+    <<: *gateway
+    environment:
+      APP_HOST: app-b
+      LABEL_STUDIO_HOST: ""
+      NGINX_SSL_CERT: /private/tls-cert.pem
+      NGINX_SSL_CERT_KEY: /private/tls-key.pem
+    ports: [127.0.0.1:19681:8086]
+    depends_on:
+      app-b: {condition: service_healthy}
+  restored-nginx:
+    <<: *gateway
+    profiles: [restore]
+    environment:
+      APP_HOST: restored-app
+      LABEL_STUDIO_HOST: ""
+      NGINX_SSL_CERT: /private/tls-cert.pem
+      NGINX_SSL_CERT_KEY: /private/tls-key.pem
+    volumes:
+      - restore-app-data:/label-studio/data:ro
+      - ./private:/private:ro
+    ports: [127.0.0.1:19682:8086]
+    depends_on:
+      restored-app: {condition: service_healthy}
+volumes:
+  pg-data:
+  app-data:
+  restore-pg-data:
+  restore-app-data:

@@ -1,4 +1,4 @@
-import { fireEvent } from "@testing-library/react";
+import { act, fireEvent } from "@testing-library/react";
 import { renderWithLocale as render } from "../../../__tests__/localeTestUtils";
 import { Provider } from "mobx-react";
 import { Controls } from "../Controls";
@@ -6,6 +6,7 @@ import { Controls } from "../Controls";
 jest.mock("@humansignal/ui", () => {
   const { forwardRef } = jest.requireActual("react");
   return {
+    ButtonGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     Button: forwardRef(({ children, ...props }: { children: React.ReactNode }) => {
       return (
         <button data-testid="button" {...props}>
@@ -83,6 +84,53 @@ const setupAppSettings = (options: { role?: string; enterprise?: boolean } = {})
 };
 
 describe("Controls", () => {
+  test.each([true, false])("keeps autosave active while comments are pending before submit/update: new=%s", async (userGenerate) => {
+    let complete!: () => void;
+    const selected = { ...mockAnnotation, userGenerate, submissionInProgress: jest.fn() };
+    const submitAnnotation = jest.fn();
+    const updateAnnotation = jest.fn();
+    const store = { ...mockStore, submitAnnotation, updateAnnotation,
+      hasInterface: (name: string) => ["submit", "update"].includes(name),
+      annotationStore: { selected },
+      commentStore: { ...mockStore.commentStore, commentFormSubmit: () => new Promise<void>((resolve) => { complete = resolve; }) },
+    };
+    const { getByTestId } = render(<Provider store={store}><Controls history={mockHistory} annotation={selected} /></Provider>);
+    fireEvent.click(getByTestId(userGenerate ? "bottombar-submit-button" : "bottombar-update-button"));
+    expect(selected.submissionInProgress).not.toHaveBeenCalled();
+    expect(submitAnnotation).not.toHaveBeenCalled();
+    expect(updateAnnotation).not.toHaveBeenCalled();
+    await act(async () => complete());
+    expect(userGenerate ? submitAnnotation : updateAnnotation).toHaveBeenCalledTimes(1);
+  });
+  test("keeps review acceptance separate from readonly result editing", () => {
+    const readonlyReview = { ...mockAnnotation, history: mockHistory, canBeReviewed: true, isReadOnly: () => true };
+    const reviewStore = { ...mockStore, hasInterface: (name: string) => name === "review",
+      annotationStore: { ...mockStore.annotationStore, selected: readonlyReview } };
+    const { getByTestId } = render(<Provider store={reviewStore}>
+      <Controls history={mockHistory} annotation={readonlyReview} />
+    </Provider>);
+    expect(getByTestId("bottombar-accept-button")).not.toBeDisabled();
+  });
+
+  test.each([true, false])("disables readonly annotation writes even when empty results are allowed: new=%s", (userGenerate) => {
+    const readonlyStore = {
+      ...mockStore,
+      hasInterface: (name: string) => ["submit", "update", "skip"].includes(name),
+      submitAnnotation: jest.fn(),
+      updateAnnotation: jest.fn(),
+    };
+    const readonlyAnnotation = { ...mockAnnotation, userGenerate, isReadOnly: () => true };
+    const { getByTestId } = render(<Provider store={readonlyStore}>
+      <Controls history={mockHistory} annotation={readonlyAnnotation} />
+    </Provider>);
+    const save = getByTestId(userGenerate ? "bottombar-submit-button" : "bottombar-update-button");
+    expect(save).toBeDisabled();
+    expect(getByTestId("bottombar-skip-button")).toBeDisabled();
+    fireEvent.click(save);
+    expect(readonlyStore.submitAnnotation).not.toHaveBeenCalled();
+    expect(readonlyStore.updateAnnotation).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset APP_SETTINGS before each test

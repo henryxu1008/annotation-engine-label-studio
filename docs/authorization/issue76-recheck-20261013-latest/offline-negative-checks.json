@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "cases": [
+    {
+      "field": "archive_sha256",
+      "rejected": true,
+      "reason": "Archive SHA-256 mismatch"
+    },
+    {
+      "field": "image_config_digest",
+      "rejected": true,
+      "reason": "Image config mismatch"
+    }
+  ]
+}

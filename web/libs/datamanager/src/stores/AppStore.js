@@ -1,4 +1,4 @@
-import { destroy, flow, types } from "mobx-state-tree";
+import { destroy, flow, isAlive, types } from "mobx-state-tree";
 import { runInAction } from "mobx";
 import { Modal } from "../components/Common/Modal/Modal";
 import { FF_DEV_2887, FF_DISABLE_GLOBAL_USER_FETCHING, FF_LOPS_E_3, isFF } from "../utils/feature-flags";
@@ -124,6 +124,8 @@ export const AppStore = types
     needsDataFetch: false,
     projectFetch: false,
     requestsInFlight: new Map(),
+    taskNavigationPending: false,
+    editorLocation: null,
   }))
   .actions((self) => ({
     startPolling() {
@@ -188,7 +190,43 @@ export const AppStore = types
       self.toolbar = toolbarString;
     },
 
-    setTask: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
+    navigateWithSavedDraft: flow(function* (navigate, options = {}) {
+      // All in-page task entry points share this gate, including keyboard and
+      // history navigation. Keep the outgoing editor alive until its real flush
+      // confirms every edit; repeated clicks must not start competing resets.
+      const restoreLocation = () => {
+        if (options.pushState === false && self.editorLocation) {
+          History.forceNavigate({ ...self.editorLocation }, true);
+        }
+      };
+      if (self.taskNavigationPending) {
+        restoreLocation();
+        return false;
+      }
+      self.taskNavigationPending = true;
+      const lsf = self._sdk?.lsf;
+      try {
+        if (lsf && (yield lsf.saveDraft()) === false) {
+          restoreLocation();
+          return false;
+        }
+        if (!isAlive(self) || self._sdk?.lsf !== lsf) return false;
+        yield Promise.resolve(navigate());
+        self.editorLocation = History.getParams();
+        return true;
+      } finally {
+        if (isAlive(self)) self.taskNavigationPending = false;
+      }
+    }),
+
+    setTask(params) {
+      return self.navigateWithSavedDraft(() => {
+        self.SDK.setMode("labeling");
+        return self.setTaskAfterSave(params);
+      }, params);
+    },
+
+    setTaskAfterSave: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
       if (pushState !== false) {
         History.navigate({
           task: taskID,
@@ -327,13 +365,13 @@ export const AppStore = types
     startLabelStream(options = {}) {
       if (!self.confirmLabelingConfigured()) return;
 
-      const nextAction = () => {
+      const nextAction = () => self.navigateWithSavedDraft(() => {
         self.SDK.setMode("labelstream");
 
         if (options?.pushState !== false) {
           History.navigate({ labeling: 1 });
         }
-      };
+      }, options);
 
       if (isFF(FF_DEV_2887) && self.LSF?.lsf?.annotationStore?.selected?.commentStore?.hasUnsaved) {
         Modal.confirm({
@@ -347,7 +385,7 @@ export const AppStore = types
         return;
       }
 
-      nextAction();
+      return nextAction();
     },
 
     startLabeling(item, options = {}) {
@@ -356,8 +394,6 @@ export const AppStore = types
       if (self.dataStore.loadingItem) return;
 
       const nextAction = () => {
-        self.SDK.setMode("labeling");
-
         if (item?.id && !item.isSelected) {
           const labelingParams = {
             pushState: options?.pushState,
@@ -375,9 +411,9 @@ export const AppStore = types
             });
           }
 
-          self.setTask(labelingParams);
+          return self.setTask(labelingParams);
         } else {
-          self.closeLabeling();
+          return self.closeLabeling(options);
         }
       };
 
@@ -393,7 +429,7 @@ export const AppStore = types
         return;
       }
 
-      nextAction();
+      return nextAction();
     },
 
     confirmLabelingConfigured() {
@@ -412,6 +448,10 @@ export const AppStore = types
     },
 
     closeLabeling(options) {
+      return self.navigateWithSavedDraft(() => self.closeLabelingAfterSave(options), options);
+    },
+
+    closeLabelingAfterSave(options) {
       const { SDK } = self;
 
       self.unsetTask(options);
@@ -502,6 +542,7 @@ export const AppStore = types
 
       try {
         const newProject = yield self.apiCall("project", params);
+        if (!isAlive(self)) return false;
         if (newProject?.error) {
           self.projectFetch = false;
           return false;
@@ -528,6 +569,7 @@ export const AppStore = types
           self.SDK.invoke(`${itemType}Updated`, self.project);
         }
       } catch {
+        if (!isAlive(self)) return false;
         // When in timer (polling project counts) mode, we can still continue
         // but we need to crash for non-polling interactions
         // because we can't display the app without the project itself and will need to redirect
@@ -573,6 +615,7 @@ export const AppStore = types
           staleTime: 60 * 1000,
         },
       });
+      if (!isAlive(self)) return;
 
       // apiCall reports HTTP failures through the SDK and returns an error
       // object. A request can finish with 401 while this page is logging out.
@@ -628,6 +671,7 @@ export const AppStore = types
       }
 
       const [projectFetched] = yield Promise.all(requests);
+      if (!isAlive(self)) return;
       self.setLoading(false);
 
       if (projectFetched) {
@@ -647,6 +691,7 @@ export const AppStore = types
      * @param {{ errorHandler?: fn, headers?: object, allowToCancel?: boolean }} [options] additional options like errorHandler
      */
     apiCall: flow(function* (methodName, params, body, options) {
+      if (!isAlive(self)) return { error: "Data Manager was destroyed", isCanceled: true };
       const isAllowCancel = options?.allowToCancel;
       const controller = new AbortController();
       const signal = controller.signal;
@@ -670,6 +715,9 @@ export const AppStore = types
         body: requestBody.body ?? requestBody,
         options,
       });
+      // Import completion/reload can destroy this store during the request.
+      // An obsolete result must not write state or notify the new workspace.
+      if (!isAlive(self)) return { error: "Data Manager was destroyed", isCanceled: true };
 
       if (isAllowCancel) {
         result.isCanceled = signal.aborted;

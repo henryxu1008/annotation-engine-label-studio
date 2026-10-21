@@ -63,6 +63,9 @@ jobs:
           python-version: "3.11"
           cache: poetry
 
+      - name: Verify isolated candidate build and archive contracts
+        run: python -m unittest discover -s scripts -p 'test_candidate_*.py' -v
+
       - name: Install OS dependencies
         run: |
           sudo apt-get update
@@ -101,7 +104,7 @@ jobs:
         working-directory: label_studio
         run: poetry run pytest -v tasks/tests/test_api.py -m "not integration_tests"
 
-      - name: Run PostgreSQL session state and concurrency regressions
+      - name: Run PostgreSQL session and submission regressions
         working-directory: label_studio
         env:
           DJANGO_DB: postgresql
@@ -110,7 +113,10 @@ jobs:
           POSTGRE_USER: postgres
           POSTGRE_PASSWORD: session-security-test-only
         run: |
-          poetry run pytest -q users/tests/test_session_contract.py users/tests/test_session_revocation.py users/tests/test_session_version_migration.py
+          poetry run pytest -q \
+            users/tests/test_session_contract.py users/tests/test_session_revocation.py users/tests/test_session_version_migration.py \
+            tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py \
+            tasks/tests/test_task_assignment_authorization.py
 
       - name: Run request locale and translated template regressions
         working-directory: label_studio

@@ -193,6 +193,7 @@
     "cypress-image-snapshot": "^4.0.1",
     "cypress-multi-reporters": "^2.0.5",
     "cypress-parallel": "^0.15.0",
+    "cypress-real-events": "1.15.1",
     "cypress-terminal-report": "^5.1.1",
     "dotenv-defaults": "^2.0.2",
     "jest": "30.0.5",

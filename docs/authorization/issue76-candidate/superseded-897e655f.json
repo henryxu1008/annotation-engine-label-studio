@@ -1,0 +1,11 @@
+{
+  "source_commit": "897e655f296a7405ce76004e68fa8d9197943f6e",
+  "status": "SUPERSEDED_BROWSER_BLOCKER",
+  "native_operations": 112,
+  "i18n_upgrade_checks": 7,
+  "source_browser_ci": "FAIL",
+  "source_browser_run": 37921190220,
+  "blocker": "late Data Manager bootstrap responses mutate destroyed View[]/User[] after import completion",
+  "original_import_readiness_red": "en-US and zh-CN on main f3b69385",
+  "final_candidate_evidence_inherited": false
+}

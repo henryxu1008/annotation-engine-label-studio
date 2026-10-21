@@ -35,14 +35,16 @@ export const Inner = () => {
 
   const onCancel = useCallback(async () => {
     setWaitingStatus(true);
-    await api.callApi("deleteFileUploads", {
-      params: {
-        pk: project.id,
-      },
-      body: {
-        file_upload_ids: fileIds,
-      },
-    });
+    if (project?.id && fileIds.length) {
+      await api.callApi("deleteFileUploads", {
+        params: {
+          pk: project.id,
+        },
+        body: {
+          file_upload_ids: fileIds,
+        },
+      });
+    }
     setWaitingStatus(false);
     modal?.current?.hide();
     backToDM();
@@ -91,7 +93,7 @@ export const Inner = () => {
             size="small"
             onClick={onFinish}
             waiting={waiting || uploading}
-            disabled={uploadDisabled}
+            disabled={uploadDisabled || !project?.id}
             aria-label={t("finishImport")}
           >
             {t("import")}

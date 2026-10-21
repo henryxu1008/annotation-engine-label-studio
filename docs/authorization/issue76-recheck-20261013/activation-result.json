@@ -1,0 +1,190 @@
+{
+  "status": "PASS_EXISTING_PROJECT_NEW_FIXED_IMAGE",
+  "at": "2026-10-13T14:46:26.520431+00:00",
+  "source_commit": "89c794e1b1f4ac18e1daf81d04637de7fdccb54a",
+  "version": "1.23.0+fork.rc76.89c794e1",
+  "OCI_index": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+  "image_config": "sha256:84ee35d8971f6d7a08af329095013c501933506351f2527071868924ad21b699",
+  "containers": [
+    {
+      "id": "dd6263f325ac1649fe94135b99575deb606345e0270050342e4f0ba1e662aed3",
+      "name": "/annotation-engine-issue76-20261009-finalized-app-1",
+      "image": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+      "started": "2026-10-13T14:45:54.895499254Z",
+      "mounts": [
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/Users/Henry/.codex/deployments/annotation-engine-issue76-20261009/finalized/scripts",
+          "Destination": "/acceptance",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/Users/Henry/.codex/deployments/annotation-engine-issue76-20261009/finalized/private",
+          "Destination": "/private",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_app-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_app-data/_data",
+          "Destination": "/label-studio/data",
+          "Driver": "local",
+          "Mode": "rw",
+          "RW": true,
+          "Propagation": ""
+        }
+      ]
+    },
+    {
+      "id": "7ad7ea1aded6b4c3fa7045aaafe69aeec963c0d595f6ad407445f3b1297a97a4",
+      "name": "/annotation-engine-issue76-20261009-finalized-app-b-1",
+      "image": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+      "started": "2026-10-13T14:45:54.77201385Z",
+      "mounts": [
+        {
+          "Type": "bind",
+          "Source": "C:\\Users\\Henry\\.codex\\deployments\\annotation-engine-issue76-20261009\\finalized\\scripts",
+          "Destination": "/acceptance",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "C:\\Users\\Henry\\.codex\\deployments\\annotation-engine-issue76-20261009\\finalized\\private",
+          "Destination": "/private",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_app-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_app-data/_data",
+          "Destination": "/label-studio/data",
+          "Driver": "local",
+          "Mode": "rw",
+          "RW": true,
+          "Propagation": ""
+        }
+      ]
+    },
+    {
+      "id": "b25076e7c9f2d72a9d1b50f290ba106a0453c5f0feac1bc56b78f68b5f2ca596",
+      "name": "/annotation-engine-issue76-20261009-finalized-nginx-1",
+      "image": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+      "started": "2026-10-13T14:46:19.030976937Z",
+      "mounts": [
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/Users/Henry/.codex/deployments/annotation-engine-issue76-20261009/finalized/private",
+          "Destination": "/private",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_app-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_app-data/_data",
+          "Destination": "/label-studio/data",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        }
+      ]
+    },
+    {
+      "id": "81effea387319c27a5fea18ac427d6393d4ba37f688c8ec710ad27c4e60d6c14",
+      "name": "/annotation-engine-issue76-20261009-finalized-nginx-b-1",
+      "image": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+      "started": "2026-10-13T14:46:13.909171698Z",
+      "mounts": [
+        {
+          "Type": "bind",
+          "Source": "C:\\Users\\Henry\\.codex\\deployments\\annotation-engine-issue76-20261009\\finalized\\private",
+          "Destination": "/private",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_app-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_app-data/_data",
+          "Destination": "/label-studio/data",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        }
+      ]
+    },
+    {
+      "id": "c29bb1dea42c66ec37a89c93a1c739d6b3b4c3174843704e924d906ffb6a91e5",
+      "name": "/annotation-engine-issue76-20261009-finalized-session-cleanup-1",
+      "image": "sha256:5c971369049009227a0e3b854f7cbb1c5ffdf536cea3cb01a43f0078f928228f",
+      "started": "2026-10-13T14:46:19.169886003Z",
+      "mounts": [
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/Users/Henry/.codex/deployments/annotation-engine-issue76-20261009/finalized/scripts",
+          "Destination": "/acceptance",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/Users/Henry/.codex/deployments/annotation-engine-issue76-20261009/finalized/private",
+          "Destination": "/private",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_app-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_app-data/_data",
+          "Destination": "/label-studio/data",
+          "Driver": "local",
+          "Mode": "rw",
+          "RW": true,
+          "Propagation": ""
+        }
+      ]
+    },
+    {
+      "id": "d82d38dafbf4a0447c8f0f14fdf61d1a8e0811fa78f0a67e41ec333e0135919c",
+      "name": "/annotation-engine-issue76-20261009-finalized-db-1",
+      "image": "sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96",
+      "started": "2026-10-13T00:41:15.585390698Z",
+      "mounts": [
+        {
+          "Type": "volume",
+          "Name": "annotation-engine-issue76-20261009-finalized_pg-data",
+          "Source": "/var/lib/docker/volumes/annotation-engine-issue76-20261009-finalized_pg-data/_data",
+          "Destination": "/var/lib/postgresql/data",
+          "Driver": "local",
+          "Mode": "rw",
+          "RW": true,
+          "Propagation": ""
+        }
+      ]
+    }
+  ],
+  "database_and_all_mounts_preserved": true,
+  "new_Compose": 0,
+  "old_image_and_evidence_preserved": true,
+  "canonical_control": "Use original compose.rc.yml and new restricted runtime-89c794e1.env; original env retained as history",
+  "product_patch": "Bound optional login tips timeout and cancelled disposed Data Manager initialization",
+  "no_schema_change": true,
+  "Core_business": "PAUSED",
+  "IAM_operations": "PAUSED"
+}

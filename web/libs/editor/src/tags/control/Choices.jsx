@@ -1,5 +1,5 @@
 import { observer } from "mobx-react";
-import { types } from "mobx-state-tree";
+import { getEnv, types } from "mobx-state-tree";
 
 import RequiredMixin from "../../mixins/Required";
 import PerRegionMixin from "../../mixins/PerRegion";
@@ -174,7 +174,11 @@ const Model = types
     },
 
     requiredModal() {
-      InfoModal.warning(self.requiredmessage || `Checkbox "${self.name}" is required.`);
+      const runtime = getEnv(self).localeRuntime;
+      InfoModal.warning(
+        self.requiredmessage || runtime?.t("editor:requiredChoice", { name: self.name }) || `Checkbox "${self.name}" is required.`,
+        runtime?.t("editor:warningTitle") || "Warning",
+      );
     },
 
     // this is not labels, unselect affects result, so don't unselect on random reason

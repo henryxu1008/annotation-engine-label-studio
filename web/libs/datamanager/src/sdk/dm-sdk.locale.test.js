@@ -1,4 +1,5 @@
 import { DataManager } from "./dm-sdk";
+import { LSFWrapper } from "./lsf-sdk";
 import { createApp } from "./app-create";
 import { destroy } from "mobx-state-tree";
 
@@ -49,6 +50,59 @@ it("does not adopt a store returned after destroy", async () => {
   await nextTick();
   expect(manager.store).toBeNull();
   expect(destroy).toHaveBeenCalledWith(store);
+});
+
+it("refreshes persistent task guidance on locale change without resetting annotation access or data", async () => {
+  const store = { submitAnnotation: jest.fn(), saveDraft: jest.fn() };
+  createApp.mockResolvedValue(store);
+  const manager = makeManager();
+  await nextTick();
+  const annotation = { result: [{ value: { choices: ["Positive"] } }], setReadonly: jest.fn() };
+  const result = annotation.result;
+  const invoke = jest.fn();
+  manager.invoke = invoke;
+  manager.lsf = {
+    task: { can_label: false },
+    lsf: { toggleInterface: jest.fn() },
+    lsfInstance: { setLocale: jest.fn() },
+    annotations: [annotation],
+    currentAnnotation: annotation,
+    datamanager: manager,
+    refreshTaskAccessGuidance: LSFWrapper.prototype.refreshTaskAccessGuidance,
+    destroy: jest.fn(),
+  };
+  LSFWrapper.prototype.applyTaskAccess.call(manager.lsf);
+  annotation.setReadonly.mockClear();
+  manager.lsf.lsf.toggleInterface.mockClear();
+
+  expect(manager.setLocale("zh-CN")).toBe(true);
+  expect(invoke).toHaveBeenLastCalledWith("toast", expect.objectContaining({
+    id: "task-assignment-read-only",
+    message: "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。",
+    duration: -1,
+  }));
+  expect(manager.setLocale("en-US")).toBe(true);
+  expect(invoke).toHaveBeenLastCalledWith("toast", expect.objectContaining({
+    message: "This task is read-only. Ask a project manager to assign it to you before labeling.",
+  }));
+  expect(annotation.result).toBe(result);
+  expect(annotation.setReadonly).not.toHaveBeenCalled();
+  expect(manager.lsf.lsf.toggleInterface).not.toHaveBeenCalled();
+  expect(createApp).toHaveBeenCalledTimes(1);
+  expect(store.submitAnnotation).not.toHaveBeenCalled();
+  expect(store.saveDraft).not.toHaveBeenCalled();
+
+  manager.lsf.task = null;
+  expect(manager.setLocale("zh-CN")).toBe(true);
+  expect(invoke).toHaveBeenLastCalledWith("toast:dismiss", { id: "task-assignment-read-only" });
+  manager.lsf.destroyed = true;
+  invoke.mockClear();
+  expect(manager.setLocale("en-US")).toBe(true);
+  expect(invoke).not.toHaveBeenCalled();
+  manager.destroy();
+  invoke.mockClear();
+  expect(manager.setLocale("zh-CN")).toBe(false);
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 it("shares an in-flight task selection so a second caller cannot reset the editor", async () => {

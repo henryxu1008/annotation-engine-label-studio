@@ -36,6 +36,17 @@ const Model = types
     isText: types.optional(types.boolean, false),
     globalOffsets: types.maybeNull(GlobalOffsets),
   })
+  .preProcessSnapshot((snapshot) => {
+    // Plain-text ranges need no DOM calculation. Initialize their derived cache
+    // before the saved baseline and Undo history are captured, so first render
+    // does not mark a restored draft as edited or schedule a redundant save.
+    // Keep calculated history snapshots and DOM-dependent HTML ranges intact.
+    if (!snapshot.isText || snapshot.globalOffsets?.calculated) return snapshot;
+    return {
+      ...snapshot,
+      globalOffsets: { start: snapshot.startOffset, end: snapshot.endOffset, calculated: true },
+    };
+  })
   .volatile(() => ({
     hideable: true,
   }))

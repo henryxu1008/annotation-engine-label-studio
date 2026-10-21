@@ -1,0 +1,10 @@
+[
+  {
+    "check": "Archive SHA-256 mismatch refuses artifact",
+    "result": "PASS"
+  },
+  {
+    "check": "Image config mismatch refuses artifact",
+    "result": "PASS"
+  }
+]

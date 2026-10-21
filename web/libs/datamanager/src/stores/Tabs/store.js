@@ -1,4 +1,4 @@
-import { applySnapshot, clone, destroy, flow, getRoot, getSnapshot, types } from "mobx-state-tree";
+import { applySnapshot, clone, destroy, flow, getRoot, getSnapshot, isAlive, types } from "mobx-state-tree";
 import { History } from "../../utils/history";
 import { guidGenerator } from "../../utils/random";
 import { isDefined, unique } from "../../utils/utils";
@@ -120,10 +120,13 @@ export const TabStore = types
   }))
   .actions((self) => ({
     setSelected: flow(function* (view, options = {}) {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       let selected;
 
       if (typeof view === "string") {
         selected = yield self.getViewByKey(view);
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       } else if (typeof view === "number") {
         selected = self.views.find((v) => v.id === view);
       } else if (view && view.id) {
@@ -136,6 +139,7 @@ export const TabStore = types
       if (self.views.length === 0 && options.createDefault !== false) {
         view = null;
         yield self.createDefaultView();
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       }
 
       if (selected && self.selected !== selected) {
@@ -147,8 +151,7 @@ export const TabStore = types
         self.selected = selected;
 
         yield selected.reload();
-
-        const root = getRoot(self);
+        if (!isAlive(self) || !isAlive(root) || !isAlive(selected) || !root.SDK) return;
 
         root.SDK.invoke("tabChanged", selected);
         selected.selected._invokeChangeEvent();
@@ -156,6 +159,8 @@ export const TabStore = types
     }),
 
     deleteView: flow(function* (view, { autoselect = true } = {}) {
+      if (!isAlive(self) || !isAlive(view)) return;
+      const root = getRoot(self);
       if (autoselect && self.selected === view) {
         let newView;
         if (self.selected.opener) {
@@ -167,10 +172,12 @@ export const TabStore = types
         }
 
         yield self.setSelected(newView.key);
+        if (!isAlive(self) || !isAlive(root) || !isAlive(view) || !root.SDK) return;
       }
 
       if (view.saved) {
         yield getRoot(self).apiCall("deleteTab", { tabID: view.id });
+        if (!isAlive(self) || !isAlive(view)) return;
       }
 
       destroy(view);
@@ -214,6 +221,8 @@ export const TabStore = types
     },
 
     addView: flow(function* (viewSnapshot = {}, options) {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       const { autoselect = true, autosave = true, reload = true } = options ?? {};
 
       const newSnapshot = self.createSnapshot(viewSnapshot);
@@ -224,6 +233,7 @@ export const TabStore = types
       if (autosave) {
         // with autosave it will be reloaded anyway
         yield newView.save({ reload: !autosave && reload });
+        if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       }
 
       if (autoselect) {
@@ -255,6 +265,8 @@ export const TabStore = types
     }),
 
     createDefaultView: flow(function* () {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       self.views.push({
         id: 0,
         title: "Default",
@@ -264,6 +276,7 @@ export const TabStore = types
       let defaultView = self.views[self.views.length - 1];
 
       yield defaultView.save(defaultView);
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
       // at this point newly created tab does not exist
       // so we need to take in from the list once again
@@ -289,6 +302,9 @@ export const TabStore = types
     },
 
     saveView: flow(function* (view, { reload, interaction } = {}) {
+      if (!isAlive(self) || !isAlive(view)) return;
+      const root = getRoot(self);
+      if (!isAlive(root) || !root.SDK) return;
       const needsLock = ["ordering", "filter"].includes(interaction);
 
       if (needsLock) view.lock();
@@ -298,10 +314,10 @@ export const TabStore = types
 
       if (interaction !== undefined) Object.assign(params, { interaction });
 
-      const root = getRoot(self);
       const apiMethod = !view.saved && root.apiVersion === 2 ? "createTab" : "updateTab";
 
       const result = yield root.apiCall(apiMethod, params, body, { allowToCancel: root.SDK.type === "DE" });
+      if (!isAlive(self) || !isAlive(root) || !isAlive(view) || !root.SDK) return;
 
       if (result.isCanceled) {
         return view;
@@ -354,6 +370,8 @@ export const TabStore = types
       getRoot(self).apiCall("orderTab", {}, { body: idList }, { alwaysExpectJSON: false });
     }),
     duplicateView: flow(function* (view) {
+      if (!isAlive(self) || !isAlive(view)) return;
+      const root = getRoot(self);
       const sn = getSnapshot(view);
 
       self.views.push({
@@ -367,6 +385,7 @@ export const TabStore = types
       const newView = self.views[self.views.length - 1];
 
       yield newView.save();
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
       self.selected = self.views[self.views.length - 1];
       self.selected.reload();
     }),
@@ -476,8 +495,11 @@ export const TabStore = types
     },
 
     fetchTabs: flow(function* (tab, taskID, labeling) {
+      if (!isAlive(self)) return;
+      const root = getRoot(self);
       const tabId = Number.parseInt(tab);
-      const response = yield getRoot(self).apiCall("tabs");
+      const response = yield root.apiCall("tabs");
+      if (!isAlive(self)) return;
       if (response?.error) return;
       const tabs = response?.tabs ?? response ?? [];
       if (!Array.isArray(tabs)) throw new TypeError("Tabs API must return an array");
@@ -498,17 +520,19 @@ export const TabStore = types
       yield self.setSelected(Number.isNaN(tabId) ? tab : tabId, {
         pushState: tab === undefined,
       });
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
       yield self.selected?.save();
+      if (!isAlive(self) || !isAlive(root) || !root.SDK) return;
 
       if (labeling) {
-        getRoot(self).startLabelStream({
+        root.startLabelStream({
           pushState: false,
         });
       } else if (isDefined(taskID)) {
         const task = { id: Number.parseInt(taskID) };
 
-        getRoot(self).startLabeling(task, {
+        root.startLabeling(task, {
           pushState: false,
         });
       }
@@ -520,6 +544,7 @@ export const TabStore = types
 
       if (!isNaN(tabKey) && !isNaN(tabId)) {
         const tabData = yield getRoot(self).apiCall("tab", { tabId });
+        if (!isAlive(self)) return;
         const { data, ...tabClean } = dataCleanup(tabData, self.columns ?? []);
 
         self.views.push({

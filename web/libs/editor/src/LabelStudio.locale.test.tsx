@@ -34,6 +34,7 @@ it("keeps a mounted editor and its store while changing its locale", async () =>
   expect(editor.setLocale("zh-CN")).toBe(true);
   expect(editor.localeRuntime.t("editor:submit")).toBe("提交");
   expect(configureStore).toHaveBeenCalledTimes(1);
+  expect(configureStore).toHaveBeenCalledWith(expect.anything(), expect.anything(), editor.localeRuntime);
   expect(store.submitAnnotation).not.toHaveBeenCalled();
   expect(store.saveDraft).not.toHaveBeenCalled();
   editor.destroy?.();

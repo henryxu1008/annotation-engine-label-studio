@@ -53,7 +53,10 @@ def create_submission(*, assignment, annotation, actor):
 
     assignment = (
         TaskAssignment.objects.select_for_update()
-        .select_related('task', 'project', 'assignee', 'annotation')
+        # The nullable annotation join cannot participate in PostgreSQL's
+        # FOR UPDATE. Writes are serialized by the locked assignment, and the
+        # snapshot below uses the annotation supplied by the write service.
+        .select_related('task', 'project', 'assignee')
         .get(pk=assignment.pk)
     )
 
@@ -94,7 +97,8 @@ def create_submission(*, assignment, annotation, actor):
 
 @transaction.atomic
 def review_submission(*, submission, reviewer, decision, reason=''):
-    submission = Submission.objects.select_for_update().select_related('assignment', 'submitted_by').get(
+    # submitted_by is nullable; its ID is sufficient for the self-review check.
+    submission = Submission.objects.select_for_update().select_related('assignment').get(
         pk=submission.pk
     )
 

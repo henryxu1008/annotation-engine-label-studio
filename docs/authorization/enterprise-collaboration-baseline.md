@@ -47,14 +47,13 @@ Implemented behavior:
 - Manager-only release endpoint exposes only approved immutable snapshots.
 - Editing and resubmitting after approval produces a new pending revision; approval is never inherited.
 
-## What is NOT yet production-complete
-
-The following work remains explicit and must not be inferred as complete from the milestones above:
+## Completed resource and membership surfaces
 
 ### Project-related write surface hardening
-Tracked in #8.
+Implemented in closed #8, with the endpoint matrix and negative-path regressions
+maintained in [authorization-plan.md](authorization-plan.md).
 
-The fork still needs a complete endpoint audit for:
+The server-side enforcement and regression coverage include:
 - Data Manager actions and bulk mutations;
 - import/reimport;
 - export/download;
@@ -63,18 +62,21 @@ The fork still needs a complete endpoint audit for:
 - file/media/proxy paths;
 - webhook/project configuration endpoints.
 
-Project membership must not accidentally imply manager mutation rights on these paths.
+Project membership does not grant manager mutation rights on these paths. Every
+new or upgraded endpoint still requires its own authorization audit.
 
 ### Project member/role management surface
-Tracked in #9.
+Implemented in closed #9; the browser management surface followed in #17.
 
-The `ProjectMember` model and roles exist, but the fork still needs a supported manager-only API/UI flow for:
+The supported manager-only API/UI flow covers:
 - adding a member;
 - changing role;
 - disabling/re-enabling membership;
 - removing membership safely;
 - preventing loss of the last effective manager;
 - validating organization boundaries.
+
+## Remaining delivery gates
 
 ### Platform IAM integration
 Not started.
@@ -98,21 +100,21 @@ The current Fork PR Gate verifies:
 - immutable submissions and review;
 - existing task API smoke tests.
 
-Before production use, add:
-- full endpoint authorization matrix;
-- storage/media direct-access tests;
-- import/export/bulk action tests;
-- browser-level multi-user collaboration tests;
-- PostgreSQL migration/rollback validation;
-- backup/restore validation;
-- upgrade regression against the next stable upstream Label Studio release.
+The endpoint matrix, storage/media, import/export/bulk and browser collaboration
+regressions are implemented; see [browser-e2e-acceptance.md](browser-e2e-acceptance.md).
+Source CI and historical local fixtures do not establish a new candidate's or
+target environment's acceptance. Before production use, verify the fixed
+candidate, PostgreSQL migration and safe fallback, HTTPS/cookies, cross-replica
+revocation, audit durability, backup/restore and the actual cleanup schedule in
+the receiving environment (#76/#48/#44). An upstream upgrade also requires its
+own security and regression review.
 
 ## Current reference workflow
 
 ```text
 Manager
   -> create/manage project
-  -> add roles (management API still pending #9)
+  -> add/manage project roles (manager-only API and UI)
   -> assign tasks
 
 Annotator

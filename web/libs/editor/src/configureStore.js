@@ -15,7 +15,7 @@ const getEnvironment = async () => {
 };
 
 // Configure default store
-export const configureStore = async (params, events) => {
+export const configureStore = async (params, events, localeRuntime) => {
   if (params.options?.secureMode) window.LS_SECURE_MODE = true;
 
   const env = await getEnvironment();
@@ -43,6 +43,7 @@ export const configureStore = async (params, events) => {
   const store = AppStore.create(params, {
     ...env.configureApplication(params),
     events,
+    localeRuntime,
   });
 
   store.initializeStore({

@@ -28,7 +28,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
-from tasks.exceptions import AssignmentConflictError
+from tasks.drafts import check_submission_draft, lock_drafts, require_draft_revision
+from tasks.exceptions import AssignmentConflictError, DraftConflictError
 from tasks.models import Annotation, AnnotationDraft, Prediction, Submission, Task, TaskAssignment
 from tasks.openapi_schema import (
     annotation_request_schema,
@@ -733,6 +734,7 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
         assignment = lock_active_assignment(self.request, principal, annotation.task, require_token=False)
         if assignment.annotation_id != annotation.id:
             raise PermissionDenied('Only the active assignment owner can delete this annotation.')
+        check_submission_draft(self.request, assignment, actor, annotation)
         task_id = annotation.task_id
         annotation.delete()
         if task_id is not None:
@@ -753,6 +755,7 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
         assignment = lock_active_assignment(request, principal, annotation.task)
         if assignment.annotation_id != annotation.id:
             raise AssignmentConflictError()
+        check_submission_draft(request, assignment, actor, annotation)
         # use updated instead of save to avoid duplicated signals
         Annotation.objects.filter(id=annotation.id).update(updated_by=actor)
 
@@ -975,6 +978,8 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
             if draft.task_id != task.id or not draft.has_permission(actor) or draft.user_id != actor.id:
                 raise PermissionDenied(f'You have no permission to draft id:{draft_id}')
 
+        draft = check_submission_draft(self.request, assignment, actor)
+
         if draft is not None:
             # if the annotation will be created from draft - get created_at from draft to keep continuity of history
             extra_args['draft_created_at'] = draft.created_at
@@ -1051,6 +1056,8 @@ class AnnotationDraftListAPI(generics.ListCreateAPIView):
                 authorization.can_update_annotation(principal, annotation),
                 'Only the active assignment owner can draft changes for this annotation.',
             )
+        if lock_drafts(task).filter(user=actor, assignment=assignment, annotation_id=annotation_id).exists():
+            raise DraftConflictError()
         logger.debug(f'User {user} is going to create draft for task={task_id}, annotation={annotation_id}')
         serializer.save(
             task_id=self.kwargs['pk'],
@@ -1072,14 +1079,29 @@ class AnnotationDraftAPI(generics.RetrieveUpdateDestroyAPIView):
         DELETE=all_permissions.annotations_delete,
     )
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         draft = self.get_object()
         principal = resolve_principal(request)
-        assignment = authorization.active_task_assignment(principal, draft.task)
-        if assignment is None or draft.assignment_id != assignment.id:
+        assignment = lock_active_assignment(request, principal, draft.task)
+        if draft.assignment_id != assignment.id:
             raise AssignmentConflictError()
-        require_assignment_token(request, assignment)
-        return super().update(request, *args, **kwargs)
+        draft = generics.get_object_or_404(lock_drafts(draft.task), pk=draft.pk)
+        require_draft_revision(request, draft)
+        serializer = self.get_serializer(draft, data=request.data, partial=kwargs.get('partial', False))
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        principal = resolve_principal(self.request)
+        assignment = lock_active_assignment(self.request, principal, instance.task)
+        if instance.assignment_id != assignment.id:
+            raise AssignmentConflictError()
+        draft = generics.get_object_or_404(lock_drafts(instance.task), pk=instance.pk)
+        require_draft_revision(self.request, draft)
+        draft.delete()
 
 
 class SubmissionPagination(PageNumberPagination):
@@ -1548,6 +1570,9 @@ class AnnotationConvertAPI(generics.RetrieveAPIView):
         assignment = lock_active_assignment(request, principal, annotation.task, require_token=False)
         if assignment.annotation_id != annotation.id:
             raise PermissionDenied('Only the active assignment owner can convert this annotation to a draft.')
+        check_submission_draft(request, assignment, actor, annotation)
+        if lock_drafts(annotation.task).filter(assignment=assignment, user=actor, annotation=None).exists():
+            raise DraftConflictError()
 
         organization = annotation.project.organization
         project = annotation.project

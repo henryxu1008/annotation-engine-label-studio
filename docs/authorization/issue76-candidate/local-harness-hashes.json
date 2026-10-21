@@ -1,0 +1,12 @@
+{
+  "db_ops.py": "447e18fbdd6a0cde5d98a6876c12d53fba97d5b27d631f65966422b74ae1cd49",
+  "finish_candidate.ps1": "444affab9a903e50dd85aa7e59e15f4593a7e144d22732b43875816a56aa4144",
+  "inspect_candidate.py": "789a62c16ba27756682a0f2180a6c74a66e0cc7642ee49f78371b5885d15bf42",
+  "package_candidate.py": "c73090e9fb5ffd0c7e0acdc68500f9212b7a53fd06612655151f8883fdea0122",
+  "prepare.py": "979b3c78bb875802046086762b93971bea7b5fc9ee981ac51abce0ee91753d44",
+  "run_browser.py": "286f912b9d6ebce2bbd44662a14a10373419772e92cbca92dd531dcac63536c6",
+  "verify_additional.py": "614e0c53675211d540a9d62232efa6de8919c5db956b7a7143a7df62f2397663",
+  "verify_checkpoint_integrity.py": "377aecae05b0c1de0f14900f63d4b151dc4ab822655d72a2da8c4e4d91f76147",
+  "verify_i18n_upgrade.py": "702b4695e74c154a13e86b6078aea20ab15b291684a23e5a29cdc89e3c288b46",
+  "verify_operations.py": "9a98ec404fc657fed2899f16d12f405c557eb9fea3032e4b351603b224ff3a20"
+}

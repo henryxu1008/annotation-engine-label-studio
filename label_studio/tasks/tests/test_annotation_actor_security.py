@@ -222,6 +222,8 @@ class TestAnnotationActorSecurity(APITestCase):
             response = self.client.delete(
                 f"/api/annotations/{annotation.id}/",
                 data={
+                    "draft_id": draft.id,
+                    "draft_revision": draft.revision,
                     "assignment_id": assignment.id,
                     "assignment_version": assignment.version,
                 },
@@ -342,6 +344,7 @@ class TestAnnotationActorSecurity(APITestCase):
                 data={
                     "result": [],
                     "draft_id": draft.id,
+                    "draft_revision": draft.revision,
                     "assignment_id": assignment.id,
                     "assignment_version": assignment.version,
                 },
@@ -561,7 +564,8 @@ class TestAnnotationActorSecurity(APITestCase):
 
         assert response.status_code == 201
         args, kwargs = start_job.call_args
-        assert args[2] == self.actor.id
+        assert args[2] == self.project.organization_id
+        assert args[3] == self.actor.id
         assert kwargs["actor_id"] == mapped_actor.id
 
 

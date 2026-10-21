@@ -3,6 +3,7 @@ import { Button, Typography } from "@humansignal/ui";
 import { Spinner } from "../../components/Spinner/Spinner";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
+import { downloadFile } from "../../utils/download";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { collaborationErrorCode, displayCollaborationDate, displayCollaborationError, displayReviewDecision, displaySubmissionStatus } from "./collaborationDisplay";
 import "./SubmissionReleaseWorkspace.scss";
@@ -12,7 +13,7 @@ const displayIdentity = (user, t) =>
 
 const stableJson = (value) => JSON.stringify(value);
 
-export const SubmissionReleaseWorkspace = ({ projectId }) => {
+export const SubmissionReleaseWorkspace = ({ projectId, allowRelease = false }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const api = useAPI();
   const callApiRef = useRef(api.callApi);
@@ -91,42 +92,49 @@ export const SubmissionReleaseWorkspace = ({ projectId }) => {
   }, [selectedId]);
 
   const release = async () => {
-    if (!selected || selected.status !== "approved") return;
+    if (!allowRelease || !selected || selected.status !== "approved") return;
 
     const releaseSubmissionId = selected.id;
+    const generation = generationRef.current;
+    const isCurrent = () => selectedIdRef.current === releaseSubmissionId && generationRef.current === generation;
     setReleasing(true);
     setError("");
     setReleaseResult(null);
 
-    const result = await callApiRef.current("releaseSubmission", {
-      params: { submissionPk: selected.id },
-      errorFilter: () => true,
-    });
+    try {
+      const response = await callApiRef.current("releaseSubmissionRaw", {
+        params: { submissionPk: selected.id },
+        errorFilter: () => true,
+      });
+      if (!isCurrent()) return;
+      if (!response?.ok) {
+        setError(collaborationErrorCode(response, "releaseFailed"));
+        return;
+      }
 
-    if (selectedIdRef.current !== releaseSubmissionId) {
-      setReleasing(false);
-      return;
+      const result = await response.clone().json();
+      if (!isCurrent()) return;
+      if (
+        result.submission_id !== selected.id ||
+        result.revision !== selected.revision ||
+        result.result_hash !== selected.result_hash ||
+        stableJson(result.result_snapshot) !== stableJson(selected.result_snapshot)
+      ) {
+        setError("releaseMismatch");
+        return;
+      }
+
+      // Download the server bytes, not JSON.stringify(result): immutable snapshots
+      // can contain integers beyond JavaScript's exact Number range.
+      const blob = await response.blob();
+      if (!isCurrent()) return;
+      downloadFile(blob, `submission-${result.submission_id}-revision-${result.revision}.json`);
+      setReleaseResult(result);
+    } catch {
+      if (isCurrent()) setError("releaseFailed");
+    } finally {
+      if (generationRef.current === generation) setReleasing(false);
     }
-
-    if (!result || result?.error || result?.$meta?.ok === false) {
-      setError(collaborationErrorCode(result, "releaseFailed"));
-      setReleasing(false);
-      return;
-    }
-
-    if (
-      result.submission_id !== selected.id ||
-      result.revision !== selected.revision ||
-      result.result_hash !== selected.result_hash ||
-      stableJson(result.result_snapshot) !== stableJson(selected.result_snapshot)
-    ) {
-      setError("releaseMismatch");
-      setReleasing(false);
-      return;
-    }
-
-    setReleaseResult(result);
-    setReleasing(false);
   };
 
   if (loading) {
@@ -218,7 +226,7 @@ export const SubmissionReleaseWorkspace = ({ projectId }) => {
               <code data-testid="release-result-hash">{selected.result_hash}</code>
               <pre data-testid="release-result-snapshot">{JSON.stringify(selected.result_snapshot, null, 2)}</pre>
 
-              {selected.status === "approved" && (
+              {allowRelease && selected.status === "approved" && (
                 <Button
                   data-testid="release-approved-submission"
                   disabled={releasing}

@@ -1,5 +1,14 @@
 {
   "tasks": "任务",
+  "labelQueueLoadFailed": "无法读取标注任务",
+  "labelQueueLoadFailedDescription": "标注队列未能加载，请重试或返回任务列表。",
+  "retryQueue": "重试",
+  "backToTaskList": "返回任务列表",
+  "projectSummaryStorageSync": "存储同步中",
+  "projectSummaryFilteredTasks": "筛选后的任务数",
+  "projectSummaryTotalTasks": "项目任务总数",
+  "projectSummarySubmittedAnnotations": "已提交标注",
+  "projectSummaryPredictions": "预测",
   "missingTask": "你要访问的任务不存在或已不可用。",
   "missingProject": "你要访问的项目不存在或已不可用。",
   "projectUnavailable": "项目已删除或尚未创建",
@@ -278,5 +287,12 @@
   "decreaseColumns": "减少列数",
   "increaseColumns": "增加列数",
   "fitImagesToWidth": "图片适应宽度",
-  "gridSettings": "网格设置"
+  "gridSettings": "网格设置",
+  "draftSaveError": "草稿未能保存，请重试后再离开此页。",
+  "taskAssignmentReadOnly": "此任务为只读。请先联系项目管理员，将任务分配给你后再标注。",
+  "exportImmutableTitle": "请通过“发布”导出已获批提交",
+  "exportImmutableDescription": "此项目已有正式提交，传统项目导出已停用。请使用“发布”下载已获批的不可变提交；待审核提交不能发布。",
+  "exportFormatsLoading": "正在读取导出格式…",
+  "exportFormatsUnavailable": "无法读取导出格式。请关闭此窗口后重试。",
+  "confirmTextBeforeLeaving": "请先确认或清空正在输入的文本，再离开此任务。"
 }

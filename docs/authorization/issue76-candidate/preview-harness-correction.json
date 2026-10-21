@@ -1,0 +1,11 @@
+{
+  "result": "PASS",
+  "artifact_source_commit": "38bc51f9211388e47b000851badffdab60e4144f",
+  "acceptance_source_commit": "ce6de9dd4e2fca7bb01f97788f81ab4657187550",
+  "changed_test_sources": [
+    "e2e/dm-export-locale.cy.ts"
+  ],
+  "prior_passed_suite_sources_unchanged": true,
+  "failure_preserved": "browser-before-preview-wait-summary.json",
+  "runtime_code_changed": false
+}

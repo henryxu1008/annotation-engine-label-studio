@@ -4,6 +4,8 @@ import logging
 from collections.abc import MutableMapping
 
 import ujson as json
+from access_control.authorization import authorization
+from access_control.identity import resolve_principal
 from core.current_request import CurrentContext, get_current_request
 from core.feature_flags import flag_set
 from core.label_config import replace_task_data_undefined_with_config_field
@@ -949,7 +951,7 @@ class AnnotationDraftSerializer(ModelSerializer):
     """
 
     state = FSMStateField(read_only=True)  # FSM state - automatically uses annotation if present
-    user = serializers.CharField(default=serializers.CurrentUserDefault())
+    user = serializers.CharField(read_only=True)
     assignment_id = serializers.IntegerField(required=False, write_only=True)
     assignment_version = serializers.IntegerField(required=False, write_only=True)
     created_username = serializers.SerializerMethodField(default='', read_only=True, help_text='User name string')
@@ -964,6 +966,13 @@ class AnnotationDraftSerializer(ModelSerializer):
         validated_data.pop('assignment_id', None)
         validated_data.pop('assignment_version', None)
         return super().update(instance, validated_data)
+
+    def validate_annotation(self, annotation):
+        # Upstream unskip detaches a draft before removing the skipped
+        # annotation. Rebinding it to a different annotation is never allowed.
+        if self.instance and annotation is not None and annotation.pk != self.instance.annotation_id:
+            raise serializers.ValidationError('A draft cannot be moved to another annotation.')
+        return annotation
 
     def get_created_username(self, draft):
         user = draft.user
@@ -991,9 +1000,11 @@ class AnnotationDraftSerializer(ModelSerializer):
     class Meta:
         model = AnnotationDraft
         fields = '__all__'
+        read_only_fields = ('task', 'assignment', 'revision')
 
 
 class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
+    can_label = serializers.SerializerMethodField(read_only=True)
     predictions = serializers.SerializerMethodField(default=[], read_only=True)
     assignment_id = serializers.SerializerMethodField(read_only=True)
     assignment_version = serializers.SerializerMethodField(read_only=True)
@@ -1003,6 +1014,10 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
 
     def get_updated_by(self, task):
         return [{'user_id': task.updated_by_id}] if task.updated_by_id else []
+
+    def get_can_label(self, task):
+        request = self.context.get('request')
+        return request is not None and authorization.can_label_task(resolve_principal(request), task)
 
     def _get_assignment(self, task):
         user = self._get_user()
@@ -1065,16 +1080,30 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
         if not isinstance(task, Task):
             return AnnotationDraftSerializer(many=True)
 
-        drafts = task.drafts
-        if 'request' in self.context and hasattr(self.context['request'], 'user'):
-            user = self.context['request'].user
-            drafts = drafts.filter(user=user)
+        assignment = self._get_assignment(task)
+        drafts = task.drafts.filter(user=self._get_user(), assignment=assignment) if assignment else task.drafts.none()
 
         return AnnotationDraftSerializer(drafts, many=True, read_only=True, default=[], context=self.context).data
 
 
 class NextTaskSerializer(TaskWithAnnotationsAndPredictionsAndDraftsSerializer):
     unique_lock_id = serializers.SerializerMethodField()
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        assignment = self._get_assignment(instance)
+        annotation = assignment.annotation if assignment and assignment.annotation_id else None
+        if (
+            annotation is not None
+            and annotation.was_cancelled
+            and annotation.task_id == instance.id
+            and annotation.completed_by_id == assignment.assignee_id
+        ):
+            # Resume the current owner's skipped annotation through the editor's
+            # existing selection/Unskip path, rather than create a second one.
+            ret['annotations'] = [AnnotationSerializer(annotation, context=self.context).data]
+            ret['default_selected_annotation'] = annotation.id
+        return ret
 
     def get_unique_lock_id(self, task):
         user = self.context['request'].user
