@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import uuid
 import zipfile
@@ -657,6 +658,23 @@ def artifact_path(key):
     return path
 
 
+def discard_unpublished_attempt(release_id, attempt, directory, root):
+    """Discard only scratch created by this worker, never committed artifacts.
+
+    Recheck publication under the release fence, including uncertain commit
+    outcomes. A superseded worker owns only its original token directory.
+    """
+    with transaction.atomic():
+        release = Release.objects.select_for_update().get(pk=release_id)
+        current = Attempt.objects.select_for_update().get(pk=attempt.pk, release=release, token=attempt.token)
+        if current.state == "ready" or Artifact.objects.filter(attempt=current).exists():
+            return
+        expected = root / str(release.pk) / str(current.token)
+        if directory != expected or expected.resolve() != expected or expected.is_symlink():
+            raise OSError("Unpublished scratch directory no longer has its original scope")
+        shutil.rmtree(expected)
+
+
 def generate(release_id, token):
     with transaction.atomic():
         release = Release.objects.select_for_update().get(pk=release_id)
@@ -667,6 +685,7 @@ def generate(release_id, token):
         attempt.save(update_fields=["state", "heartbeat"])
         release.state = "running"
         release.save(update_fields=["state", "updated_at"])
+    directory, root, directory_created, published = None, None, False, False
     try:
         project = Project.all_objects.get(pk=release.project_id)
         principal, actor, _ = creator(release, project)
@@ -674,11 +693,16 @@ def generate(release_id, token):
         integrity(release)
         if release.frozen_input["runtime"] != runtime(release.frozen_input["request"]["output"]["format"]):
             fail("RUNTIME_VERSION_CHANGED")
-        directory = private_root() / str(release.pk) / str(attempt.token)
+        root = private_root()
+        directory = root / str(release.pk) / str(attempt.token)
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        directory_created = True
         output = []
-        native_files = [(directory / "records.json").open("xb"), (directory / "records.jsonl").open("xb")]
-        try:
+        with (
+            (directory / "records.json").open("xb") as json_file,
+            (directory / "records.jsonl").open("xb") as jsonl_file,
+        ):
+            native_files = [json_file, jsonl_file]
             native_files[0].write(b"[")
             for i, item in enumerate(release.items.all().iterator(chunk_size=100)):
                 blob = canonical(item.record)
@@ -697,9 +721,6 @@ def generate(release_id, token):
             for file in native_files:
                 file.flush()
                 os.fsync(file.fileno())
-        finally:
-            for file in native_files:
-                file.close()
         for name, fmt in [("records.json", "JSON"), ("records.jsonl", "JSONL")]:
             output.append((directory / name, fmt, {"mapping_version": MAPPING, "converter": None}))
         if release.frozen_input["request"]["output"]["format"] == "CONLL2003":
@@ -757,6 +778,7 @@ def generate(release_id, token):
             current.manifest_sha256 = digest(bytes(current.manifest))
             current.save(update_fields=["manifest", "manifest_sha256", "state", "error_code", "updated_at"])
             Attempt.objects.filter(pk=attempt.pk).update(state="ready", finished_at=timezone.now())
+        published = True
     except Exception as exc:
         logger.exception("Approved export generation failed: %s", release_id)
         code = str(exc.detail) if isinstance(exc, APIException) else "GENERATION_FAILED"
@@ -767,7 +789,7 @@ def generate(release_id, token):
         Release.objects.filter(pk=release_id, attempt_number=attempt.number, state="running").update(
             state=state, error_code=code
         )
-        Attempt.objects.filter(pk=attempt.pk).update(state=state, error_code=code, finished_at=timezone.now())
+        Attempt.objects.filter(pk=attempt.pk, state="running").update(state=state, error_code=code, finished_at=timezone.now())
         AccessEvent.objects.create(
             release=release,
             project_id_frozen=release.project_id,
@@ -777,6 +799,13 @@ def generate(release_id, token):
             allowed=False,
             reason=code,
         )
+    finally:
+        if directory_created and not published:
+            try:
+                discard_unpublished_attempt(release_id, attempt, directory, root)
+            except Exception:
+                # A lost DB connection cannot justify deleting potentially READY files.
+                logger.exception("Could not discard unpublished approved-export attempt %s", attempt.token)
 
 
 def artifact_metadata(artifact):

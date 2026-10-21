@@ -2,12 +2,15 @@
 
 import hashlib
 import os
+import uuid
 from datetime import timedelta
 
 from django.core import signing
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse, FileResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from ranged_fileresponse import RangedFileResponse, RangedFileReader
 from rest_framework.generics import GenericAPIView, get_object_or_404
 from rest_framework.exceptions import APIException
@@ -110,7 +113,7 @@ class ApprovedExportAPI(GenericAPIView):
             service.fail("BATCH_LIMIT_EXCEEDED", 413)
         return self.request.data
 
-    def page(self, queryset, binding):
+    def page(self, queryset, binding, *, newest_first=False):
         raw_size = self.request.query_params.get("page_size", "50")
         try:
             size = int(raw_size)
@@ -119,6 +122,8 @@ class ApprovedExportAPI(GenericAPIView):
         except (TypeError, ValueError):
             service.fail("INVALID_REQUEST", 400)
         binding = dict(binding, project=self.project.pk, principal=self.principal.principal_id)
+        if newest_first:
+            binding["order"] = "created_at-desc-id-desc/v1"
         cursor = self.request.query_params.get("cursor")
         last = None
         if cursor:
@@ -130,13 +135,29 @@ class ApprovedExportAPI(GenericAPIView):
             except (signing.BadSignature, KeyError, ValueError, TypeError):
                 service.fail("INVALID_REQUEST", 400)
         if last is not None:
-            queryset = queryset.filter(pk__gt=last)
-        records = list(queryset.order_by("pk")[: size + 1])
+            if newest_first:
+                try:
+                    if not isinstance(last, list) or len(last) != 2:
+                        raise ValueError()
+                    created_at, pk = parse_datetime(last[0]), uuid.UUID(last[1])
+                    if created_at is None or not timezone.is_aware(created_at):
+                        raise ValueError()
+                except (ValueError, TypeError, AttributeError):
+                    service.fail("INVALID_REQUEST", 400)
+                queryset = queryset.filter(Q(created_at__lt=created_at) | Q(created_at=created_at, pk__lt=pk))
+            else:
+                queryset = queryset.filter(pk__gt=last)
+        ordering = ["-created_at", "-pk"] if newest_first else ["pk"]
+        records = list(queryset.order_by(*ordering)[: size + 1])
         next_cursor = None
         if len(records) > size:
             records = records[:size]
             next_cursor = signing.dumps(
-                {"binding": binding, "last": str(records[-1].pk)}, salt="approved-export-page-v1"
+                {
+                    "binding": binding,
+                    "last": [records[-1].created_at.isoformat(), str(records[-1].pk)] if newest_first else str(records[-1].pk),
+                },
+                salt="approved-export-page-v1",
             )
         return records, next_cursor
 
@@ -146,12 +167,18 @@ class ApprovedExportAPI(GenericAPIView):
             service.fail("METHOD_NOT_ALLOWED", 405)
         if action == "capabilities":
             offered = ["JSON", "JSONL"]
-            if request.query_params.get("submission_id"):
+            if "submission_id" in request.query_params:
+                try:
+                    submission_id = int(request.query_params["submission_id"])
+                    if not 1 <= submission_id <= 2**63 - 1:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    service.fail("INVALID_REQUEST", 400)
                 source = get_object_or_404(
                     service.Submission.objects.select_related("assignment__task", "review").filter(
                         assignment__project=self.project
                     ),
-                    pk=request.query_params["submission_id"],
+                    pk=submission_id,
                 )
                 record = service.source_record(source, self.policy["source_namespace"])
                 offered = service.formats(record["result_snapshot"]["project"]["label_config"])
@@ -196,6 +223,7 @@ class ApprovedExportAPI(GenericAPIView):
             rows, cursor = self.page(
                 Release.objects.filter(project=self.project, organization_id_frozen=self.project.organization_id),
                 {"kind": "releases"},
+                newest_first=True,
             )
             return Response({"results": [service.summary(row, self.actor) for row in rows], "next_cursor": cursor})
         release = self.receipt()

@@ -116,6 +116,19 @@ an expired worker. Retry is an authenticated explicit action, not automatic inpu
 reselection. The UI can recover existing receipts from server history after a
 reload. No browser storage is the source of truth.
 
+History uses descending creation time and ID as a stable tie-breaker, with a
+signed project/principal/order-bound cursor. Loading another page appends to the
+existing choices. A create/retry replay that is already READY fetches the receipt
+detail before restoring artifact controls. Malformed capability Submission IDs
+return `INVALID_REQUEST` (400); valid inaccessible IDs remain scoped/not found.
+
+A worker that exits generation without publishing discards only the token
+directory it created. Cleanup rechecks the release/attempt under a database fence
+and retains any attempt with READY state or committed artifact references. It
+never removes another attempt, existing directory or published bytes. Uncertain
+database/filesystem failures retain files and log the cleanup failure; abrupt
+process termination still requires separately governed orphan reclamation.
+
 On READY, authenticated downloads provide both native files, any requested
 verified standard-format ZIP, and the frozen Manifest. The Manifest binds native
 record fingerprints, content digest, request/input digest, historical freeze

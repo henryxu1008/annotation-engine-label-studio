@@ -89,7 +89,10 @@ export const ApprovedDatasetExport = ({ projectId }) => {
     setBusy(true); setError("");
     try {
       const receipts = await readJson(await request("approvedExportList", { params: { cursor: historyCursor } }));
-      if (receipts) { setHistory(receipts.results); setHistoryCursor(receipts.next_cursor); }
+      if (receipts) {
+        setHistory((previous) => Array.from(new Map([...previous, ...receipts.results].map((item) => [item.release_id, item])).values()));
+        setHistoryCursor(receipts.next_cursor);
+      }
     } finally { setBusy(false); }
   };
 
@@ -137,6 +140,10 @@ export const ApprovedDatasetExport = ({ projectId }) => {
         if (operation === "preview") setPreview(result); else {
           currentBatch.current = result.release_id;
           setBatch(result); setHistory((previous) => [result, ...previous.filter((item) => item.release_id !== result.release_id)]);
+          if (result.state === "ready") {
+            const detail = await readJson(await request("approvedExportDetail", { params: { releaseId: result.release_id } }));
+            if (detail && currentBatch.current === result.release_id) setBatch(detail);
+          }
         }
       }
     } finally { setBusy(false); }

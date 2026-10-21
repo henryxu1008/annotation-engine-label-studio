@@ -72,9 +72,52 @@ it("recovers a receipt beyond the first history page using its server cursor", a
   await open();
   fireEvent.click(await screen.findByTestId("batch-more-history"));
   await waitFor(() => expect(screen.getByTestId("batch-history").querySelector('option[value="batch-1"]')).not.toBeNull());
+  expect(screen.getByTestId("batch-history").querySelector('option[value="earlier"]')).not.toBeNull();
   fireEvent.change(screen.getByTestId("batch-history"), { target: { value: receipt.release_id } });
   await screen.findByTestId("batch-download-JSON");
   expect(mockCallApi.mock.calls.some(([method, options]) => method === "approvedExportListRaw" && options.params.cursor === "signed-next")).toBe(true);
+  unmount(); runtime.destroy();
+});
+
+it("recovers artifact controls when an idempotent create replay is already ready", async () => {
+  let creates = 0;
+  mockCallApi.mockImplementation((method) => {
+    if (method === "approvedExportCreateRaw") {
+      if (++creates === 1) return Promise.reject(new Error("synthetic lost response"));
+      return Promise.resolve(raw({ ...receipt, artifacts: undefined }, 202));
+    }
+    return defaults(method);
+  });
+  const { unmount, runtime } = mount();
+  await open();
+  fireEvent.click(screen.getByTestId("batch-select-21"));
+  fireEvent.click(screen.getByTestId("batch-preview"));
+  await screen.findByTestId("batch-preview-result");
+  fireEvent.click(screen.getByTestId("batch-create"));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByTestId("batch-create"));
+  await screen.findByTestId("batch-download-JSON");
+  const calls = mockCallApi.mock.calls.filter(([method]) => method === "approvedExportCreateRaw");
+  expect(calls).toHaveLength(2);
+  expect(calls[0][1].headers["Idempotency-Key"]).toBe(calls[1][1].headers["Idempotency-Key"]);
+  expect(mockCallApi.mock.calls.some(([method]) => method === "approvedExportDetailRaw")).toBe(true);
+  unmount(); runtime.destroy();
+});
+
+it("loads artifact details when a retry response has already become ready", async () => {
+  mockCallApi.mockImplementation((method) => {
+    if (method === "approvedExportDetailRaw" && !mockCallApi.mock.calls.some(([name]) => name === "approvedExportRetryRaw")) {
+      return Promise.resolve(raw({ ...receipt, state: "failed_retryable", retryable: true, artifacts: [] }));
+    }
+    if (method === "approvedExportRetryRaw") return Promise.resolve(raw({ ...receipt, artifacts: undefined }, 202));
+    return defaults(method);
+  });
+  const { unmount, runtime } = mount();
+  await open();
+  fireEvent.change(screen.getByTestId("batch-history"), { target: { value: receipt.release_id } });
+  fireEvent.click(await screen.findByTestId("batch-retry"));
+  await screen.findByTestId("batch-download-JSON");
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "approvedExportDetailRaw")).toHaveLength(2);
   unmount(); runtime.destroy();
 });
 

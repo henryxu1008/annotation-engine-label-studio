@@ -120,6 +120,85 @@ class TestApprovedExports(APITestCase):
     def detail(self, release, suffix=""):
         return self.url + str(release.pk) + "/" + suffix
 
+    def test_capabilities_reject_invalid_submission_ids_without_server_errors(self):
+        for value in ("abc", "", "-1", "0", "1.5", "9223372036854775808", "9" * 5000):
+            with self.subTest(value=value[:30]):
+                response = self.client.get(self.url + "capabilities/", {"submission_id": value})
+                assert response.status_code == 400, response.content
+                assert response.json()["display_context"]["reason"] == "INVALID_REQUEST"
+        assert self.client.get(self.url + "capabilities/", {"submission_id": self.sources[0].pk}).status_code == 200
+
+    def test_release_history_is_newest_first_with_a_stable_tiebreaker(self):
+        from datetime import timedelta
+
+        releases = []
+        for index in range(3):
+            response = self.create(key=f"history-{index}")
+            assert response.status_code == 202
+            release = Release.objects.get(pk=response.json()["release_id"])
+            self.generate(release)
+            assert release.state == "ready"
+            releases.append(release)
+        releases.sort(key=lambda row: row.pk)
+        latest = service.timezone.now()
+        Release.objects.filter(pk=releases[0].pk).update(created_at=latest - timedelta(days=1))
+        Release.objects.filter(pk__in=[row.pk for row in releases[1:]]).update(created_at=latest)
+        params = {"page_size": 1}
+        seen = []
+        while True:
+            response = self.client.get(self.url, params)
+            assert response.status_code == 200, response.content
+            page = response.json()
+            seen.extend(row["release_id"] for row in page["results"])
+            if not page["next_cursor"]:
+                break
+            params["cursor"] = page["next_cursor"]
+            assert len(seen) <= 3
+        assert seen == [str(row.pk) for row in reversed(releases)]
+
+    def test_failed_generation_discards_only_its_own_scratch_directory(self):
+        ready = self.frozen()
+        self.generate(ready)
+        retained = {a.storage_key: service.artifact_path(a.storage_key).read_bytes() for a in ready.artifacts.all()}
+        original_audit = service.audit
+
+        def fail_publication(*args, **kwargs):
+            if args[3] == "publish":
+                raise OSError("synthetic final audit failure")
+            return original_audit(*args, **kwargs)
+
+        response = self.create(key="failed-scratch")
+        failed = Release.objects.get(pk=response.json()["release_id"])
+        with patch.object(service, "audit", side_effect=fail_publication):
+            attempt = self.generate(failed)
+        assert failed.state == "failed_retryable"
+        assert not (Path(self.root.name) / str(failed.pk) / str(attempt.token)).exists()
+        for key, blob in retained.items():
+            assert service.artifact_path(key).read_bytes() == blob
+
+    def test_superseded_worker_discards_its_files_without_touching_the_new_attempt(self):
+        release = self.frozen()
+        newer = Attempt.objects.create(release=release, number=2)
+        newer_dir = Path(self.root.name) / str(release.pk) / str(newer.token)
+        newer_dir.mkdir(parents=True)
+        (newer_dir / "sentinel").write_bytes(b"newer attempt")
+        original_fsync = service.os.fsync
+        advanced = False
+
+        def supersede_after_write(fd):
+            nonlocal advanced
+            if not advanced:
+                advanced = True
+                Release.objects.filter(pk=release.pk).update(state="queued", attempt_number=2)
+                Attempt.objects.filter(release=release, number=1).update(state="expired")
+            return original_fsync(fd)
+
+        with patch.object(service.os, "fsync", side_effect=supersede_after_write):
+            old = self.generate(release)
+        assert release.state == "queued" and release.attempt_number == 2
+        assert not (Path(self.root.name) / str(release.pk) / str(old.token)).exists()
+        assert (newer_dir / "sentinel").read_bytes() == b"newer attempt"
+
     def test_json_jsonl_manifest_exact_bytes_and_private_download_range(self):
         release = self.frozen()
         self.generate(release)
@@ -676,14 +755,17 @@ class TestApprovedExports(APITestCase):
     def test_http_queue_connection_has_bounded_timeouts_without_changing_worker_settings(self):
         from django.conf import settings
 
-        before = copy.deepcopy(settings.RQ_QUEUES)
-        queue = service.api_queue()
-        try:
-            kwargs = queue.connection.connection_pool.connection_kwargs
-            assert kwargs["socket_timeout"] == 3 and kwargs["socket_connect_timeout"] == 3
-            assert settings.RQ_QUEUES == before
-        finally:
-            queue.connection.close()
+        configured = {"approved_exports": {"URL": "redis://127.0.0.1:6379/0", "DEFAULT_TIMEOUT": 1800}}
+        # django-rq captures QUEUES at import time; simulate configured startup.
+        with override_settings(RQ_QUEUES=configured), patch.dict("django_rq.settings.QUEUES", configured):
+            before = copy.deepcopy(settings.RQ_QUEUES)
+            queue = service.api_queue()
+            try:
+                kwargs = queue.connection.connection_pool.connection_kwargs
+                assert kwargs["socket_timeout"] == 3 and kwargs["socket_connect_timeout"] == 3
+                assert settings.RQ_QUEUES == before
+            finally:
+                queue.connection.close()
 
     def test_durability_barrier_failure_never_publishes_ready(self):
         release = self.frozen(self.body(fmt="CONLL2003"))
