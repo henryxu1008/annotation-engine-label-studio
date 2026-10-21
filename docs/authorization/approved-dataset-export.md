@@ -167,6 +167,7 @@ does not claim to retrofit its integrity predicate or validate a mixed workflow.
   Converter and bilingual browser checks reproducible. Adding it locally does
   not mean GitHub PR or push/main CI has run.
 
-The acceptance receipt records exact local results separately from PR CI, merge,
+The [local acceptance receipt](issue79-local-acceptance.md) records exact local
+results separately from PR CI, merge,
 deployment and human/product acceptance. #76 worktrees, processes, containers,
 mounts, images, database and delivery package are outside the #79 write set.

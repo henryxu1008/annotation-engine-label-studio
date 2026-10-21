@@ -1,0 +1,5 @@
+# Preserve the actual protocol/artifact checksum bytes across Windows checkout.
+*.json -text
+*.jsonl -text
+*.zip -text
+SHA256SUMS text eol=lf

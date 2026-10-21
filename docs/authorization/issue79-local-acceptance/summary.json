@@ -1,0 +1,125 @@
+{
+  "status": "LOCAL_SYNTHETIC_ACCEPTANCE_PASS",
+  "source_commit": "f5ff3c6e829ce207c57849bc80548a918283207e",
+  "baseline": "88809e618a34292c512dd75cb85ce24e52ddae59",
+  "design_commit": "729a48e1386817e5219e2baaec189feafdccf5a0",
+  "date": "2026-10-21",
+  "runtime": {
+    "python": "3.11.17",
+    "django": "5.1.15",
+    "postgresql": "17.11",
+    "redis": "7.4.11",
+    "sdk": "2.0.18",
+    "node": "24.18.1",
+    "cypress": "14.5.0",
+    "edge": "155"
+  },
+  "postgresql": {
+    "passed": 83,
+    "new_issue79_cases": 49,
+    "existing_regressions": 34,
+    "failures": 0
+  },
+  "frontend": {
+    "passed": 24,
+    "new_batch_cases": 4,
+    "existing_collaboration_cases": 20
+  },
+  "bilingual_edge": {
+    "passed": 4,
+    "locales": [
+      "en-US",
+      "zh-CN"
+    ],
+    "actual_rq_worker": true,
+    "actual_standard_format": "CONLL2003",
+    "approved_samples_per_batch": 3,
+    "manifest_download_and_reload_recovery": true
+  },
+  "migration": [
+    {
+      "command": [
+        "migrate",
+        "--noinput"
+      ],
+      "result": "PASS",
+      "database": "issue79_migration_20261021"
+    },
+    {
+      "command": [
+        "migrate",
+        "data_export",
+        "0010",
+        "--noinput"
+      ],
+      "result": "PASS",
+      "database": "issue79_migration_20261021"
+    },
+    {
+      "command": [
+        "migrate",
+        "data_export",
+        "0011",
+        "--noinput"
+      ],
+      "result": "PASS",
+      "database": "issue79_migration_20261021"
+    }
+  ],
+  "static_checks": [
+    "migration-drift",
+    "ruff-F-E9",
+    "workflow-YAML-shell-syntax",
+    "i18n-catalogs",
+    "i18n-literals",
+    "frontend-build",
+    "native-example-vectors-under-CPython-3.11",
+    "git-diff-check"
+  ],
+  "preservation": {
+    "worktrees": [
+      {
+        "scope": "original-main",
+        "head": "f3b69385f5d892f89d1853f0cecbd739eed69783",
+        "git_state_unchanged": true,
+        "status_sha256": "7679b6a4c02d53481d85ebed7037fae2a4e6a50e009a38e3dfb0574cbfa6d421"
+      },
+      {
+        "scope": "issue76-candidate",
+        "head": "7a7cee3f1dcdb4dd9c8193bd8476df754547ed64",
+        "git_state_unchanged": true,
+        "status_sha256": "7679b6a4c02d53481d85ebed7037fae2a4e6a50e009a38e3dfb0574cbfa6d421"
+      }
+    ],
+    "issue76_container_count": 6,
+    "container_ids_images_start_times_mounts_unchanged": true,
+    "issue79_writes_to_issue76": 0,
+    "issue76_runtime_operations": 0
+  },
+  "not_run": [
+    "GitHub PR CI",
+    "merge-SHA push/main CI",
+    "merge",
+    "deployment",
+    "Core integration",
+    "real external provider execution",
+    "human/product acceptance",
+    "maximum-size load benchmark",
+    "COCO/VOC/YOLO acceptance"
+  ],
+  "limits": [
+    "default-disabled server project policy",
+    "references-only media; no media-byte pinning",
+    "first standard adapter is token-aligned single-text NER CoNLL2003",
+    "Host DatasetVersion and cross-system ReleaseManifest remain #80/Host owned"
+  ],
+  "durability": "File fsync and POSIX directory metadata barrier before READY; failure remains unpublished",
+  "test_resources": {
+    "state": "stopped_retained",
+    "container_count": 3,
+    "network": "ls-issue79-20261021",
+    "removed_containers": 0,
+    "removed_volumes": 0,
+    "database_and_private_files_retained": true
+  }
+}
