@@ -1,14 +1,32 @@
 # PR #98 security review and fixes
 
 Date: 2026-10-21. Reviewed head: `adacd929cdcab7083a347cfc7674fe82b69f080e`.
-Fix source: `1eb1aa6a0cad517f8b6a4c3b3af5210fadb9bd5d`.
+Final fix source: `d0c6748ce9403dc3dc391210a22e23db058fc63f`.
+The initial manifest/fence fixes are in `1eb1aa6a0cad517f8b6a4c3b3af5210fadb9bd5d`.
 Scope: the isolated #79 worktree; no #76 runtime operations, merge, deployment
 or Core integration. The earlier [local acceptance](issue79-local-acceptance.md)
 remains the historical receipt for its recorded source, not this follow-up.
 
 ## Fixed findings
 
-1. **P2: artifact delivery was not bound to the complete frozen manifest.**
+1. **P1: residual project roles bypassed organization revocation.**
+   After organization soft deletion, an active account with a retained project
+   Manager role could still GET the legacy single-Submission release. A retained
+   Reviewer could POST an approval, which would then be eligible as a source for
+   an approved batch. Both real API calls returned 200 after revocation completed.
+   `AuthorizationService.project_role` trusted ownership/project-role rows without
+   first verifying effective organization membership.
+
+   The shared role resolver now checks the exact project's live organization
+   membership and active local account before ownership or a role can grant
+   authority. This closes the dependency at its shared source rather than adding
+   an independent check to just one old endpoint. Missing organization scope,
+   foreign organization membership and cached inactive principals fail closed.
+   A valid project membership remains authoritative for background work when the
+   user merely switches their selected UI organization. Historical approvals are
+   not re-certified or rewritten by this change.
+
+2. **P2: artifact delivery was not bound to the complete frozen manifest.**
    Download verified the opened file against mutable artifact-row size/hash,
    independently of the sealed manifest. Restore/maintenance drift could replace
    both file and row metadata, switch private pointers/attempts, or swap a valid
@@ -24,7 +42,7 @@ remains the historical receipt for its recorded source, not this follow-up.
    its opened-file size/hash check. Drift quarantines the receipt with no silent
    regeneration or retry under the same artifact identity.
 
-2. **P2: revocation could commit after final authorization but before READY.**
+3. **P2: revocation could commit after final authorization but before READY.**
    Real PostgreSQL connections reproduced project-member API revocation,
    account disablement and organization soft deletion completing in that window.
    The worker then published READY. Subsequent downloads already denied the
@@ -46,7 +64,7 @@ remains the historical receipt for its recorded source, not this follow-up.
 | Source of truth | Exact approved Submission/revision/hash and actual ReviewDecision; native output retains frozen records, independent of mutable Annotation/Task data |
 | Freeze authorization | Historical decision copied transactionally into the frozen input; it grants no future access. Live authority is required again for job/publication/download |
 | Core-only-review | All new #79 batch routes fail closed, including existing receipt links and an in-flight switch before publication; authorized ordinary Submission reads remain available |
-| Legacy single release | Existing `/api/submissions/{id}/release/` remains independently governed. This is not an instance-wide prohibition of every historical release endpoint or acceptance of a mixed workflow |
+| Legacy review / single release | Shared live organization authority is now required. Their existing workflow, single-release integrity predicate and independence from the #79 batch-mode switch remain separately governed; this is not an instance-wide delivery prohibition or acceptance of a mixed workflow |
 | #80 / Host | Host DatasetVersion, cross-system ReleaseManifest, version comparison, media pinning, cross-system revocation/retention and final business publication stay outside #79 |
 | Host/Core request fields | Forged `dataset_version_id`, `release_manifest`, `core_review_decision`, actor/reviewer/mode/snapshot fields are rejected; no incoming Host decision synthesizes Fork approval |
 | Standard adapter | The actual pinned SDK CoNLL2003 path remains covered. Media stays references-only; other standard formats remain disabled |
@@ -59,10 +77,14 @@ byte integrity, not a signature, author attestation or Host approval.
 ## Verification
 
 - Before fixes: five artifact/manifest/pointer regressions returned 200 instead
-  of 409. Three real PostgreSQL revocation races committed before READY.
-- After fixes: **93 PostgreSQL tests passed**, with zero failures/errors: the
-  original 83 tests plus ten review cases. This includes native/real CoNLL,
-  worker/retry/idempotency, scope and creator revocation, and publication races.
+  of 409; three real PostgreSQL revocation races committed before READY; legacy
+  review/release API calls returned 200 after organization revocation.
+- After fixes: **386 PostgreSQL tests passed**, with zero failures/errors/skips,
+  across the full authorization foundation and approved-export suites. This
+  includes **95** batch/composed project/review regressions and **11** identity /
+  shared-organization scope cases; these subsets overlap the total, not add to it.
+  Native/real CoNLL, worker/retry/idempotency, scope/creator revocation and actual
+  publication races remain covered. Eighteen cases were added in this review.
 - Python F/E9 checks, migration drift and `git diff --check` passed. No schema
   migration is added by these fixes.
 - Standalone transaction-test selections preload the application's URLconf so
