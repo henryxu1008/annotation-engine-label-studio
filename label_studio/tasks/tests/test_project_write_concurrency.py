@@ -10,7 +10,8 @@ from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.test import APIClient
-from tasks.models import Submission, TaskAssignment
+from tasks.models import ReviewDecision, Submission, TaskAssignment
+from tasks.submissions import create_submission
 from tasks.tests.factories import AnnotationFactory, TaskFactory
 from users.tests.factories import UserFactory
 
@@ -321,3 +322,92 @@ class TestProjectWriteConcurrency(TransactionTestCase):
             results = list(pool.map(assign, [self.manager, other_manager]))
         assert sorted(results) == [201, 400]
         assert TaskAssignment.objects.filter(task=task, status__in=TaskAssignment.ACTIVE_STATUSES).count() == 1
+
+    def _review_race(self, *, review_first, revoke):
+        reviewer = UserFactory(active_organization=self.organization)
+        membership = ProjectMember.objects.create(project=self.project, user=reviewer, role='reviewer')
+        submission = create_submission(assignment=self.assignment, annotation=self.annotation, actor=self.annotator)
+        self.assignment.refresh_from_db()
+        review = (
+            self.client_for(reviewer),
+            'post',
+            f'/api/submissions/{submission.pk}/review/',
+            {'decision': 'approved'},
+        )
+        if revoke:
+            competing = (
+                self.client_for(self.manager),
+                'patch',
+                f'/api/projects/{self.project.pk}/members/{membership.pk}/',
+                {'enabled': False},
+            )
+        else:
+            competing = (
+                self.client_for(self.annotator),
+                'patch',
+                f'/api/annotations/{self.annotation.pk}/',
+                {
+                    'assignment_id': self.assignment.pk,
+                    'assignment_version': self.assignment.version,
+                    'result': [],
+                    'submit_for_review': True,
+                },
+            )
+        locked = threading.Event()
+        waiting = threading.Event()
+
+        def first_sql(execute, sql, params, many, context):
+            result = execute(sql, params, many, context)
+            if 'FOR UPDATE' in sql and '"project"' in sql and not locked.is_set():
+                locked.set()
+                assert waiting.wait(8), 'Second API never reached the project fence'
+            return result
+
+        def second_sql(execute, sql, params, many, context):
+            if 'FOR UPDATE' in sql and '"project"' in sql:
+                waiting.set()
+            return execute(sql, params, many, context)
+
+        def request(operation, wrapper):
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET lock_timeout = '10s'")
+                client, method, url, data = operation
+                with connection.execute_wrapper(wrapper):
+                    response = getattr(client, method)(url, data, format='json')
+                return response.status_code, response.content
+            finally:
+                connection.close()
+
+        first, second = (review, competing) if review_first else (competing, review)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first_request = pool.submit(request, first, first_sql)
+            assert locked.wait(8)
+            second_request = pool.submit(request, second, second_sql)
+            first_result = first_request.result(timeout=25)
+            second_result = second_request.result(timeout=25)
+        assert first_result[0] in (200, 201), first_result
+        if review_first:
+            assert second_result[0] == 200, second_result
+        else:
+            assert second_result[0] in ((403, 404) if revoke else (400,)), second_result
+        submission.refresh_from_db()
+        assert submission.status == ('approved' if review_first else ('pending' if revoke else 'superseded'))
+        assert ReviewDecision.objects.filter(submission=submission).count() == int(review_first)
+        if not revoke:
+            latest = Submission.objects.filter(assignment=self.assignment).order_by('-revision').first()
+            assert latest.revision == 2
+            assert latest.status == 'pending'
+
+    def test_review_commits_before_superseding_submission(self):
+        self._review_race(review_first=True, revoke=False)
+
+    def test_superseding_submission_commits_before_stale_review(self):
+        self._review_race(review_first=False, revoke=False)
+
+    def test_review_commits_before_reviewer_revocation(self):
+        self._review_race(review_first=True, revoke=True)
+
+    def test_reviewer_revocation_commits_before_stale_review(self):
+        self._review_race(review_first=False, revoke=True)

@@ -30,7 +30,7 @@ from drf_spectacular.utils import extend_schema
 from organizations.models import OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework import generics
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from tasks.models import AnnotationDraft, Submission, TaskAssignment
 
@@ -154,6 +154,15 @@ class MyWorkPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+    def paginate_queryset(self, queryset, request, view=None):
+        try:
+            return super().paginate_queryset(queryset, request, view)
+        except NotFound as exc:
+            # DRF translates the detail. Scope this code to paginator errors so
+            # the client never mistakes revoked project access for an empty page.
+            exc.display_context = {'reason': 'WORK_PAGE_OUT_OF_RANGE'}
+            raise
 
 
 class MyWorkAPI(generics.GenericAPIView):

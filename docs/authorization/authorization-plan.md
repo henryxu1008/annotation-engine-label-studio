@@ -806,6 +806,16 @@ recheck permissions when opened or written. The bilingual read-only list clears
 old rows on refresh failure and ignores disposed requests. It does not claim to
 display unconfirmed browser input or grant authority from cached action flags.
 
+An out-of-range work page returns `display_context.reason=WORK_PAGE_OUT_OF_RANGE`
+from the paginator only. The client retries page one once using that code,
+independent of DRF's translated detail. Other 403/404 responses clear the list
+without retrying, so revoked project access cannot masquerade as pagination.
+Editor anchors use AsyncPage's existing `data-external` native-navigation opt-out:
+its query-only partial navigation otherwise retains the old DataManager/modal
+instead of initializing the requested task. Native navigation retains the
+existing browser unsaved-work guard. Work-list classes use the common `cn`
+helper to match the build's CSS prefix.
+
 This slice does not enable TaskBatch, bulk assignment, self-claim, deadlines,
 load balancing, host/Core integration or #79 delivery. Keep PostgreSQL real
 transaction interleavings, SQLite projection tests, provider-mapping/negative

@@ -49,6 +49,7 @@ describe("personal work projection", () => {
     const { runtime, unmount } = mount();
     const link = await screen.findByRole("link", { name: "Open annotation" });
     expect(link.getAttribute("href")).toBe("/projects/4/data?task=9");
+    expect(link.hasAttribute("data-external")).toBe(true);
     expect(screen.getByText("Keep the outer punctuation.")).not.toBeNull();
     act(() => runtime.updateLocale("zh-CN"));
     expect(screen.getByRole("link", { name: "打开标注" }).getAttribute("href")).toBe(link.getAttribute("href"));
@@ -101,10 +102,14 @@ describe("personal work projection", () => {
     runtime.destroy();
   });
 
-  it("returns to page one when work disappeared from the requested page", async () => {
+  it.each(["Invalid page.", "无效页面。"])("recovers a shrinking page using its code, not %s", async (detail) => {
     mockCallApi
       .mockResolvedValueOnce({ ...data, next: "page-two" })
-      .mockResolvedValueOnce({ error: true, status: 404, response: { detail: "Invalid page." } })
+      .mockResolvedValueOnce({
+        error: true,
+        status: 404,
+        response: { detail, display_context: { reason: "WORK_PAGE_OUT_OF_RANGE" } },
+      })
       .mockResolvedValueOnce(data);
     const { runtime, unmount } = mount();
     await screen.findByRole("link");
@@ -113,6 +118,20 @@ describe("personal work projection", () => {
     await screen.findByRole("link");
     expect(mockCallApi.mock.calls[2][1].params.page).toBe(1);
     expect(screen.queryByRole("alert")).toBeNull();
+    unmount();
+    runtime.destroy();
+  });
+
+  it("does not retry a revoked project on page two", async () => {
+    mockCallApi
+      .mockResolvedValueOnce({ ...data, next: "page-two" })
+      .mockResolvedValueOnce({ error: true, status: 404, response: { detail: "Not found." } });
+    const { runtime, unmount } = mount();
+    await screen.findByRole("link");
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await screen.findByRole("alert");
+    expect(mockCallApi).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("link")).toBeNull();
     unmount();
     runtime.destroy();
   });

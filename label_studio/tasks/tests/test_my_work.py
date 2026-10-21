@@ -5,6 +5,7 @@ from access_control.identity import Principal
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.translation import override as locale_override
 from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
@@ -191,6 +192,29 @@ class TestMyWork(APITestCase):
         assert self.client.get(self.url, {'kind': 'review'}).status_code == 403
         for method in ('post', 'put', 'patch', 'delete'):
             assert getattr(self.client, method)(self.url, {}, format='json').status_code == 405
+
+    def test_out_of_range_code_is_locale_independent_and_distinct_from_revocation(self):
+        from tasks.my_work import MyWorkPagination
+
+        self.assignment()
+        for locale in ('en-us', 'zh-hans'):
+            # Exercise the actual DRF paginator/translated exception through the
+            # API handler without coupling this assertion to translated text.
+            original = MyWorkPagination.paginate_queryset
+
+            def localized(paginator, *args, **kwargs):
+                with locale_override(locale):
+                    return original(paginator, *args, **kwargs)
+
+            with patch.object(MyWorkPagination, 'paginate_queryset', localized):
+                response = self.client.get(self.url, {'page': 2})
+            assert response.status_code == 404
+            assert response.json()['display_context']['reason'] == 'WORK_PAGE_OUT_OF_RANGE'
+            assert response['Cache-Control'] == 'private, no-store'
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+        response = self.client.get(self.url, {'page': 2})
+        assert response.status_code == 404
+        assert response.json().get('display_context', {}).get('reason') != 'WORK_PAGE_OUT_OF_RANGE'
 
     def test_revocation_and_cross_scope_hide_rows_and_counts(self):
         self.assignment()
