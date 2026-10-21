@@ -139,7 +139,7 @@ describe("Image draft recovery after another page submits or deletes", () => {
           cy.contains(locale === "zh-CN" ? "载入期间本页又有修改，内容仍然保留" : "Your edits changed while loading and remain here").should("be.visible");
           cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
           cy.get('[data-testid="draft-backup"]').click();
-          cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).then(backup => {
+          cy.readFile(`${Cypress.config("downloadsFolder")}/task-${scope.task_id}-unsaved-draft.json`).should(backup => {
             expect(backup.result[0].value).to.deep.eq({ ...localBox, width: 47, height: 36 });
           });
           cy.get('[data-testid="draft-reload-latest"]').click();
