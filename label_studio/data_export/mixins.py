@@ -25,7 +25,8 @@ from django.db.models import Prefetch
 from django.db.models.query_utils import Q
 from django.utils import dateformat, timezone
 from label_studio_sdk.converter import Converter
-from tasks.models import Annotation, AnnotationDraft, Submission, Task
+from tasks.models import Annotation, AnnotationDraft, Task
+from .boundary import has_immutable_release_boundary
 
 ONLY = 'only'
 EXCLUDE = 'exclude'
@@ -288,7 +289,7 @@ class ExportMixin:
         )
         try:
             Project.objects.select_for_update().get(pk=self.project_id)
-            if Submission.objects.filter(assignment__project_id=self.project_id).exists():
+            if has_immutable_release_boundary(self.project_id):
                 raise ValueError(
                     'Project exports are disabled after formal submissions exist. '
                     'Release approved immutable submissions through the submission release API.'
@@ -352,7 +353,7 @@ class ExportMixin:
     @transaction.atomic
     def convert_file(self, to_format, download_resources=False, hostname=None):
         Project.objects.select_for_update().get(pk=self.project_id)
-        if Submission.objects.filter(assignment__project_id=self.project_id).exists():
+        if has_immutable_release_boundary(self.project_id):
             raise ValueError(
                 'Project export conversion is disabled after formal submissions exist. '
                 'Release approved immutable submissions through the submission release API.'

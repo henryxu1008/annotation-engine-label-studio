@@ -1,0 +1,8 @@
+# Canonical protocol vectors must survive Windows checkout byte-for-byte.
+manifest.json -text
+records.json -text
+records.jsonl -text
+SHA256SUMS text eol=lf
+create-request.json text eol=lf
+create-response.json text eol=lf
+README.md text eol=lf

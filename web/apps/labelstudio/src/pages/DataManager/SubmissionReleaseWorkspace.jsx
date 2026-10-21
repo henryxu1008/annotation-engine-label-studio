@@ -7,6 +7,7 @@ import { downloadFile } from "../../utils/download";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { collaborationErrorCode, displayCollaborationDate, displayCollaborationError, displayReviewDecision, displaySubmissionStatus } from "./collaborationDisplay";
 import "./SubmissionReleaseWorkspace.scss";
+import { ApprovedDatasetExport } from "./ApprovedDatasetExport";
 
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
@@ -147,6 +148,7 @@ export const SubmissionReleaseWorkspace = ({ projectId, allowRelease = false }) 
 
   return (
     <div className={cn("submission-release-workspace").toClassName()} data-testid="submission-release-workspace">
+      {allowRelease && <ApprovedDatasetExport projectId={projectId} />}
       {error && (
         <div role="alert" data-testid="release-error">
           {displayCollaborationError(error, t)}

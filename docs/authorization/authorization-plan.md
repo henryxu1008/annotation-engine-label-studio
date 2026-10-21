@@ -1,5 +1,38 @@
 # Authorization integration plan
 
+## #79 approved Submission batch export (PR review)
+
+The [approved Submission batch export design](approved-dataset-export-design.md)
+was confirmed against `main@88809e61`. The [local implementation](approved-dataset-export.md) adds a separate,
+default-disabled project-scoped batch path, exact approved immutable inputs,
+server-side authority checks at freeze/job/download boundaries, private artifacts
+and a local frozen manifest. It preserves existing mutable export/storage guards
+and keeps Core-only-review ordinary internal acquisition separate from external
+Fork-approved export. Host DatasetVersion and cross-system ReleaseManifest remain
+owned by #80/Host. PostgreSQL/Converter/browser acceptance is recorded separately.
+Local implementation authorization grants no merge, deployment or Core integration
+authority. Frozen receipts also retain the legacy mutable-delivery boundary if
+source Submissions are later deleted.
+
+The [PR #98 security review](issue79-pr98-security-review.md) records the
+shared organization-authority, manifest/artifact graph and publication/revocation
+race fixes. Shared project-role resolution checks active organization membership
+and local account state before ownership or a retained project role can grant
+authority; keep legacy review/release from bypassing organization revocation.
+The selected UI organization is not a background job's authority. Keep the complete
+sealed inventory, attempt/private-key binding and same-request metadata snapshot
+checks across upgrades. Freeze/publication hold the Project fence and local
+authority rows through commit; lock organization membership before User to match
+soft deletion. Verify real PostgreSQL revocation races, not only mocked stale
+permission checks. These local authority locks do not define an external identity
+provider's consistency protocol or authorize Core integration.
+
+Reserve the configured approved-export filesystem root from generic LocalFiles
+configuration, scans, JSON/blob imports and HTTP media delivery even with release
+policy disabled. Resolve symlinks, check real directory containment instead of a
+lexical prefix, and deny private paths before conditional/Range processing. An
+import storage owned by another project is not an artifact download capability.
+
 ## Objective
 
 Use Label Studio Community Edition as the annotation execution engine while the host platform remains the source of truth for business identity, project membership, task assignment, review policy, and release decisions.

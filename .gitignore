@@ -85,4 +85,8 @@ CLAUDE.local.md
 web/libs/editor/tests/coverage
 web/coverage-chunks
 web/apps/labelstudio-e2e/.enterprise-e2e.json
+web/apps/labelstudio-e2e/.approved-export-e2e.json
+web/apps/labelstudio-e2e/cypress/downloads/
+web/apps/labelstudio-e2e/cypress/screenshots/
+web/apps/labelstudio-e2e/cypress/videos/
 .cache

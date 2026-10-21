@@ -13,6 +13,7 @@ from django.db.models import CharField, F, Value
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseNotFound, HttpResponseNotModified
 from django.utils._os import safe_join
 from drf_spectacular.utils import extend_schema
+from data_export.boundary import is_approved_export_path
 from io_storages.localfiles.models import LocalFilesImportStorage
 from ranged_fileresponse import RangedFileResponse
 from rest_framework.decorators import api_view, permission_classes
@@ -95,6 +96,13 @@ def localfiles_data(request):
         # Normalize the incoming relative path so we don't depend on trailing slashes
         path = posixpath.normpath(path).lstrip('/')
         full_path = Path(safe_join(local_serving_document_root, path))
+        try:
+            resolved = full_path.resolve()
+            document_root = Path(local_serving_document_root).resolve()
+            if not resolved.is_relative_to(document_root) or is_approved_export_path(resolved):
+                return HttpResponseNotFound()
+        except (OSError, RuntimeError, ValueError):
+            return HttpResponseNotFound()
         user_has_permissions = False
 
         # Storage paths are normalized on save/migration, so prefix matches using the
@@ -104,7 +112,11 @@ def localfiles_data(request):
             _full_path=Value(full_path_dir, output_field=CharField())
         ).filter(_full_path__startswith=F('path'))
         if localfiles_storage.exists():
-            user_has_permissions = any(storage.project.has_permission(request.user) for storage in localfiles_storage)
+            user_has_permissions = any(
+                resolved.is_relative_to(Path(storage.path).resolve())
+                and storage.project.has_permission(request.user)
+                for storage in localfiles_storage
+            )
 
         # Check user permissions for this file and if it exists
         if user_has_permissions and os.path.exists(full_path):

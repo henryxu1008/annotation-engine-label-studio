@@ -69,3 +69,15 @@ except IOError:
     FEATURE_FLAGS_FROM_FILE = False
 
 STORAGE_PERSISTENCE = get_bool_env('STORAGE_PERSISTENCE', True)
+
+# Batch export is independently opt-in. Invalid policy must not enable delivery.
+try:
+    APPROVED_EXPORT_POLICY = json.loads(get_env('APPROVED_EXPORT_POLICY', '{}'))
+except (TypeError, ValueError):
+    APPROVED_EXPORT_POLICY = {}
+APPROVED_EXPORT_ROOT = get_env('APPROVED_EXPORT_ROOT', os.path.join(BASE_DATA_DIR, 'approved-exports'))
+APPROVED_EXPORT_QUEUE = 'approved_exports'
+if get_env('APPROVED_EXPORT_REDIS_URL', ''):
+    RQ_QUEUES[APPROVED_EXPORT_QUEUE] = {
+        'URL': get_env('APPROVED_EXPORT_REDIS_URL'), 'DEFAULT_TIMEOUT': 1800,
+    }

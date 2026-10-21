@@ -1,0 +1,9 @@
+{
+  "release_id": "00000000-0000-4000-8000-000000007901",
+  "state": "dispatch_pending",
+  "item_count": 3,
+  "content_sha256": "f21ae055e935f13af2d708c6269e49805b6a5b0e7948bfedea4aaa2dc992750a",
+  "input_sha256": "ae8e16e8e6f4dc8c9d11e8c58762c00fa6fa42013e6698c608d2b065e66d73c5",
+  "retryable": true,
+  "status_url": "/api/projects/41/approved-dataset-releases/00000000-0000-4000-8000-000000007901/"
+}

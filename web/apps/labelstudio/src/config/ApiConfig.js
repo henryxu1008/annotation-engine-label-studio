@@ -40,6 +40,15 @@ export const API_CONFIG = {
     projectSubmissions: "GET:/submissions/",
     reviewSubmission: "POST:/submissions/:submissionPk/review/",
     releaseSubmission: "GET:/submissions/:submissionPk/release/",
+    approvedExportCapabilities: "GET:/projects/:pk/approved-dataset-releases/capabilities/",
+    approvedExportCandidates: "GET:/projects/:pk/approved-dataset-releases/candidates/",
+    approvedExportPreview: "POST:/projects/:pk/approved-dataset-releases/preview/",
+    approvedExportCreate: "POST:/projects/:pk/approved-dataset-releases/",
+    approvedExportList: "GET:/projects/:pk/approved-dataset-releases/",
+    approvedExportDetail: "GET:/projects/:pk/approved-dataset-releases/:releaseId/",
+    approvedExportRetry: "POST:/projects/:pk/approved-dataset-releases/:releaseId/retry/",
+    approvedExportDownload: "GET:/projects/:pk/approved-dataset-releases/:releaseId/artifacts/:artifactId/download/",
+    approvedExportManifest: "GET:/projects/:pk/approved-dataset-releases/:releaseId/manifest/",
 
     // Presigning
     presignUrlForTask: "/../tasks/:taskID/presign",
