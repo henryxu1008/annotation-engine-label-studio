@@ -211,7 +211,10 @@ class TestApprovedExports(APITestCase):
         assert self.create().status_code == 403
 
     def test_spoofed_identity_mode_and_snapshots_are_rejected(self):
-        for key in ("actor", "reviewer", "mode", "label_config", "result_snapshot", "namespace", "created_by"):
+        for key in (
+            "actor", "reviewer", "mode", "label_config", "result_snapshot", "namespace", "created_by",
+            "dataset_version_id", "release_manifest", "core_review_decision",
+        ):
             body = self.body()
             body[key] = "forged"
             assert self.create(body).status_code == 400
@@ -686,15 +689,91 @@ class TestApprovedExports(APITestCase):
             self.generate(release)
         assert release.state == "failed_retryable" and not release.artifacts.exists() and not release.manifest
 
+    def test_artifact_metadata_drift_cannot_override_frozen_manifest(self):
+        release = self.frozen()
+        self.generate(release)
+        artifact = release.artifacts.get(format="JSON")
+        payload = b'{"replacement":"not the approved dataset"}'
+        service.artifact_path(artifact.storage_key).write_bytes(payload)
+        type(artifact).objects.filter(pk=artifact.pk).update(sha256=service.digest(payload), size_bytes=len(payload))
+        response = self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/"))
+        assert response.status_code == 409
+        release.refresh_from_db()
+        assert release.state == "failed_final"
+        assert self.client.post(self.detail(release, "retry/"), {}, format="json").status_code == 409
+
+    def test_manifest_checks_complete_artifact_inventory(self):
+        release = self.frozen()
+        self.generate(release)
+        release.artifacts.get(format="JSON").delete()
+        assert self.client.get(self.detail(release, "manifest/")).status_code == 409
+        release.refresh_from_db()
+        assert release.state == "failed_final"
+
+    def test_download_rejects_valid_manifest_from_another_release(self):
+        release = self.frozen()
+        self.generate(release)
+        response = self.create(key="other-release")
+        other = Release.objects.get(pk=response.json()["release_id"])
+        self.generate(other)
+        Release.objects.filter(pk=release.pk).update(manifest=other.manifest, manifest_sha256=other.manifest_sha256)
+        artifact = release.artifacts.get(format="JSON")
+        assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 409
+
+    def test_private_artifact_pointer_cannot_cross_release_directories(self):
+        release = self.frozen()
+        self.generate(release)
+        artifact = release.artifacts.get(format="JSON")
+        foreign_key = f"{uuid.uuid4()}/{uuid.uuid4()}/{artifact.name}"
+        foreign = service.artifact_path(foreign_key)
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(service.artifact_path(artifact.storage_key).read_bytes())
+        type(artifact).objects.filter(pk=artifact.pk).update(storage_key=foreign_key)
+        assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 409
+
+    def test_artifacts_must_belong_to_the_published_attempt(self):
+        release = self.frozen()
+        self.generate(release)
+        artifact = release.artifacts.get(format="JSON")
+        stale = Attempt.objects.create(release=release, number=2, state="ready")
+        type(artifact).objects.filter(pk=artifact.pk).update(attempt=stale)
+        assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 409
+
+    def test_revoked_creator_cannot_delegate_ready_content_to_another_manager(self):
+        user = UserFactory(active_organization=self.organization)
+        membership = ProjectMember.objects.create(project=self.project, user=user, role="manager")
+        self.client.force_authenticate(user)
+        release = self.frozen()
+        self.generate(release)
+        artifact = release.artifacts.get(format="JSON")
+        membership.enabled = False
+        membership.save(update_fields=["enabled"])
+        self.client.force_authenticate(self.manager)
+        for suffix in ("items/", "manifest/", f"artifacts/{artifact.pk}/download/"):
+            for method in (self.client.get, self.client.head):
+                assert method(self.detail(release, suffix), HTTP_RANGE="bytes=0-10").status_code == 403
+
+    def test_core_only_policy_switch_during_generation_never_publishes(self):
+        release = self.frozen()
+        original = service.integrity
+
+        def switch_to_core_only(value):
+            original(value)
+            self.policy["projects"][f"{self.organization.pk}:{self.project.pk}"]["mode"] = "core_only_internal"
+
+        with patch.object(service, "integrity", side_effect=switch_to_core_only):
+            self.generate(release)
+        assert release.state == "blocked_auth" and not release.artifacts.exists() and not release.manifest
+        assert self.client.get(f"/api/submissions/{self.sources[0].pk}/").status_code == 200
+
 
 class TestApprovedExportConcurrency(TransactionTestCase):
-    def test_two_postgresql_connections_freeze_one_idempotent_receipt(self):
-        from concurrent.futures import ThreadPoolExecutor
-        from django.db import close_old_connections
-        from access_control.identity import Principal, LOCAL_IDENTITY_SOURCE
-        from projects.models import Project
-        from users.models import User
+    def fixture(self):
+        from django.urls import get_resolver
 
+        # Standalone TransactionTestCase selections must register the same lazy
+        # storage models as application startup before PostgreSQL flush runs.
+        get_resolver().url_patterns
         assert connection.vendor == "postgresql"
         organization = OrganizationFactory()
         actor = organization.created_by
@@ -717,6 +796,16 @@ class TestApprovedExportConcurrency(TransactionTestCase):
             "source_namespace": "00000000-0000-4000-8000-000000000079",
             "projects": {f"{organization.pk}:{project.pk}": {"mode": "fork_approved", "version": "concurrency/v1"}},
         }
+        return organization, actor, project, body, policy
+
+    def test_two_postgresql_connections_freeze_one_idempotent_receipt(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from django.db import close_old_connections
+        from access_control.identity import Principal, LOCAL_IDENTITY_SOURCE
+        from projects.models import Project
+        from users.models import User
+
+        organization, actor, project, body, policy = self.fixture()
 
         def freeze():
             close_old_connections()
@@ -738,3 +827,96 @@ class TestApprovedExportConcurrency(TransactionTestCase):
                 ids = list(pool.map(lambda _: freeze(), range(2)))
         assert len(set(ids)) == 1
         assert Release.objects.count() == 1 and Release.objects.get().items.count() == 1
+
+    def assert_publication_fences_revocation(self, kind):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
+        from threading import Event as ThreadEvent
+        from django.db import close_old_connections
+        from access_control.identity import Principal, LOCAL_IDENTITY_SOURCE
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        organization, owner, project, body, policy = self.fixture()
+        administrator = UserFactory(is_staff=True, is_superuser=True)
+        actor = UserFactory(active_organization=organization)
+        member = ProjectMember.objects.create(project=project, user=actor, role="manager")
+        principal = Principal(
+            f"{LOCAL_IDENTITY_SOURCE}:{actor.pk}",
+            LOCAL_IDENTITY_SOURCE,
+            actor.email,
+            actor.pk,
+        )
+        started = ThreadEvent()
+        observation = {}
+        original = service.audit
+
+        def revoke():
+            close_old_connections()
+            try:
+                if kind == "account":
+                    started.set()
+                    assert User.objects.filter(pk=actor.pk).update(is_active=False, session_actor=administrator) == 1
+                    return 200
+                if kind == "organization":
+                    membership = OrganizationMember.objects.get(user_id=actor.pk, organization=organization)
+                    started.set()
+                    membership.soft_delete()
+                    return 200
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=owner.pk))
+                started.set()
+                return client.patch(
+                    f"/api/projects/{project.pk}/members/{member.pk}/",
+                    {"enabled": False},
+                    format="json",
+                ).status_code
+            finally:
+                close_old_connections()
+
+        with (
+            tempfile.TemporaryDirectory(prefix="issue79-fence-") as root,
+            override_settings(APPROVED_EXPORT_POLICY=policy, APPROVED_EXPORT_ROOT=root),
+            patch.object(service, "queue_available", return_value=True),
+            patch.object(service, "dispatch"),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            release = service.freeze(project, principal, actor, body, "publication-fence")
+            Release.objects.filter(pk=release.pk).update(state="queued", attempt_number=1)
+            attempt = Attempt.objects.create(release=release, number=1)
+
+            def publication_gate(*args, **kwargs):
+                if args[3] == "publish":
+                    future = pool.submit(revoke)
+                    observation["future"] = future
+                    assert started.wait(5)
+                    try:
+                        observation["status"] = future.result(timeout=2)
+                        observation["committed_before_ready"] = True
+                    except TimeoutError:
+                        observation["committed_before_ready"] = False
+                return original(*args, **kwargs)
+
+            with patch.object(service, "audit", side_effect=publication_gate):
+                service.generate(str(release.pk), str(attempt.token))
+            assert observation["future"].result(timeout=10) == 200
+            release.refresh_from_db()
+            assert release.state == "ready", release.error_code
+            assert not observation["committed_before_ready"]
+            client = APIClient()
+            client.force_authenticate(owner)
+            artifact = release.artifacts.get(format="JSON")
+            url = (
+                f"/api/projects/{project.pk}/approved-dataset-releases/{release.pk}/artifacts/{artifact.pk}/download/"
+            )
+            assert client.get(url).status_code == 403
+
+    def test_project_revocation_cannot_commit_between_publication_check_and_ready(self):
+        self.assert_publication_fences_revocation("project")
+
+    def test_account_disable_cannot_commit_between_publication_check_and_ready(self):
+        self.assert_publication_fences_revocation("account")
+
+    def test_organization_removal_cannot_commit_between_publication_check_and_ready(
+        self,
+    ):
+        self.assert_publication_fences_revocation("organization")

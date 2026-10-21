@@ -1,7 +1,6 @@
 """Project-scoped batch endpoints. Every route, including HEAD/Range, authorizes."""
 
 import hashlib
-import json
 import os
 from datetime import timedelta
 
@@ -11,6 +10,7 @@ from django.http import HttpResponse, FileResponse
 from django.utils import timezone
 from ranged_fileresponse import RangedFileResponse, RangedFileReader
 from rest_framework.generics import GenericAPIView, get_object_or_404
+from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 from core.permissions import all_permissions
 
@@ -84,9 +84,15 @@ class ApprovedExportAPI(GenericAPIView):
     def content_gate(self, release):
         service.creator(release, self.project)
         service.integrity(release)
-        if release.state == "ready" and service.digest(bytes(release.manifest or b"")) != release.manifest_sha256:
-            self.quarantine(release)
+        artifacts = self.sealed_artifacts(release) if release.state == "ready" else {}
         service.audit(self.project, self.principal, self.actor, "content_read", release=release)
+        return artifacts
+
+    def sealed_artifacts(self, release):
+        try:
+            return service.sealed_artifacts(release)
+        except APIException:
+            self.quarantine(release)
 
     def quarantine(self, release):
         Release.objects.filter(pk=release.pk, state="ready").update(
@@ -198,14 +204,17 @@ class ApprovedExportAPI(GenericAPIView):
             # Links convey no authority; endpoint rechecks creator, source and private file.
             value["artifacts"] = (
                 [
-                    dict(service.artifact_metadata(a), download_url=f'{value["status_url"]}artifacts/{a.pk}/download/')
-                    for a in release.artifacts.all()
+                    dict(
+                        service.artifact_metadata(a),
+                        download_url=f'{value["status_url"]}artifacts/{a.pk}/download/',
+                    )
+                    for a in self.sealed_artifacts(release).values()
                 ]
                 if release.state == "ready"
                 else []
             )
             return Response(value)
-        self.content_gate(release)
+        artifacts = self.content_gate(release)
         if action == "items":
             rows, cursor = self.page(release.items.all(), {"kind": "items", "release": str(release.pk)})
             return Response({"results": [i.record for i in rows], "next_cursor": cursor})
@@ -213,17 +222,14 @@ class ApprovedExportAPI(GenericAPIView):
             service.fail("RELEASE_NOT_READY")
         if action == "manifest":
             blob = bytes(release.manifest)
-            if service.digest(blob) != release.manifest_sha256:
-                self.quarantine(release)
-            manifest = json.loads(blob)
-            if manifest["input_sha256"] != release.input_sha256 or manifest["input"] != release.frozen_input:
-                service.fail("ARTIFACT_INTEGRITY_FAILED")
             response = HttpResponse(blob, content_type="application/json")
             response["X-Manifest-SHA256"] = service.digest(blob)
             response["Cache-Control"] = "private, no-store"
             return response
         if action == "download":
-            artifact = get_object_or_404(release.artifacts.all(), pk=kwargs["artifact_id"])
+            artifact = artifacts.get(kwargs["artifact_id"])
+            if artifact is None:
+                service.fail("NOT_FOUND", 404)
             try:
                 file = service.artifact_path(artifact.storage_key).open("rb")
             except OSError:

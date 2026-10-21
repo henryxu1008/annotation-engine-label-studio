@@ -1,7 +1,7 @@
 # Approved Submission batch export (#79)
 
 The user confirmed the [design](approved-dataset-export-design.md) on 2026-10-21.
-Implementation is isolated from #76 and remains **local / not merged / not
+Implementation is isolated from #76 and remains **in PR review / not merged / not
 deployed / not integrated with Core**. A batch is a Fork export receipt, not a Host
 DatasetVersion, Gold certificate or final business publication.
 
@@ -29,6 +29,19 @@ authorized for file access. Historical reviewer role removal does not rewrite
 its decision. A revoked creator, changed policy, deleted source or corrupt input
 cannot be replaced with a mutable Annotation. Corrupt output is quarantined;
 retry cannot overwrite a READY artifact or regenerate a quarantined receipt.
+
+Freeze and the final READY transaction hold the canonical Project membership
+fence and the creator's local authority rows. Organization membership is locked
+before User, matching organization soft deletion; account disablement and local
+role maintenance serialize on their rows. Final authorization and publication
+therefore commit before a concurrent revocation, or observe it and fail closed.
+
+Manifest/content reads and READY artifact metadata also bind the entire artifact
+inventory to the frozen manifest's canonical input and artifact metadata. Each
+file must belong to the winning READY attempt and its exact release/attempt
+private key. Downloads use the validated metadata objects for the subsequent
+file-size/hash check; they do not reload a different artifact row. Inventory,
+metadata, attempt or private-pointer drift quarantines the receipt.
 
 There is no new release permission for a reviewer, annotator, organization admin
 or unscoped superuser. Server mode and project scope apply to every method,

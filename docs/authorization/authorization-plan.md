@@ -1,6 +1,6 @@
 # Authorization integration plan
 
-## #79 approved Submission batch export (local implementation)
+## #79 approved Submission batch export (PR review)
 
 The [approved Submission batch export design](approved-dataset-export-design.md)
 was confirmed against `main@88809e61`. The [local implementation](approved-dataset-export.md) adds a separate,
@@ -13,6 +13,15 @@ owned by #80/Host. PostgreSQL/Converter/browser acceptance is recorded separatel
 Local implementation authorization grants no merge, deployment or Core integration
 authority. Frozen receipts also retain the legacy mutable-delivery boundary if
 source Submissions are later deleted.
+
+The [PR #98 security review](issue79-pr98-security-review.md) records the
+manifest/artifact graph and publication/revocation race fixes. Keep the complete
+sealed inventory, attempt/private-key binding and same-request metadata snapshot
+checks across upgrades. Freeze/publication hold the Project fence and local
+authority rows through commit; lock organization membership before User to match
+soft deletion. Verify real PostgreSQL revocation races, not only mocked stale
+permission checks. These local authority locks do not define an external identity
+provider's consistency protocol or authorize Core integration.
 
 ## Objective
 

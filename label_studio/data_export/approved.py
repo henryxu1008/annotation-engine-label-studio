@@ -29,7 +29,7 @@ from django.db import transaction
 from django.utils import timezone
 from label_studio_sdk.converter import Converter
 from organizations.models import OrganizationMember
-from projects.models import Project
+from projects.models import Project, ProjectMember
 from rest_framework.exceptions import APIException
 from tasks.models import Submission
 
@@ -145,6 +145,32 @@ def creator(release, project):
     if project.organization_id != release.organization_id_frozen:
         fail("CREATOR_AUTH_REVOKED", 403)
     return principal, actor, current
+
+
+def lock_authority(actor_id, project):
+    """Hold local authority through a freeze/publication transaction.
+
+    The caller already holds the project's canonical membership fence. Lock the
+    organization membership before the user, matching OrganizationMember's
+    soft-delete order; account disablement serializes on the user row. Lock a
+    local role row as well, covering direct membership maintenance.
+    """
+    list(
+        OrganizationMember.objects.select_for_update()
+        .filter(user_id=actor_id, organization_id=project.organization_id)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    actor = get_user_model().objects.select_for_update().filter(pk=actor_id).first()
+    if actor is None:
+        fail("RELEASE_FORBIDDEN", 403)
+    list(
+        ProjectMember.objects.select_for_update()
+        .filter(project_id=project.pk, user_id=actor_id)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    return actor
 
 
 def audit(project, principal, actor, phase, *, release=None, allowed=True, reason=""):
@@ -452,6 +478,7 @@ def freeze(project, principal, actor, body, key):
     request_hash = digest(canonical(normalized))
     with transaction.atomic():
         project = Project.objects.select_for_update().get(pk=project.pk)
+        actor = lock_authority(actor.pk, project)
         manager(principal, actor, project)
         current = policy(project)
         old = Release.objects.filter(
@@ -706,10 +733,12 @@ def generate(release_id, token):
                 finally:
                     os.close(descriptor)
         with transaction.atomic():
+            # Match freeze and the governed member API's project-first ordering.
+            project = Project.all_objects.select_for_update().get(pk=release.project_id)
             current = Release.objects.select_for_update().get(pk=release_id)
             if current.attempt_number != attempt.number or current.state != "running":
                 return
-            project = Project.all_objects.get(pk=release.project_id)
+            lock_authority(current.actor_id_frozen, project)
             principal, actor, _ = creator(current, project)
             integrity(current)
             audit(project, principal, actor, "publish", release=current)
@@ -757,6 +786,54 @@ def artifact_metadata(artifact):
         "record_count": artifact.record_count,
         "provenance": artifact.provenance,
     }
+
+
+def sealed_artifacts(release):
+    """Bind the entire delivery graph to the immutable manifest, once per request.
+
+    A checksum on a mutable artifact row is insufficient: metadata, attempt and
+    private pointers can drift independently of the sealed manifest after restore
+    or storage maintenance. Return the validated objects so the caller never
+    reloads a different metadata snapshot before opening the file.
+    """
+    try:
+        blob = bytes(release.manifest or b"")
+        manifest = json.loads(blob)
+        if (
+            digest(blob) != release.manifest_sha256
+            or manifest["schema"] != "fork.approved-export-manifest/v1"
+            or canonical(manifest["input"]) != canonical(release.frozen_input)
+            or digest(canonical(manifest["input"])) != release.input_sha256
+            or manifest["input_sha256"] != release.input_sha256
+            or manifest["input"]["release_id"] != str(release.pk)
+        ):
+            raise ValueError()
+        artifacts = list(release.artifacts.select_related("attempt").all())
+        expected = {"JSON": "records.json", "JSONL": "records.jsonl"}
+        if release.frozen_input["request"]["output"]["format"] == "CONLL2003":
+            expected["CONLL2003"] = "conll2003.zip"
+        if len(artifacts) != len(expected) or {a.format for a in artifacts} != set(expected):
+            raise ValueError()
+        for artifact in artifacts:
+            if (
+                artifact.name != expected[artifact.format]
+                or artifact.record_count != len(release.frozen_input["content"]["items"])
+                or artifact.attempt.release_id != release.pk
+                or artifact.attempt.number != release.attempt_number
+                or artifact.attempt.state != "ready"
+                or artifact.storage_key != f"{release.pk}/{artifact.attempt.token}/{artifact.name}"
+            ):
+                raise ValueError()
+        # Compare canonical bytes, not Python equality (which equates true and 1).
+        recorded = manifest["artifacts"]
+        if not isinstance(recorded, list) or len(recorded) != len(artifacts):
+            raise ValueError()
+        actual = sorted((artifact_metadata(a) for a in artifacts), key=lambda a: a["id"])
+        if canonical(sorted(recorded, key=lambda a: a["id"])) != canonical(actual):
+            raise ValueError()
+        return {artifact.pk: artifact for artifact in artifacts}
+    except (ValueError, TypeError, KeyError, AttributeError, APIException):
+        fail("ARTIFACT_INTEGRITY_FAILED")
 
 
 def convert_conll(release, directory):
