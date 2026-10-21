@@ -1,9 +1,11 @@
 # #79 approved Submission batch export — design for confirmation
 
-Status: **PROPOSED / DESIGN_ONLY / IMPLEMENTATION_NOT_AUTHORIZED**.
+Status: **DESIGN_CONFIRMED / LOCAL_IMPLEMENTATION / NOT_MERGED / NOT_DEPLOYED**.
 Prepared 2026-10-21 against `main@88809e618a34292c512dd75cb85ce24e52ddae59`.
-The API names, settings and tables below are proposals, not existing features.
-User confirmation of this document is required before implementation begins.
+The user confirmed this design and authorized isolated implementation/testing on
+2026-10-21. The following is the confirmed design baseline; see the
+[implementation and operating contract](approved-dataset-export.md) for delivered
+behavior and its verification entrypoints. Core integration remains unauthorized.
 
 ## 1. Decision and ownership
 
@@ -491,7 +493,7 @@ files. Do not reverse-migrate/drop data in a retained environment. Reverting to
 legacy export does not become a release fallback. No merge, deployment, live
 provider use or Core integration is authorized by design confirmation alone.
 
-## 11. Required implementation acceptance (all currently NOT_RUN)
+## 11. Required implementation acceptance (results recorded separately)
 
 | Area | Required evidence |
 | --- | --- |
@@ -507,13 +509,13 @@ provider use or Core integration is authorized by design confirmation alone.
 | Bilingual browser | en-US/zh-CN preview, page selection, revisions, failure/retry, creator/member revocation with stale page, progress and native + actual standard download; existing single release and mutable-export denial regressions |
 | Upgrade / rollback | Existing authorization negative matrix retained; additive migrations forward/reverse on disposable PostgreSQL; source deletion protection, routes-off rollback retaining receipts; PR CI, merge/main CI and runtime acceptance remain separate |
 
-## 12. Confirmation requested
+## 12. Confirmed scope
 
-Confirm this bounded #79 design, specifically: (1) exact selection with one
+The user confirmed this bounded #79 design: (1) exact selection with one
 revision per assignment and separate same-task samples; (2) explicit server
 allowlist/default-disabled batch API and strict Core-only separation; (3) private
 async jobs with frozen-copy/protected-project retention and limits; (4) the local
 manifest schema/digest rules, references-only media and actual SDK capability
 gates, with #80 owning cross-system versions and durable media.
 
-Until that confirmation, only documentation/example validation is in scope.
+Implementation/testing authorization does not grant merge, deployment or Core integration authority.

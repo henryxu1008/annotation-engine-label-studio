@@ -1,16 +1,18 @@
 # Authorization integration plan
 
-## Proposed #79 batch export design (not implemented)
+## #79 approved Submission batch export (local implementation)
 
 The [approved Submission batch export design](approved-dataset-export-design.md)
-is **PROPOSED / DESIGN_ONLY** against `main@88809e61`. It specifies a separate,
+was confirmed against `main@88809e61`. The [local implementation](approved-dataset-export.md) adds a separate,
 default-disabled project-scoped batch path, exact approved immutable inputs,
 server-side authority checks at freeze/job/download boundaries, private artifacts
 and a local frozen manifest. It preserves existing mutable export/storage guards
 and keeps Core-only-review ordinary internal acquisition separate from external
 Fork-approved export. Host DatasetVersion and cross-system ReleaseManifest remain
-owned by #80/Host. This proposal grants no implementation, merge, deployment or
-Core integration authority; the user must confirm the design before development.
+owned by #80/Host. PostgreSQL/Converter/browser acceptance is recorded separately.
+Local implementation authorization grants no merge, deployment or Core integration
+authority. Frozen receipts also retain the legacy mutable-delivery boundary if
+source Submissions are later deleted.
 
 ## Objective
 

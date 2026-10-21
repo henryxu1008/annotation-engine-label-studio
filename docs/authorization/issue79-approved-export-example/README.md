@@ -39,9 +39,8 @@ time as well. Changing an authorization access event later must not change any
 of these sealed bytes; access events live separately in the future service.
 
 Reproducible example verification from the repository root (PowerShell, CPython
-3). The local documentation check uses CPython 3.14.6, without installing a
-runtime or borrowing #76's environment. Production encoding remains pinned to
-the design's CPython 3.11 contract; its application-level verification is NOT_RUN.
+3). These fixed vectors have also been checked under the isolated implementation
+runtime's CPython 3.11. Production encoding remains pinned to that contract.
 
 ```powershell
 @'
@@ -94,6 +93,7 @@ print('PASS: synthetic encoding, selection, digests and tamper vector only')
 '@ | py -3 -B -
 ```
 
-This command writes nothing and does not import or start the application. Real
-PostgreSQL negative cases, live revocation, queue recovery, private download,
-SDK conversion and en-US/zh-CN E2E remain **NOT_RUN** until implementation.
+This command writes nothing and does not import or start the application. It does
+not prove PostgreSQL authorization, queue recovery, private download, conversion
+or browser behavior. Those have separate implementation test entrypoints in the
+[operating contract](../approved-dataset-export.md).

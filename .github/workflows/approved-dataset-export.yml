@@ -1,0 +1,103 @@
+name: Approved Dataset Export
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  approved-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: issue79-test-only
+          POSTGRES_DB: issue79
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d issue79"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+    env:
+      DJANGO_DB: postgresql
+      POSTGRE_HOST: localhost
+      POSTGRE_NAME: issue79
+      POSTGRE_USER: postgres
+      POSTGRE_PASSWORD: issue79-test-only
+      LABEL_STUDIO_BASE_DATA_DIR: /tmp/issue79-data
+      APPROVED_EXPORT_ROOT: /tmp/issue79-private-exports
+      APPROVED_EXPORT_REDIS_URL: redis://localhost:6379/0
+      TEST_ENVIRONMENT: "1"
+      COLLECT_ANALYTICS: "0"
+      SENTRY_RATE: "0"
+      DEBUG: "true"
+      HOSTNAME: http://localhost:8080
+      FRONTEND_HOSTNAME: http://localhost:8080
+      FRONTEND_HMR: "false"
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext libldap2-dev libsasl2-dev libxml2-dev libxslt-dev
+          pipx install poetry==2.3.2
+          poetry install --with test
+          poetry run python label_studio/core/version.py
+      - name: PostgreSQL safety, concurrency and existing release regressions
+        working-directory: label_studio
+        run: |
+          poetry run python manage.py makemigrations --check --dry-run
+          poetry run pytest -q data_export/tests/test_approved_exports.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py --junitxml=/tmp/issue79-postgres.xml
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Build and validate bilingual frontend
+        working-directory: web
+        run: |
+          yarn install --frozen-lockfile
+          yarn i18n:catalogs
+          yarn i18n:literals
+          yarn ls:build
+      - name: Prepare disposable browser fixtures and explicit release policy
+        run: |
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
+          poetry run python label_studio/manage.py collectstatic --noinput
+          poetry run python label_studio/manage.py seed_approved_export_e2e --output web/apps/labelstudio-e2e/.approved-export-e2e.json --policy-output /tmp/issue79-policy.json
+          echo "APPROVED_EXPORT_POLICY=$(python -c 'import json;print(json.dumps(json.load(open("/tmp/issue79-policy.json")),separators=(",",":")))')" >> "$GITHUB_ENV"
+      - name: Start isolated application and RQ worker
+        run: |
+          nohup poetry run python label_studio/manage.py runserver 0.0.0.0:8080 --noreload > /tmp/issue79-django.log 2>&1 &
+          nohup poetry run python label_studio/manage.py rqworker approved_exports > /tmp/issue79-worker.log 2>&1 &
+          for i in {1..60}; do
+            if curl --fail --silent http://localhost:8080/health/ >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Real en-US and zh-CN batch export journeys
+        working-directory: web
+        run: yarn cypress run --browser chrome --project apps/labelstudio-e2e --config-file cypress.approved-export.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: approved-export-evidence
+          path: |
+            /tmp/issue79-postgres.xml
+            /tmp/issue79-django.log
+            /tmp/issue79-worker.log
+            web/apps/labelstudio-e2e/cypress/screenshots

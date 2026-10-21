@@ -36,7 +36,8 @@ from io_storages.utils import StorageObject, get_uri_via_regex, parse_bucket_uri
 from projects.models import Project
 from rest_framework.exceptions import ValidationError
 from rq.job import Job
-from tasks.models import Annotation, Submission, Task
+from tasks.models import Annotation, Task
+from data_export.boundary import has_immutable_release_boundary
 from tasks.serializers import AnnotationSerializer, PredictionSerializer
 from webhooks.models import WebhookAction
 from webhooks.utils import emit_webhooks_for_instance
@@ -771,7 +772,7 @@ class ExportStorage(Storage, ProjectStorageMixin):
     max_workers = min(8, (os.cpu_count() or 2) * 4)
 
     def has_formal_submissions(self):
-        return Submission.objects.filter(assignment__project=self.project).exists()
+        return has_immutable_release_boundary(self.project_id)
 
     def require_mutable_delivery_allowed(self, *, lock_project=False):
         if lock_project:

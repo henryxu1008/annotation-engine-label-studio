@@ -95,5 +95,6 @@
   "libs/editor/src/tools/Selection.js",
   "libs/i18n/src/preference.tsx",
   "libs/i18n/src/runtime.tsx",
-  "libs/ui/src/lib/modal/ModalPopup.tsx"
+  "libs/ui/src/lib/modal/ModalPopup.tsx",
+  "apps/labelstudio/src/pages/DataManager/ApprovedDatasetExport.jsx"
 ]

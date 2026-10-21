@@ -3,11 +3,20 @@
 from django.urls import include, path
 
 from . import api
+from .approved_api import ApprovedExportAPI
 
 app_name = 'data_export'
 
 
 _api_urlpatterns = [
+    path('<int:pk>/approved-dataset-releases/', ApprovedExportAPI.as_view()),
+    path('<int:pk>/approved-dataset-releases/<uuid:release_id>/', ApprovedExportAPI.as_view(), {'action': 'detail'}),
+    path('<int:pk>/approved-dataset-releases/<uuid:release_id>/artifacts/<uuid:artifact_id>/download/',
+         ApprovedExportAPI.as_view(), {'action': 'download'}),
+    *[path(f'<int:pk>/approved-dataset-releases/{action}/', ApprovedExportAPI.as_view(), {'action': action})
+      for action in ('capabilities', 'candidates', 'preview')],
+    *[path(f'<int:pk>/approved-dataset-releases/<uuid:release_id>/{action}/', ApprovedExportAPI.as_view(), {'action': action})
+      for action in ('items', 'manifest', 'retry')],
     # export api
     path('<int:pk>/export', api.ExportAPI.as_view(), name='project-export'),
     path('<int:pk>/export/formats', api.ExportFormatsListAPI.as_view(), name='project-export-formats'),

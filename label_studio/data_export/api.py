@@ -28,7 +28,8 @@ from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from tasks.models import Submission, Task
+from tasks.models import Task
+from .boundary import has_immutable_release_boundary
 
 from .models import ConvertedFormat, DataExport, Export
 from .serializers import (
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 def require_immutable_release_boundary(project):
     """Prevent mutable project exports once formal submissions exist."""
-    if Submission.objects.filter(assignment__project=project).exists():
+    if has_immutable_release_boundary(project.pk):
         error = ValidationError(
             {
                 'detail': (
