@@ -680,6 +680,12 @@ class TestApprovedExports(APITestCase):
         finally:
             queue.connection.close()
 
+    def test_durability_barrier_failure_never_publishes_ready(self):
+        release = self.frozen(self.body(fmt="CONLL2003"))
+        with patch.object(service.os, "fsync", side_effect=OSError("synthetic durability failure")):
+            self.generate(release)
+        assert release.state == "failed_retryable" and not release.artifacts.exists() and not release.manifest
+
 
 class TestApprovedExportConcurrency(TransactionTestCase):
     def test_two_postgresql_connections_freeze_one_idempotent_receipt(self):

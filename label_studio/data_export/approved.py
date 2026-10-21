@@ -681,7 +681,8 @@ def generate(release_id, token):
             size = path.stat().st_size
             if size > limits()["artifact_bytes"]:
                 fail("BATCH_LIMIT_EXCEEDED", 413)
-            with path.open("rb") as handle:
+            with path.open("r+b") as handle:
+                os.fsync(handle.fileno())
                 checksum = hashlib.file_digest(handle, "sha256").hexdigest()
             artifacts.append(
                 Artifact(
@@ -697,6 +698,13 @@ def generate(release_id, token):
                     provenance=provenance,
                 )
             )
+        if os.name == "posix":
+            for parent in (directory, directory.parent, private_root(), private_root().parent):
+                descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
         with transaction.atomic():
             current = Release.objects.select_for_update().get(pk=release_id)
             if current.attempt_number != attempt.number or current.state != "running":
