@@ -1,5 +1,15 @@
 # Authorization integration plan
 
+The isolated real Fork → Host RAW trial uses the Python 3.11 API/RQ image in
+`deploy/fork-host-live/Dockerfile`, one editable source root, dedicated synthetic
+PostgreSQL/Redis/export storage and explicitly enabled organization Token policy.
+Release creator, snapshot creator and fetch account remain independently subject
+to current Manager checks. Token is not a read-only project credential. Host
+enforces source namespace + Submission ID globally across connections; connection
+replacement cannot bypass a frozen source conflict. Core-only-review, #76 and
+#307 environments/credentials remain outside this trial's write set. No deployment,
+Core review, Gold/certification, publication, delivery or deletion is authorized.
+
 Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
 live authority, PostgreSQL freeze guards and Core-only denial across upgrades.
