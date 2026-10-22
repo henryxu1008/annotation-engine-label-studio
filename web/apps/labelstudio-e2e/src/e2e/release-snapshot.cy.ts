@@ -11,6 +11,16 @@ for (const locale of ["en-US", "zh-CN"]) {
     });
     afterEach(() => cy.task("setSnapshotManagerEnabled", true));
 
+    const waitForCreatedBatch = () => {
+      cy.wait("@createBatch").then(({ response }) => {
+        expect(response?.statusCode).eq(202);
+        const releaseId = response?.body.release_id;
+        expect(releaseId).to.be.a("string").and.not.be.empty;
+        // The previous ready batch remains visible until the create response is applied.
+        cy.get('[data-testid="batch-history"]').should("have.value", releaseId);
+        cy.get('[data-testid="batch-download-JSONL"]', { timeout: 90000 }).should("be.visible");
+      });
+    };
     const open = (project: number, ids: number[]) => {
       const page = `/projects/${project}/data`;
       cy.loginAs(fixture.users.manager.email, fixture.password, page);
@@ -19,8 +29,7 @@ for (const locale of ["en-US", "zh-CN"]) {
       for (const id of ids) cy.get(`[data-testid="batch-select-${id}"]`).check();
       cy.get('[data-testid="batch-preview"]').click();
       cy.get('[data-testid="batch-create"]').should("be.enabled").click();
-      cy.wait("@createBatch").its("response.statusCode").should("eq", 202);
-      cy.get('[data-testid="batch-download-JSONL"]', { timeout: 90000 }).should("be.visible");
+      waitForCreatedBatch();
     };
     const capture = () => {
       cy.get('[data-testid="snapshot-create"]').should("contain.text", zh ? "捕获来源快照" : "Capture source snapshot").click();
@@ -44,8 +53,7 @@ for (const locale of ["en-US", "zh-CN"]) {
         cy.get(`[data-testid="batch-select-${fixture.approved[2].submission_id}"]`).uncheck();
         cy.get('[data-testid="batch-preview"]').click();
         cy.get('[data-testid="batch-create"]').should("be.enabled").click();
-        cy.wait("@createBatch").its("response.statusCode").should("eq", 202);
-        cy.get('[data-testid="batch-download-JSONL"]', { timeout: 90000 }).should("be.visible");
+        waitForCreatedBatch();
         capture();
         cy.get('[data-testid="snapshot-against"]').type(first);
         cy.get('[data-testid="snapshot-compare"]').click();
