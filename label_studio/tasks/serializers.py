@@ -5,7 +5,7 @@ from collections.abc import MutableMapping
 
 import ujson as json
 from access_control.authorization import authorization
-from access_control.identity import resolve_principal
+from access_control.identity import resolve_actor, resolve_principal
 from core.current_request import CurrentContext, get_current_request
 from core.feature_flags import flag_set
 from core.label_config import replace_task_data_undefined_with_config_field
@@ -1069,24 +1069,29 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
 class NextTaskSerializer(TaskWithAnnotationsAndPredictionsAndDraftsSerializer):
     unique_lock_id = serializers.SerializerMethodField()
 
+    def _get_user(self):
+        request = self.context.get('request')
+        return resolve_actor(request)[1] if request is not None else None
+
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         assignment = self._get_assignment(instance)
         annotation = assignment.annotation if assignment and assignment.annotation_id else None
         if (
             annotation is not None
-            and annotation.was_cancelled
             and annotation.task_id == instance.id
+            and annotation.project_id == instance.project_id
             and annotation.completed_by_id == assignment.assignee_id
         ):
-            # Resume the current owner's skipped annotation through the editor's
-            # existing selection/Unskip path, rather than create a second one.
+            # Resume the current owner's working annotation for returned work,
+            # changed drafts and skips; never create a second annotation/draft
+            # merely because the native queue omits annotations by default.
             ret['annotations'] = [AnnotationSerializer(annotation, context=self.context).data]
             ret['default_selected_annotation'] = annotation.id
         return ret
 
     def get_unique_lock_id(self, task):
-        user = self.context['request'].user
+        user = self._get_user()
         lock = task.locks.filter(user=user).first()
         if lock:
             return lock.unique_id

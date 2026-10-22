@@ -40,8 +40,17 @@ export const History = {
   },
 
   forceNavigate(params = {}, replace = false) {
-    const resultParams = params ?? {};
+    const resultParams = { ...params };
     const currentParams = this.getParams();
+
+    // Editor transitions replace task/view parameters, not the fixed package
+    // work context. An explicit null still ends that context.
+    if (!("task_package" in resultParams) && "task_package" in currentParams) {
+      resultParams.task_package = currentParams.task_package;
+    }
+    if (!("package_review" in resultParams) && "package_review" in currentParams) {
+      resultParams.package_review = currentParams.package_review;
+    }
 
     Object.entries(currentParams).forEach(([key]) => {
       if (!isDefined(resultParams[key])) {

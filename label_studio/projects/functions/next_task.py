@@ -210,6 +210,15 @@ def get_not_solved_tasks_qs(
             task_assignment__assignee=user,
             task_assignment__status__in=TaskAssignment.ACTIVE_STATUSES,
         )
+        # An immutable submission does not complete returned-for-changes work
+        # or a subsequently edited draft. Reuse the personal-work projection,
+        # keeping legacy annotations without submissions on their existing path.
+        from tasks.my_work import annotate_assignment_work
+
+        resumable = annotate_assignment_work(TaskAssignment.objects.filter(
+            project=project, assignee=user, status__in=TaskAssignment.ACTIVE_STATUSES,
+        )).filter(latest_submission_id__isnull=False, work_state__in=['rework', 'in_progress'])
+        user_solved_tasks_array = user_solved_tasks_array.exclude(task_assignment__in=resumable.values('pk'))
     user_solved_tasks_array = user_solved_tasks_array.distinct().values_list('task__pk', flat=True)
     not_solved_tasks = prepared_tasks.exclude(pk__in=user_solved_tasks_array)
 

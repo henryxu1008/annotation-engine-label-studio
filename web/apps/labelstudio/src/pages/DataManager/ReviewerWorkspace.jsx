@@ -10,8 +10,9 @@ import "./ReviewerWorkspace.scss";
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
 
-export const ReviewerWorkspace = ({ projectId }) => {
+export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
+  const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();
   const callApiRef = useRef(api.callApi);
   callApiRef.current = api.callApi;
@@ -40,10 +41,11 @@ export const ReviewerWorkspace = ({ projectId }) => {
           reviewable: true,
           page: nextPendingPage,
           page_size: 50,
+          ...(packageId !== null ? { task_package: packageId } : {}),
         },
         errorFilter: () => true,
       }),
-      callApiRef.current("projectSubmissions", {
+      packageId !== null ? Promise.resolve({ results: [] }) : callApiRef.current("projectSubmissions", {
         params: {
           project: projectId,
           history: true,
@@ -53,7 +55,7 @@ export const ReviewerWorkspace = ({ projectId }) => {
         errorFilter: () => true,
       }),
     ]);
-  }, [projectId]);
+  }, [projectId, packageId]);
 
   const refresh = useCallback(async (nextPendingPage = pendingPage, nextHistoryPage = historyPage) => {
     const generation = ++generationRef.current;
@@ -148,7 +150,7 @@ export const ReviewerWorkspace = ({ projectId }) => {
     setNotice("");
 
     const result = await callApiRef.current("reviewSubmission", {
-      params: { submissionPk: selected.id },
+      params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}) },
       body: {
         decision,
         reason: decision === "rejected" ? rejectReason.trim() : "",
@@ -179,6 +181,10 @@ export const ReviewerWorkspace = ({ projectId }) => {
 
   return (
     <div className={cn("reviewer-workspace").toClassName()} data-testid="reviewer-workspace">
+      {packageId !== null && <div data-testid="package-review-scope">
+        <p>{tp("reviewContext", { id: packageId })}</p>
+        <Button size="small" look="outlined" disabled={processing !== null} onClick={() => refresh()}>{tp("refresh")}</Button>
+      </div>}
       {notice && (
         <div className={cn("reviewer-workspace").elem("notice").toClassName()} role="status">
           {notice.decision === "approved"
@@ -238,6 +244,7 @@ export const ReviewerWorkspace = ({ projectId }) => {
             </Button>
           </div>
 
+          {packageId === null && <>
           <Typography variant="headline" size="small">{t("submissionHistory")}</Typography>
           {historySubmissions.length === 0 ? (
             <div data-testid="review-history-empty">{t("noReviewedSubmissions")}</div>
@@ -281,6 +288,7 @@ export const ReviewerWorkspace = ({ projectId }) => {
               {t("nextHistory")}
             </Button>
           </div>
+          </>}
         </aside>
 
         <section className={cn("reviewer-workspace").elem("detail").toClassName()}>

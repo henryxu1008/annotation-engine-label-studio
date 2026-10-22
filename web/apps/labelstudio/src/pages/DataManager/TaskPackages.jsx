@@ -284,7 +284,8 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
             ))}
           </dl>
           <p>{t("asOf", { time: data.as_of })}</p>
-          {data.can_review && onOpenReviewQueue && <Button onClick={onOpenReviewQueue}>{t("reviewQueue")}</Button>}
+          {data.continue_url && <a href={data.continue_url} data-external>{t("continue")}</a>}
+          {data.can_review && onOpenReviewQueue && <Button onClick={() => onOpenReviewQueue(data.package.id)}>{t("reviewQueue")}</Button>}
           <table>
             <thead>
               <tr>

@@ -101,7 +101,7 @@ def create_submission(*, assignment, annotation, actor):
 
 
 @transaction.atomic
-def review_submission(*, submission, reviewer, decision, reason='', principal=None):
+def review_submission(*, submission, reviewer, decision, reason='', principal=None, task_package_id=None):
     principal = principal or local_principal(reviewer)
     project, reviewer = lock_project_operation(submission.assignment.project_id, principal, REVIEW)
     authorization.require(authorization.can_review_project(principal, project), 'Project reviewer role is required.')
@@ -109,6 +109,13 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
     TaskAssignment.objects.select_for_update().get(pk=submission.assignment_id, project=project)
     # submitted_by is nullable; its ID is sufficient for the self-review check.
     submission = Submission.objects.select_for_update().get(pk=submission.pk)
+
+    if task_package_id is not None:
+        from rest_framework.generics import get_object_or_404
+        from task_packages.scope import PackageScope
+
+        scope = PackageScope(project, principal, reviewer, task_package_id)
+        get_object_or_404(scope.submissions(Submission.objects.all()), pk=submission.pk)
 
     if submission.status != Submission.Status.PENDING:
         raise ValidationError({'detail': 'Only pending submissions can be reviewed.'})

@@ -46,6 +46,15 @@ const mount = (locale = "en-US", props = {}) => {
 };
 
 describe("fixed task packages", () => {
+  it("passes the selected package to the existing review workspace", async () => {
+    const open = jest.fn();
+    mockCallApi.mockResolvedValueOnce(list).mockResolvedValue({ ...detail, can_review: true });
+    const { runtime, unmount } = mount("en-US", { onOpenReviewQueue: open });
+    fireEvent.click(await screen.findByRole("button", { name: "Trial 试用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open existing review queue" }));
+    expect(open).toHaveBeenCalledWith(7);
+    unmount(); runtime.destroy();
+  });
   beforeEach(() => {
     mockCallApi.mockReset();
     Object.defineProperty(global.crypto, "randomUUID", {

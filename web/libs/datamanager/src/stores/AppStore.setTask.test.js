@@ -58,6 +58,19 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
+it.each(["all", "filtered"])("keeps a package queue independent of the last %s project view", async (mode) => {
+  const { store } = makeStore();
+  const request = jest.fn().mockResolvedValue({ id: 41 });
+  Object.assign(store._sdk, { api: { invokeAction: request }, getAction: () => null, invoke: jest.fn() });
+  History.getParams.mockReturnValue({ task_package: "7" });
+  localStorage.setItem("dm:labelstream:mode", mode);
+  try {
+    await store.invokeAction("next_task", { reload: false });
+    expect(request.mock.calls[0][0]).toEqual({ id: "next_task", task_package: "7" });
+    expect(request.mock.calls[0][1].body).toEqual({});
+  } finally { localStorage.removeItem("dm:labelstream:mode"); destroy(store); }
+});
+
 it("keeps edits closed when editor bootstrap finishes before the task refresh", async () => {
   const { store, wrapper, editor } = makeStore();
   const request = deferred();

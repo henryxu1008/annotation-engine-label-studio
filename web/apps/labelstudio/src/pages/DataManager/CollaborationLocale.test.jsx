@@ -53,6 +53,32 @@ describe("collaboration locale projections", () => {
     downloadFile.mockReset();
   });
 
+  it.each(["en-US", "zh-CN"])("keeps the last package decision saved without falling into project history in %s", async (locale) => {
+    let reviewed = false;
+    mockCallApi.mockImplementation((method, options) => {
+      if (method === "reviewableSubmissions") {
+        expect(options.params.task_package).toBe(7);
+        return Promise.resolve(reviewed ? { error: true, $meta: { ok: false, status: 404 } } : { results: [submission] });
+      }
+      if (method === "reviewSubmission") {
+        expect(options.params).toEqual({ submissionPk: 21, task_package: 7 });
+        reviewed = true;
+        return Promise.resolve({ ...submission, status: "approved" });
+      }
+      throw new Error(`must not fall back to ${method}`);
+    });
+    const { runtime, unmount } = mount(<ReviewerWorkspace projectId={4} packageId={7} />);
+    act(() => runtime.updateLocale(locale));
+    await screen.findByTestId("review-result-hash");
+    fireEvent.click(screen.getByTestId("review-approve"));
+    await screen.findByTestId("review-detail-empty");
+    expect(screen.getByRole("status").textContent).toContain("21");
+    expect(screen.getByTestId("package-review-scope").textContent).toContain("#7");
+    expect(screen.queryByTestId("review-history-empty")).toBeNull();
+    expect(mockCallApi.mock.calls.map(([method]) => method)).toEqual(["reviewableSubmissions", "reviewSubmission", "reviewableSubmissions"]);
+    unmount(); runtime.destroy();
+  });
+
   it("changes member labels while preserving role code and member identity", async () => {
     mockCallApi.mockImplementation((method) => {
       if (method === "projectMembers") return Promise.resolve({ results: [{ id: 7, user: { id: 8, email: "member@example.test" }, role: "annotator", enabled: true }] });
