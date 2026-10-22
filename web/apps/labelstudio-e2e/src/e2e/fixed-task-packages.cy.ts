@@ -58,7 +58,21 @@ describe('fixed packages reuse existing work without dispatch', () => {
       cy.get('[data-testid="task-packages"] table tbody tr td:first-child').each(($cell) => {
         expect($cell.text()).not.to.eq(String(fixture.tasks.b.id));
       });
-      cy.get('[data-testid="task-packages"] a').first().should('have.attr', 'href').and('include', `/projects/${project}/data?task=`);
+      cy.contains('[data-testid="task-packages"] a', zh ? '在此包内连续标注' : 'Continue annotation in this package')
+        .should('have.attr', 'href').then((href) => {
+          const url = new URL(String(href), Cypress.config('baseUrl')!);
+          expect(url.pathname).to.eq(path);
+          expect(url.searchParams.get('labeling')).to.eq('1');
+          expect(url.searchParams.get('task_package')).to.eq(String(packageId));
+          expect(url.searchParams.has('task')).to.eq(false);
+        });
+      cy.get('[data-testid="task-packages"] table tbody a').should('exist').each(($link) => {
+        const url = new URL($link.attr('href')!, Cypress.config('baseUrl')!);
+        expect(url.pathname).to.eq(path);
+        expect(url.searchParams.get('task')).to.eq($link.closest('tr').find('td').first().text());
+        expect(url.searchParams.get('task_package')).to.eq(String(packageId));
+        expect(url.searchParams.has('labeling')).to.eq(false);
+      });
       cy.then(() => cy.request(`${base}${packageId}/`)).then(({ body, headers }) => {
         expect(headers['cache-control']).to.eq('private, no-store');
         expect(body.counts).not.to.have.property('fixed_tasks');
