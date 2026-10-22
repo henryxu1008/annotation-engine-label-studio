@@ -1,6 +1,6 @@
 # #79 approved Submission batch export — design for confirmation
 
-Status: **DESIGN_CONFIRMED / LOCAL_IMPLEMENTATION / NOT_MERGED / NOT_DEPLOYED**.
+Status: **DESIGN_CONFIRMED / MERGED_IN_PR_98 / NOT_DEPLOYED**.
 Prepared 2026-10-21 against `main@88809e618a34292c512dd75cb85ce24e52ddae59`.
 The user confirmed this design and authorized isolated implementation/testing on
 2026-10-21. The following is the confirmed design baseline; see the

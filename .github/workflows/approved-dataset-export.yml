@@ -13,7 +13,7 @@ permissions:
 jobs:
   approved-export:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17-alpine
@@ -60,7 +60,7 @@ jobs:
         working-directory: label_studio
         run: |
           poetry run python manage.py makemigrations --check --dry-run
-          poetry run pytest -q data_export/tests/test_approved_exports.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py io_storages/tests/test_localfiles_view.py io_storages/tests/test_localfiles_validation.py io_storages/tests/test_localfiles_serializers.py io_storages/tests/test_localfiles_functions.py io_storages/tests/test_localfiles_export.py --junitxml=/tmp/issue79-postgres.xml
+          poetry run pytest -q data_export/tests/test_approved_exports.py data_export/tests/test_release_snapshots.py data_export/tests/test_snapshot_host_contract.py data_export/tests/test_snapshot_concurrency.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py io_storages/tests/test_localfiles_view.py io_storages/tests/test_localfiles_validation.py io_storages/tests/test_localfiles_serializers.py io_storages/tests/test_localfiles_functions.py io_storages/tests/test_localfiles_export.py --junitxml=/tmp/issue79-postgres.xml
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -78,7 +78,8 @@ jobs:
           poetry run python label_studio/manage.py migrate --noinput
           poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
           poetry run python label_studio/manage.py collectstatic --noinput
-          poetry run python label_studio/manage.py seed_approved_export_e2e --output web/apps/labelstudio-e2e/.approved-export-e2e.json --policy-output /tmp/issue79-policy.json
+          poetry run python label_studio/manage.py seed_release_snapshot_e2e --output web/apps/labelstudio-e2e/.release-snapshot-e2e.json --policy-output /tmp/issue79-policy.json
+          cp web/apps/labelstudio-e2e/.release-snapshot-e2e.json web/apps/labelstudio-e2e/.approved-export-e2e.json
           echo "APPROVED_EXPORT_POLICY=$(python -c 'import json;print(json.dumps(json.load(open("/tmp/issue79-policy.json")),separators=(",",":")))')" >> "$GITHUB_ENV"
       - name: Start isolated application and RQ worker
         run: |
@@ -92,6 +93,9 @@ jobs:
       - name: Real en-US and zh-CN batch export journeys
         working-directory: web
         run: yarn cypress run --browser chrome --project apps/labelstudio-e2e --config-file cypress.approved-export.config.ts
+      - name: Real en-US and zh-CN ReleaseManifest, media and diff journeys
+        working-directory: web
+        run: yarn cypress run --browser chrome --project apps/labelstudio-e2e --config-file cypress.release-snapshot.config.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:

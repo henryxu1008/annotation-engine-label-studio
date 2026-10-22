@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:annotation-engine:ReleaseManifest:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "canonicalization", "snapshot_id", "origin_mode", "content", "content_digest", "receipt", "artifacts", "media", "generated_at", "created_by", "access_policy", "capture_authorization"],
+  "properties": {
+    "schema": {"const": "ReleaseManifest/v1"},
+    "canonicalization": {"const": "RFC8785"},
+    "snapshot_id": {"$ref": "#/$defs/uuid"},
+    "origin_mode": {"const": "fork_approved"},
+    "content_digest": {"$ref": "#/$defs/hash"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "receipt": {"type": "object", "additionalProperties": false, "required": ["release_id", "manifest_sha256", "input_sha256"], "properties": {"release_id": {"$ref": "#/$defs/uuid"}, "manifest_sha256": {"$ref": "#/$defs/hash"}, "input_sha256": {"$ref": "#/$defs/hash"}}},
+    "created_by": {"type": "object", "additionalProperties": false, "required": ["principal_id", "local_user_id"], "properties": {"principal_id": {"type": "string", "minLength": 1}, "local_user_id": {"$ref": "#/$defs/id"}}},
+    "access_policy": {"type": "object", "additionalProperties": false, "required": ["mode", "version", "source_namespace"], "properties": {"mode": {"const": "fork_approved"}, "version": {"type": "string", "minLength": 1}, "source_namespace": {"$ref": "#/$defs/uuid"}}},
+    "capture_authorization": {"type": "object", "additionalProperties": false, "required": ["decision", "effective_role", "phase", "receipt_id", "decided_at"], "properties": {"decision": {"const": "allow"}, "effective_role": {"const": "manager"}, "phase": {"const": "snapshot_finalize"}, "receipt_id": {"$ref": "#/$defs/id"}, "decided_at": {"type": "string", "minLength": 1}}},
+    "artifacts": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["id", "name", "format", "sha256", "size_bytes", "record_count", "provenance"], "properties": {"id": {"$ref": "#/$defs/uuid"}, "name": {"enum": ["records.json", "records.jsonl", "conll2003.zip"]}, "format": {"enum": ["JSON", "JSONL", "CONLL2003"]}, "sha256": {"$ref": "#/$defs/hash"}, "size_bytes": {"type": "integer", "minimum": 0, "maximum": 268435456}, "record_count": {"type": "integer", "minimum": 1, "maximum": 10000}, "provenance": {"type": "object"}}}},
+    "media": {"type": "array", "maxItems": 10000, "items": {"type": "object", "additionalProperties": false, "required": ["blob_id", "sha256", "size_bytes", "upload_id", "submission_id", "field", "reference"], "properties": {"blob_id": {"$ref": "#/$defs/uuid"}, "sha256": {"$ref": "#/$defs/hash"}, "size_bytes": {"$ref": "#/$defs/size"}, "upload_id": {"$ref": "#/$defs/id"}, "submission_id": {"$ref": "#/$defs/id"}, "field": {"type": "string", "minLength": 1}, "reference": {"type": "string", "pattern": "^/data/upload/"}}}},
+    "content": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "source_namespace", "organization_id", "project_id", "ordering", "revision_policy", "label_config_sha256", "schema_sha256", "schema_profile", "record_canonicalization", "snapshot_canonicalization", "native_mapping_version", "runtime", "output", "filters", "media_profile", "media_freeze_semantics", "items"],
+      "properties": {
+        "schema": {"const": "release-content/v1"}, "source_namespace": {"$ref": "#/$defs/uuid"}, "organization_id": {"$ref": "#/$defs/id"}, "project_id": {"$ref": "#/$defs/id"},
+        "ordering": {"const": "submission_id:numeric:asc"}, "revision_policy": {"const": "explicit_one_per_assignment"}, "label_config_sha256": {"$ref": "#/$defs/hash"}, "schema_sha256": {"$ref": "#/$defs/hash"}, "schema_profile": {"const": "label-studio-exact-xml/v1"},
+        "record_canonicalization": {"const": "python-json-export-v1"}, "snapshot_canonicalization": {"const": "python-json-snapshot-v1"}, "native_mapping_version": {"type": "string", "minLength": 1}, "runtime": {"type": "object"},
+        "output": {"type": "object", "additionalProperties": false, "required": ["format", "resource_mode"], "properties": {"format": {"enum": ["JSON", "JSONL", "CONLL2003"]}, "resource_mode": {"const": "references_only"}}},
+        "filters": {"type": "object", "additionalProperties": false, "properties": {"task_id": {"$ref": "#/$defs/id"}, "assignment_id": {"$ref": "#/$defs/id"}, "submitted_from": {"type": "string"}, "submitted_to": {"type": "string"}, "reviewed_from": {"type": "string"}, "reviewed_to": {"type": "string"}}},
+        "media_profile": {"enum": ["no-media/v1", "managed-upload-capture/v1"]}, "media_freeze_semantics": {"const": "snapshot_capture_not_submission_time"},
+        "items": {"type": "array", "minItems": 1, "maxItems": 10000, "items": {"type": "object", "additionalProperties": false, "required": ["source", "project_id", "task_id", "assignment_id", "revision", "result_hash", "record_sha256", "media"], "properties": {
+          "source": {"type": "object", "additionalProperties": false, "required": ["namespace", "kind", "id"], "properties": {"namespace": {"$ref": "#/$defs/uuid"}, "kind": {"const": "IMMUTABLE_SUBMISSION"}, "id": {"$ref": "#/$defs/id"}}},
+          "project_id": {"$ref": "#/$defs/id"}, "task_id": {"$ref": "#/$defs/id"}, "assignment_id": {"$ref": "#/$defs/id"}, "revision": {"$ref": "#/$defs/id"}, "result_hash": {"$ref": "#/$defs/hash"}, "record_sha256": {"$ref": "#/$defs/hash"}, "media": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["field", "reference", "sha256", "size_bytes", "upload_id"], "properties": {"field": {"type": "string"}, "reference": {"type": "string"}, "sha256": {"$ref": "#/$defs/hash"}, "size_bytes": {"$ref": "#/$defs/size"}, "upload_id": {"$ref": "#/$defs/id"}}}}
+        }}}
+      }
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "uuid": {"type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"},
+    "id": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"},
+    "size": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,8})$"}
+  }
+}

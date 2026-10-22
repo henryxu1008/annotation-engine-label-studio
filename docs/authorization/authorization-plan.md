@@ -1,6 +1,11 @@
 # Authorization integration plan
 
-## #79 approved Submission batch export (PR review)
+Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
+on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
+live authority, PostgreSQL freeze guards and Core-only denial across upgrades.
+This is source evidence, not a Host DatasetVersion, Core review or business publication.
+
+## #79 approved Submission batch export (merged PR #98)
 
 The [approved Submission batch export design](approved-dataset-export-design.md)
 was confirmed against `main@88809e61`. The [local implementation](approved-dataset-export.md) adds a separate,

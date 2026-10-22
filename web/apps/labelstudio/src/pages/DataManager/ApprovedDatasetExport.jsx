@@ -5,6 +5,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { downloadFile } from "../../utils/download";
 import { cn } from "../../utils/bem";
 import "./ApprovedDatasetExport.scss";
+import { ReleaseSnapshots } from "./ReleaseSnapshots";
 
 export const ApprovedDatasetExport = ({ projectId }) => {
   const api = useAPI();
@@ -223,6 +224,7 @@ export const ApprovedDatasetExport = ({ projectId }) => {
         {(batch.artifacts ?? []).map((artifact) => <button type="button" key={artifact.id} data-testid={`batch-download-${artifact.format}`}
           disabled={busy} onClick={() => download(artifact)}>{t("batchDownload", { format: artifact.format })}</button>)}
         {batch.state === "ready" && <button type="button" data-testid="batch-download-manifest" disabled={busy} onClick={downloadManifest}>{t("batchDownloadManifest")}</button>}
+        {batch.state === "ready" && <ReleaseSnapshots key={batch.release_id} projectId={projectId} releaseId={batch.release_id} />}
       </div>}
     </div>}
   </section>;
