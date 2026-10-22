@@ -854,3 +854,12 @@ existing project-manager policy before serializer health/setup can contact a URL
 Uploaded media retains its existing project-member policy, not assignment-only
 visibility. External-storage proxy/presign, local-storage roots and avatar
 identity migration are outside this slice and have no new runtime acceptance.
+
+Callers that wrap `create_submission` in an outer transaction must acquire the
+same Project/eligibility -> Task -> Assignment fence before any lower-level
+lock or Annotation save; model signals can write Task rows too. The existing
+`create_enterprise_e2e_submission` command now follows that order for existing
+shared tasks. Real PostgreSQL command/API interleavings cover command-first
+submission followed by revocation and revocation/cancellation/reassignment-first
+refusal without modifying the old Annotation. Seed commands only submit resources
+created in their own uncommitted transaction; API callers already use the fence.

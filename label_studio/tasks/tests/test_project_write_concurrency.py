@@ -2,13 +2,17 @@
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import close_old_connections, connection, transaction
 from django.test import TransactionTestCase
 from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.test import APIClient
 from tasks.models import ReviewDecision, Submission, TaskAssignment
 from tasks.submissions import create_submission
@@ -118,7 +122,83 @@ class TestProjectWriteConcurrency(TransactionTestCase):
         assert self.assignment.status == TaskAssignment.Status.CANCELLED
         assert Submission.objects.filter(assignment=self.assignment).count() == 1
 
-    def _revocation_wins(self, *, cancel=False, reassign=False):
+    def test_submission_command_and_member_revocation_have_no_reverse_lock_cycle(self):
+        self.annotator.email = 'e2e-annotator-a@example.com'
+        self.annotator.save(update_fields=['email'])
+        first_lock = threading.Event()
+        revocation_attempted = threading.Event()
+        revocation_locked_project = threading.Event()
+        locks = []
+
+        def command_sql(execute, sql, params, many, context):
+            if sql.startswith('UPDATE "task_completion"'):
+                assert '"project"' in locks[0]
+                assert any('"task"' in lock for lock in locks)
+                assert any('"tasks_taskassignment"' in lock for lock in locks)
+            result = execute(sql, params, many, context)
+            if 'FOR UPDATE' in sql:
+                locks.append(sql)
+                if len(locks) == 1:
+                    first_lock.set()
+                    assert revocation_attempted.wait(8)
+                    if '"tasks_taskassignment"' in sql:
+                        assert revocation_locked_project.wait(8)
+            return result
+
+        def revocation_sql(execute, sql, params, many, context):
+            project_lock = 'FOR UPDATE' in sql and '"project"' in sql
+            if project_lock:
+                revocation_attempted.set()
+            result = execute(sql, params, many, context)
+            if project_lock:
+                revocation_locked_project.set()
+            return result
+
+        def submit():
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET lock_timeout = '10s'")
+                with connection.execute_wrapper(command_sql):
+                    output = StringIO()
+                    call_command('create_enterprise_e2e_submission', self.task.pk, 'annotator_a', stdout=output)
+                return int(output.getvalue().strip())
+            finally:
+                connection.close()
+
+        revoker = self.client_for(self.manager)
+
+        def revoke():
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET lock_timeout = '10s'")
+                with connection.execute_wrapper(revocation_sql):
+                    return revoker.patch(
+                        f'/api/projects/{self.project.pk}/members/{self.membership.pk}/',
+                        {'enabled': False}, format='json',
+                    ).status_code
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            submitted = pool.submit(submit)
+            assert first_lock.wait(8)
+            revoked = pool.submit(revoke)
+            submission_id = submitted.result(timeout=25)
+            assert revoked.result(timeout=25) == 200
+        self.assignment.refresh_from_db()
+        assert self.assignment.status == TaskAssignment.Status.CANCELLED
+        assert Submission.objects.filter(pk=submission_id, assignment=self.assignment).exists()
+        assert Submission.objects.filter(assignment=self.assignment).count() == 1
+        assert '"project"' in locks[0]
+
+    def _revocation_wins(self, *, cancel=False, reassign=False, command=False):
+        if command:
+            self.annotator.email = 'e2e-annotator-a@example.com'
+            self.annotator.save(update_fields=['email'])
+        original_result = self.annotation.result
+        original_updated_at = self.annotation.updated_at
         project_locked = threading.Event()
         editor_waiting = threading.Event()
         successor = UserFactory(active_organization=self.organization)
@@ -168,6 +248,14 @@ class TestProjectWriteConcurrency(TransactionTestCase):
             try:
                 client = editor_client
                 with connection.execute_wrapper(editor_sql):
+                    if command:
+                        try:
+                            call_command(
+                                'create_enterprise_e2e_submission', self.task.pk, 'annotator_a', stdout=StringIO()
+                            )
+                        except (CommandError, PermissionDenied):
+                            return 403
+                        return 200
                     return client.patch(
                         f'/api/annotations/{self.annotation.pk}/',
                         {
@@ -190,6 +278,9 @@ class TestProjectWriteConcurrency(TransactionTestCase):
         assert not Submission.objects.exists()
         self.assignment.refresh_from_db()
         assert self.assignment.status == TaskAssignment.Status.CANCELLED
+        self.annotation.refresh_from_db()
+        assert self.annotation.result == original_result
+        assert self.annotation.updated_at == original_updated_at
         if reassign:
             new = TaskAssignment.objects.get(task=self.task, status__in=TaskAssignment.ACTIVE_STATUSES)
             assert new.assignee_id == successor.pk
@@ -205,6 +296,15 @@ class TestProjectWriteConcurrency(TransactionTestCase):
 
     def test_cancel_and_new_assignment_do_not_copy_answers_or_accept_old_editor(self):
         self._revocation_wins(cancel=True, reassign=True)
+
+    def test_member_revocation_commits_first_submission_command_is_rejected(self):
+        self._revocation_wins(command=True)
+
+    def test_assignment_cancellation_commits_first_submission_command_is_rejected(self):
+        self._revocation_wins(cancel=True, command=True)
+
+    def test_reassignment_commits_first_submission_command_cannot_modify_old_annotation(self):
+        self._revocation_wins(cancel=True, reassign=True, command=True)
 
     def test_assignment_create_revalidates_target_after_member_revocation(self):
         create_waiting = threading.Event()
