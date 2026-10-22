@@ -22,9 +22,11 @@ class TestPackageReviewFindings(PackageFixture, APITestCase):
         self.assignment_a = self.assignment(task=self.tasks[0])
         self.assignment(task=self.tasks[1], user=self.other)
 
-    def mapped_request(self, toolbar):
+    def mapped_request(self, toolbar, *, transport_member=True, history=False):
         # Both people are ordinary annotators. A session manager would mask
         # the first candidate query's accidental use of the transport account.
+        if not transport_member:
+            ProjectMember.objects.filter(project=self.project, user=self.other).delete()
         self.client.force_authenticate(self.other)
         principal = Principal(f'test:{self.annotator.pk}', 'test', 'mapped', self.annotator.pk)
         with patch('access_control.identity.get_identity_provider') as provider:
@@ -35,7 +37,8 @@ class TestPackageReviewFindings(PackageFixture, APITestCase):
                     {'selectedItems': {'all': True, 'excluded': []}},
                     format='json',
                 )
-            return self.client.get(f'/api/projects/{self.project.pk}/next/', {'task_package': self.package_a})
+            endpoint = 'label-stream-history' if history else 'next'
+            return self.client.get(f'/api/projects/{self.project.pk}/{endpoint}/', {'task_package': self.package_a})
 
     def test_toolbar_uses_mapped_annotator_before_filtering_queue(self):
         response = self.mapped_request(toolbar=True)
@@ -48,6 +51,74 @@ class TestPackageReviewFindings(PackageFixture, APITestCase):
         assert response.status_code == 200, response.content
         assert response.json()['id'] == self.tasks[0].pk
         assert response.json()['assignment_id'] == self.assignment_a.pk
+
+    def test_toolbar_project_entrance_uses_actor_without_transport_membership(self):
+        response = self.mapped_request(toolbar=True, transport_member=False)
+        assert response.status_code == 200, response.content
+        assert response.json()['assignment_id'] == self.assignment_a.pk
+
+    def test_legacy_next_project_entrance_uses_actor_without_transport_membership(self):
+        response = self.mapped_request(toolbar=False, transport_member=False)
+        assert response.status_code == 200, response.content
+        assert response.json()['assignment_id'] == self.assignment_a.pk
+
+    def test_history_project_entrance_uses_actor_without_transport_membership(self):
+        LabelStreamHistory.objects.create(
+            user=self.annotator,
+            project=self.project,
+            data=[{'taskId': self.tasks[0].pk, 'annotationId': None}],
+        )
+        response = self.mapped_request(toolbar=False, transport_member=False, history=True)
+        assert response.status_code == 200, response.content
+        assert [row['taskId'] for row in response.json()] == [self.tasks[0].pk]
+
+    def test_mapped_package_and_task_reads_without_transport_membership(self):
+        ProjectMember.objects.filter(project=self.project, user=self.other).delete()
+        self.client.force_authenticate(self.other)
+        principal = Principal(f'test:{self.annotator.pk}', 'test', 'mapped', self.annotator.pk)
+        with patch('access_control.identity.get_identity_provider') as provider:
+            provider.return_value.resolve.return_value = principal
+            response = self.detail(self.package_a)
+            assert response.status_code == 200, response.content
+            response = self.client.get(f'/api/tasks/{self.tasks[0].pk}/', {'task_package': self.package_a})
+            assert response.status_code == 200, response.content
+            assert response.json()['assignment_id'] == self.assignment_a.pk
+
+    def entrance_requests(self, *, scoped=True):
+        context = {'task_package': self.package_a} if scoped else {}
+        query = f'project={self.project.pk}&id=next_task' + (f'&task_package={self.package_a}' if scoped else '')
+        return [
+            self.client.post(f'/api/dm/actions/?{query}', {}, format='json'),
+            self.client.get(f'/api/projects/{self.project.pk}/next/', context),
+            self.client.get(f'/api/projects/{self.project.pk}/label-stream-history/', context),
+        ]
+
+    def test_scoped_entrances_never_borrow_transport_managers_project_role(self):
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).delete()
+        self.client.force_authenticate(self.manager)
+        principal = Principal(f'test:{self.annotator.pk}', 'test', 'mapped', self.annotator.pk)
+        with patch('access_control.identity.get_identity_provider') as provider:
+            provider.return_value.resolve.return_value = principal
+            for response in self.entrance_requests():
+                assert response.status_code in (403, 404), response.content
+
+    def test_scoped_entrances_deny_actor_organization_revocation(self):
+        self.annotator.om_through.filter(organization=self.organization).update(deleted_at=self.project.created_at)
+        self.client.force_authenticate(self.manager)
+        principal = Principal(f'test:{self.annotator.pk}', 'test', 'mapped', self.annotator.pk)
+        with patch('access_control.identity.get_identity_provider') as provider:
+            provider.return_value.resolve.return_value = principal
+            for response in self.entrance_requests():
+                assert response.status_code in (403, 404), response.content
+
+    def test_unscoped_entrances_keep_legacy_transport_project_checks(self):
+        ProjectMember.objects.filter(project=self.project, user=self.other).delete()
+        self.client.force_authenticate(self.other)
+        principal = Principal(f'test:{self.annotator.pk}', 'test', 'mapped', self.annotator.pk)
+        with patch('access_control.identity.get_identity_provider') as provider:
+            provider.return_value.resolve.return_value = principal
+            for response in self.entrance_requests(scoped=False):
+                assert response.status_code in (403, 404), response.content
 
     def attach_annotation(self):
         annotation = AnnotationFactory(task=self.tasks[0], completed_by=self.annotator, result=[])

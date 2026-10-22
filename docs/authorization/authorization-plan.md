@@ -905,3 +905,13 @@ a bounded scope check without Project write locks; ordinary progress values
 remain a live projection. PostgreSQL regressions interleave real cancellation,
 reassignment and review APIs with a paused detail read. Existing Editor/submit
 and review write fences remain authoritative independently of these links.
+
+Scoped package navigation resolves its initial Project through the trusted
+actor before legacy transport-user object checks. The toolbar next-task,
+legacy project next-task and label-stream history entrances use the same
+PackageScope authorization as the later task query and response checks.
+Transport membership is neither required for an authorized mapped actor nor
+sufficient for a revoked actor. This migration is limited to explicit package
+context; shared legacy project helpers, global permissions and mutation actions
+retain their existing behavior. API regressions cover both directions and the
+unchanged unscoped denials.

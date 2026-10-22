@@ -715,13 +715,13 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
     queryset = Project.objects.all()
 
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
-        dm_queue = filters_ordering_selected_items_exist(request.data)
-        prepared_tasks = get_prepared_queryset(request, project)
         from access_control.project_operations import EDIT, require_project_operation
         from task_packages.scope import PackageScope
 
-        scope = PackageScope.from_request(request, project)
+        scope = PackageScope.from_project_id(request, self.kwargs['pk'])
+        project = scope.project if scope else self.get_object()
+        dm_queue = filters_ordering_selected_items_exist(request.data)
+        prepared_tasks = get_prepared_queryset(request, project)
         queue_actor = scope.actor if scope else request.user
         allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
         prepared_tasks = prepared_tasks.filter(id__in=allowed_task_ids)
@@ -762,11 +762,10 @@ class LabelStreamHistoryAPI(generics.RetrieveAPIView):
     queryset = Project.objects.all()
 
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
-
         from task_packages.scope import PackageScope
 
-        scope = PackageScope.from_request(request, project)
+        scope = PackageScope.from_project_id(request, self.kwargs['pk'])
+        project = scope.project if scope else self.get_object()
         history = get_label_stream_history(scope.actor if scope else request.user, project)
         if scope:
             allowed = set(scope.tasks(Task.objects.all()).values_list('pk', flat=True))

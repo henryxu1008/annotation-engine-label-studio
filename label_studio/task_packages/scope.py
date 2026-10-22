@@ -4,6 +4,7 @@ import re
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor
+from access_control.project_access import visible_projects_for_actor
 from access_control.project_operations import EDIT
 from django.conf import settings
 from projects.models import Project
@@ -41,6 +42,20 @@ class PackageScope:
     def from_request(cls, request, project):
         package_id = requested_package(request)
         return None if package_id is None else cls(project, *resolve_actor(request), package_id)
+
+    @classmethod
+    def from_project_id(cls, request, project_id):
+        """Resolve scoped entry before legacy transport-user object checks.
+
+        Only an explicit package context uses this migrated path. Other project
+        callers retain their existing permission handling.
+        """
+        package_id = requested_package(request)
+        if package_id is None:
+            return None
+        principal, actor = resolve_actor(request)
+        project = get_object_or_404(visible_projects_for_actor(actor), pk=project_id)
+        return cls(project, principal, actor, package_id)
 
     def task_ids(self):
         return live_items(self.project).filter(package=self.package).values('task_id')
