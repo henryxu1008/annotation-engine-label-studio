@@ -1,6 +1,21 @@
 # Authorization integration plan
 
-## #79 approved Submission batch export (PR review)
+Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
+on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
+live authority, PostgreSQL freeze guards and Core-only denial across upgrades.
+This is source evidence, not a Host DatasetVersion, Core review or business publication.
+Keep the shared v1 XML/media profile grammar and the synthetic Host graph checks
+in sync: hashes do not replace native/member/media scope and completeness checks.
+Existing Host bindings must fail closed on copy loss or corruption, including
+when a different operation key requests the same mapping. Real Host enforcement
+and acceptance remain outside this Fork's synthetic contract tests.
+Queue recovery uses `queued_at` from the latest successful enqueue, not request
+creation; migration 0014 preserves READY evidence and retains the rollback fence.
+History/object source checks quarantine shared corrupt source evidence and all
+READY dependents; a private media failure remains snapshot-scoped. The UI must
+remove stale READY actions after integrity failures, as well as authority denial.
+
+## #79 approved Submission batch export (merged PR #98)
 
 The [approved Submission batch export design](approved-dataset-export-design.md)
 was confirmed against `main@88809e61`. The [local implementation](approved-dataset-export.md) adds a separate,

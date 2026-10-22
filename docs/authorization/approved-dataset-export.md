@@ -1,8 +1,9 @@
 # Approved Submission batch export (#79)
 
 The user confirmed the [design](approved-dataset-export-design.md) on 2026-10-21.
-Implementation is isolated from #76 and remains **in PR review / not merged / not
-deployed / not integrated with Core**. A batch is a Fork export receipt, not a Host
+Implementation was isolated from #76 and merged in **PR #98**, at
+`main@c2758fed05665c1258e5cf50ea63db809eaca9b5`; it remains **not deployed / not
+integrated with Core**. A batch is a Fork export receipt, not a Host
 DatasetVersion, Gold certificate or final business publication.
 
 ## Behavior and authority
@@ -179,6 +180,8 @@ separate disposable PostgreSQL database. No rollback may reopen legacy export.
 cross-system `ReleaseManifest v1`, Host DatasetVersion mapping, version comparison,
 durable media checksums/copies, cross-system revocation/retention and historical
 reproducibility guarantees. The Host retains business publication authority.
+The implemented first-version source snapshot and remaining Host boundaries are
+specified in [ReleaseManifest v1](release-manifest-v1.md).
 
 Core-only-review uses the existing authorized ordinary Submission list/detail
 reads. It cannot use these batch routes even if approved Fork records accidentally

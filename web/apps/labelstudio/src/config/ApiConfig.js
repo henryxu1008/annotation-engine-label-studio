@@ -50,6 +50,13 @@ export const API_CONFIG = {
     approvedExportRetry: "POST:/projects/:pk/approved-dataset-releases/:releaseId/retry/",
     approvedExportDownload: "GET:/projects/:pk/approved-dataset-releases/:releaseId/artifacts/:artifactId/download/",
     approvedExportManifest: "GET:/projects/:pk/approved-dataset-releases/:releaseId/manifest/",
+    releaseSnapshotCreate: "POST:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/",
+    releaseSnapshotList: "GET:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/",
+    releaseSnapshotDetail: "GET:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/:snapshotId/",
+    releaseSnapshotRetry: "POST:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/:snapshotId/retry/",
+    releaseSnapshotManifest: "GET:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/:snapshotId/manifest/",
+    releaseSnapshotDiff: "GET:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/:snapshotId/diff/",
+    releaseSnapshotDownload: "GET:/projects/:pk/approved-dataset-releases/:releaseId/snapshots/:snapshotId/assets/:assetId/download/",
 
     // Presigning
     presignUrlForTask: "/../tasks/:taskID/presign",

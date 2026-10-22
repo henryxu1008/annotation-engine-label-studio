@@ -1,3 +1,6 @@
 # Ensure shell script uses LF.
 Dockerfile  eol=lf
 *.sh        eol=lf
+
+# Frozen acceptance bytes must retain their detached checksums on Windows too.
+docs/authorization/issue80-local-acceptance/** -text
