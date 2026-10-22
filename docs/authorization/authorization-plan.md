@@ -19,6 +19,7 @@ assignment tables, including soft-deleted projects and unscoped retained rows.
 Hold PostgreSQL table fences through seeding so an uncommitted ordinary writer
 cannot cross that emptiness check. Both fixture and policy files use exclusive
 creation; existing files and symlinks are refused before database writes.
+The policy basename is reserved so credential and policy destinations stay distinct.
 
 Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'

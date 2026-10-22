@@ -94,6 +94,8 @@ class Command(BaseCommand):
                     raise CommandError('Synthetic membership update did not affect exactly one row')
             self.stdout.write('Synthetic fixture policy updated')
             return
+        if output.name.casefold() == 'fork-policy.json':
+            raise CommandError('Credential output must be distinct from the reserved policy filename')
         policy_output = output.with_name('fork-policy.json')
         if os.path.lexists(output) or os.path.lexists(policy_output):
             raise CommandError('Refusing to reseed/adopt an existing fixture')

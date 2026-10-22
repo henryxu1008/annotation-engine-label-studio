@@ -203,6 +203,15 @@ class TestFixtureSeedIsolation(TestCase):
         with patch.object(command, 'settings', guarded_settings()), patch.dict(os.environ, FORK_HOST_LIVE_SYNTHETIC='1'):
             call_command('seed_fork_host_live', output=str(output), action='seed', role='fetch')
 
+    def test_policy_filename_cannot_alias_the_credential_output(self):
+        for name in ('fork-policy.json', 'FORK-POLICY.JSON'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(CommandError):
+                    self.invoke(Path(directory) / name)
+                self.assertEqual(list(Path(directory).iterdir()), [])
+                self.assertEqual(User.objects.count(), 0)
+                self.assertEqual(Organization.objects.count(), 0)
+
     def test_retained_business_roots_are_not_adopted(self):
         from django.utils import timezone
 
