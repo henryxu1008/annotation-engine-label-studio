@@ -557,3 +557,67 @@ class TestReleaseSnapshots(APITestCase):
         snapshot.refresh_from_db()
         assert snapshot.state == "failed"
         assert snapshot.manifest is None
+
+    def test_diff_checks_the_other_capture_creator_after_role_revocation(self):
+        from projects.models import ProjectMember
+
+        first = self.capture()
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).update(role="manager")
+        self.client.force_authenticate(self.annotator)
+        second = self.capture(first.release, "other-capture-creator")
+        self.client.force_authenticate(self.manager)
+        assert self.read(first, f"diff/?against={second.pk}").status_code == 200
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).update(role="annotator")
+        assert self.read(first, f"diff/?against={second.pk}").status_code == 403
+        assert self.read(second, f"diff/?against={first.pk}").status_code == 403
+        assert self.read(first, "manifest/").status_code == 200
+        second.refresh_from_db()
+        assert second.state == "ready"  # Authority loss is not payload corruption.
+
+    def test_diff_reports_capture_time_media_change_and_checks_both_payloads(self):
+        with override_settings(MEDIA_ROOT=self.root.name + "/uploads"):
+            first, upload = self.media_snapshot()
+            Path(upload.file.path).write_bytes(b"different capture-time media")
+            second = self.capture(first.release, "later-media-capture")
+            assert second.state == "ready", second.error_code
+            assert first.content_digest != second.content_digest
+            response = self.read(first, f"diff/?against={second.pk}")
+            assert response.status_code == 200, response.content
+            assert response.json()["counts"] == {"added": 0, "removed": 0, "revised": 1}
+            change = response.json()["changes"][0]
+            assert change["before"]["record_sha256"] == change["after"]["record_sha256"]
+            pin = service.verify(second)["media"][0]
+            (service.directory(second) / pin["blob_id"]).unlink()
+            assert self.read(first, f"diff/?against={second.pk}").status_code == 409
+            assert self.read(first, "manifest/").status_code == 200
+
+    def test_native_upload_under_configured_script_prefix_preserves_original_reference(self):
+        with override_settings(
+            MEDIA_ROOT=self.root.name + "/uploads", FORCE_SCRIPT_NAME="/label-studio", CLOUD_FILE_STORAGE_ENABLED=False
+        ):
+            snapshot, upload = self.media_snapshot()
+            assert snapshot.state == "ready", snapshot.error_code
+            manifest = service.verify(snapshot)
+            assert manifest["media"][0]["reference"] == upload.url
+            assert upload.url.startswith("/label-studio/data/upload/")
+            assert service.upload_for(upload.url.removeprefix("/label-studio"), self.project)[0].pk == upload.pk
+            for reference in (
+                upload.url.replace("/label-studio/", "/another-prefix/"),
+                upload.url + "?token=secret",
+                "/label-studio/data/upload/../secret",
+                "/label-studio/data/upload/%2e%2e/secret",
+                "https://example.test" + upload.url,
+            ):
+                with self.assertRaises(Exception) as denied:
+                    service.upload_for(reference, self.project)
+                assert str(denied.exception.detail) == "MEDIA_SOURCE_UNSUPPORTED"
+
+    def test_corrupt_source_receipt_quarantines_ready_snapshot(self):
+        from data_export.approved_models import ApprovedDatasetRelease
+
+        snapshot = self.capture()
+        ApprovedDatasetRelease.objects.filter(pk=snapshot.release_id).update(manifest=b"{}")
+        assert self.read(snapshot, "manifest/").status_code == 409
+        snapshot.refresh_from_db()
+        assert snapshot.state == "quarantined" and snapshot.error_code == "SNAPSHOT_INTEGRITY_FAILED"
+        assert self.read(snapshot, f"diff/?against={snapshot.pk}").status_code == 409

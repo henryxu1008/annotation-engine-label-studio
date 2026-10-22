@@ -4,6 +4,11 @@ Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](rele
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
 live authority, PostgreSQL freeze guards and Core-only denial across upgrades.
 This is source evidence, not a Host DatasetVersion, Core review or business publication.
+Keep the shared v1 XML/media profile grammar and the synthetic Host graph checks
+in sync: hashes do not replace native/member/media scope and completeness checks.
+Existing Host bindings must fail closed on copy loss or corruption, including
+when a different operation key requests the same mapping. Real Host enforcement
+and acceptance remain outside this Fork's synthetic contract tests.
 
 ## #79 approved Submission batch export (merged PR #98)
 

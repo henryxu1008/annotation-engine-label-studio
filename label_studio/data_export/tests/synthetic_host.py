@@ -5,7 +5,7 @@ import json
 import uuid
 
 import rfc8785
-from data_export.release_manifest import validator
+from data_export.release_manifest import media_fields, validator
 
 
 def sha(blob):
@@ -14,6 +14,43 @@ def sha(blob):
 
 class ContractRejected(Exception):
     pass
+
+
+def validate_media_membership(manifest, records):
+    """Bind all three representations before a synthetic Host commit."""
+    expected, members = {}, {}
+    for item, row in zip(manifest["content"]["items"], records, strict=True):
+        try:
+            fields = media_fields(row["result_snapshot"]["project"]["label_config"])
+        except ValueError as exc:
+            raise ContractRejected("SOURCE_PROTOCOL_CONFLICT") from exc
+        sid = item["source"]["id"]
+        for field in fields:
+            expected[sid, field] = row["result_snapshot"]["task"]["data"].get(field)
+        if len(item["media"]) != len(fields) or {p["field"] for p in item["media"]} != set(fields):
+            raise ContractRejected("MEDIA_MEMBERSHIP_CONFLICT")
+        for pin in item["media"]:
+            members[sid, pin["field"]] = pin
+    actual, blobs, uploads = {}, {}, {}
+    for pin in manifest["media"]:
+        key = pin["submission_id"], pin["field"]
+        member = {k: pin[k] for k in ("field", "reference", "sha256", "size_bytes", "upload_id")}
+        if (
+            key in actual
+            or key not in expected
+            or pin["reference"] != expected[key]
+            or member != members.get(key)
+        ):
+            raise ContractRejected("MEDIA_MEMBERSHIP_CONFLICT")
+        actual[key] = member
+        metadata = (pin["sha256"], pin["size_bytes"], pin["upload_id"])
+        upload = (pin["blob_id"], pin["sha256"], pin["size_bytes"])
+        if blobs.get(pin["blob_id"], metadata) != metadata or uploads.get(pin["upload_id"], upload) != upload:
+            raise ContractRejected("MEDIA_MEMBERSHIP_CONFLICT")
+        blobs[pin["blob_id"]], uploads[pin["upload_id"]] = metadata, upload
+    profile = "managed-upload-capture/v1" if expected else "no-media/v1"
+    if set(actual) != set(expected) or manifest["content"]["media_profile"] != profile:
+        raise ContractRejected("MEDIA_MEMBERSHIP_CONFLICT")
 
 
 class SyntheticHost:
@@ -56,6 +93,18 @@ class SyntheticHost:
             {i["assignment_id"] for i in items}
         ) != len(items):
             raise ContractRejected("MEMBERSHIP_CONFLICT")
+        expected_formats = {"JSON": "records.json", "JSONL": "records.jsonl"}
+        if content["output"]["format"] == "CONLL2003":
+            expected_formats["CONLL2003"] = "conll2003.zip"
+        artifacts = manifest["artifacts"]
+        if (
+            len(artifacts) != len(expected_formats)
+            or {a["format"] for a in artifacts} != set(expected_formats)
+            or len({a["id"] for a in artifacts}) != len(artifacts)
+            or {a["id"] for a in artifacts} & {p["blob_id"] for p in manifest["media"]}
+            or any(a["name"] != expected_formats[a["format"]] or a["record_count"] != len(items) for a in artifacts)
+        ):
+            raise ContractRejected("ARTIFACT_MEMBERSHIP_CONFLICT")
         payloads = {}
         for asset in manifest["artifacts"] + manifest["media"]:
             identity = asset.get("id", asset.get("blob_id"))
@@ -67,6 +116,10 @@ class SyntheticHost:
         records = [json.loads(line) for line in payloads[native["id"]].splitlines()]
         if len(records) != len(items):
             raise ContractRejected("MEMBERSHIP_CONFLICT")
+        native_json = next(a for a in artifacts if a["format"] == "JSON")
+        legacy_options = dict(sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        if json.dumps(json.loads(payloads[native_json["id"]]), **legacy_options) != json.dumps(records, **legacy_options):
+            raise ContractRejected("NATIVE_ARTIFACT_CONFLICT")
         source_updates = {}
         for item, row in zip(items, records):
             legacy = json.dumps(
@@ -79,6 +132,10 @@ class SyntheticHost:
             if (
                 sha(raw_snapshot) != row["result_hash"]
                 or sha(xml) != content["label_config_sha256"]
+                or sha(xml) != content["schema_sha256"]
+                or item["project_id"] != content["project_id"]
+                or str(row["result_snapshot"]["project"]["id"]) != content["project_id"]
+                or str(row["result_snapshot"]["task"]["id"]) != item["task_id"]
                 or row["source"]["namespace"] != self.namespace
                 or item["source"]["namespace"] != self.namespace
                 or row["source"]["kind"] != "submission"
@@ -107,13 +164,14 @@ class SyntheticHost:
             if source_key in self.sources and self.sources[source_key] != item["record_sha256"]:
                 raise ContractRejected("SOURCE_IDENTITY_CONFLICT")
             source_updates[source_key] = item["record_sha256"]
+        validate_media_membership(manifest, records)
         # Synthetic local atomic commit; these fields are NOT a claim about Host implementation.
-        if key in self.operations and any(
+        mapping_key = (target, self.connection, manifest["snapshot_id"], expected_sha)
+        if (key in self.operations or mapping_key in self.bindings) and any(
             self.objects.get(identity) != payload for identity, payload in payloads.items()
         ):
             raise ContractRejected("HOST_COPY_INTEGRITY_FAILED")
         if key not in self.operations:
-            mapping_key = (target, self.connection, manifest["snapshot_id"], expected_sha)
             mapping = self.bindings.get(mapping_key) or str(uuid.uuid4())
             self.bindings[mapping_key] = mapping
             self.operations[key] = {

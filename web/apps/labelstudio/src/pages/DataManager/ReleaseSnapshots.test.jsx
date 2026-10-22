@@ -54,3 +54,39 @@ it.each(["en-US", "zh-CN"])("clears old download controls after denial in %s", a
   expect(downloadFile).not.toHaveBeenCalled();
   unmount(); runtime.destroy();
 });
+
+it.each(["network", "server", "body"])("continues polling after a transient %s failure", async (failure) => {
+  let details = 0;
+  mockCallApi.mockImplementation((name) => {
+    if (name === "releaseSnapshotCreateRaw") return Promise.resolve(raw({ ...snapshot, state: "queued" }));
+    if (name === "releaseSnapshotDetailRaw" && ++details === 1) {
+      if (failure === "network") return Promise.reject(new Error("temporary connection loss"));
+      if (failure === "body") return Promise.resolve({ ok: true, json: async () => { throw new Error("truncated body"); } });
+      return Promise.resolve(raw({}, 503));
+    }
+    return defaults(name);
+  });
+  const { unmount, runtime } = mount();
+  try {
+    fireEvent.click(await screen.findByTestId("snapshot-create"));
+    await screen.findByTestId("snapshot-manifest", {}, { timeout: 6000 });
+    expect(mockCallApi.mock.calls.filter(([name]) => name === "releaseSnapshotDetailRaw")).toHaveLength(2);
+  } finally { unmount(); runtime.destroy(); }
+}, 10000);
+
+it.each(["en-US", "zh-CN"])("stops polling after authority denial in %s", async (locale) => {
+  mockCallApi.mockImplementation((name) => {
+    if (name === "releaseSnapshotCreateRaw") return Promise.resolve(raw({ ...snapshot, state: "running" }));
+    if (name === "releaseSnapshotDetailRaw") return Promise.resolve(raw({}, 403));
+    return defaults(name);
+  });
+  const { unmount, runtime } = mount(locale);
+  try {
+    fireEvent.click(await screen.findByTestId("snapshot-create"));
+    await screen.findByTestId("snapshot-error", {}, { timeout: 4000 });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1700)); });
+    expect(mockCallApi.mock.calls.filter(([name]) => name === "releaseSnapshotDetailRaw")).toHaveLength(1);
+    expect(screen.queryByTestId("snapshot-status")).toBeNull();
+    expect(screen.queryByTestId("snapshot-manifest")).toBeNull();
+  } finally { unmount(); runtime.destroy(); }
+}, 10000);

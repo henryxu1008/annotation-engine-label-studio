@@ -139,6 +139,10 @@ fsynced before READY; a missing retained object still fails closed after restore
 
 First version supports inline Text and direct Image/Audio/AudioPlus/Video/Pdf
 references to native `/data/upload/...` FileUploads owned by the exact Project.
+The configured `FORCE_SCRIPT_NAME` prefix is also accepted at its exact path
+boundary; arbitrary prefixes remain denied. The original reference is preserved
+in the native record and Manifest, including the prefix. The portable schema
+allows prefixed native paths, while the resolver enforces the live configuration.
 Resolve references through FileUpload membership, not a client path or URL fetch.
 Files must be literal regular local files under MEDIA_ROOT; symlink components,
 foreign uploads, traversal, arbitrary HTTP/LocalFiles, URL-valued Text, HyperText,
@@ -163,6 +167,11 @@ whole snapshot's content and quarantines corrupt snapshot payloads; no in-place
 rebuild occurs. Download checks the same descriptor that is subsequently streamed;
 HEAD/Range/If-Range never skip current authorization or integrity checks. Private
 bytes remain no-store attachments, never static, signed public URLs or UI embeds.
+Source receipt/hash/inventory failure also quarantines a previously READY
+snapshot; it must not continue advertising READY after its evidence chain fails.
+Current authority denial remains distinct and does not mark sound bytes corrupt.
+UI polling survives transient network/server/body failures, but stops on authority
+denial, selection changes or unmount; stale responses cannot restore controls.
 
 ## Difference semantics
 
@@ -216,6 +225,16 @@ same-source conflict, mapping replay, lost response/lookup and revocation. Its
 synthetic `ACCEPTED_SOURCE` receipt explicitly has `gold_certified=false` and
 `published=false`. It is not imported by production code or connected to a Host
 database. Real controlled-Fork adapter/source-binding gaps remain independent.
+
+PR #100 review tightened the synthetic admission contract: member project/task
+assertions and both native JSON representations must agree; the artifact inventory
+must contain every declared output with exact member counts. The shared v1 XML
+profile grammar defines required media fields. Native references, per-member pins
+and the envelope inventory must form one complete graph, with no missing, duplicate
+or conflicting bindings. Self-consistent hashes alone do not establish this.
+Reusing an existing target/snapshot binding under a new operation key must validate
+the retained Host copy; it cannot silently repair a missing/corrupt object. These
+are synthetic contract checks, not fixes or acceptance evidence for the real Host.
 
 ## Rollback and verification
 

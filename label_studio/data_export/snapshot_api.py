@@ -24,22 +24,25 @@ class ReleaseSnapshotAPI(ApprovedExportAPI):
 
     def gate(self, snapshot, *, content=True):
         service.identity(snapshot, self.project)
-        service.receipt_gate(snapshot.release)
-        if content:
-            try:
+        try:
+            service.receipt_gate(snapshot.release)
+            if content:
                 manifest = service.verify(snapshot)
                 # All immutable payloads, including media, must still be available.
                 for asset in service.assets(snapshot, manifest).values():
                     with service.checked_file(asset["path"], asset["sha256"], asset["size_bytes"]):
                         pass
-            except APIException as exc:
-                if str(exc.detail) in {"SNAPSHOT_INTEGRITY_FAILED", "MANIFEST_INVALID"}:
-                    Snapshot.objects.filter(pk=snapshot.pk, state="ready").update(
-                        state="quarantined", error_code="SNAPSHOT_INTEGRITY_FAILED"
-                    )
-                raise
-        else:
-            manifest = None
+            else:
+                manifest = None
+        except APIException as exc:
+            if str(exc.detail) in {
+                "SNAPSHOT_INTEGRITY_FAILED", "MANIFEST_INVALID", "ARTIFACT_INTEGRITY_FAILED",
+                "SNAPSHOT_HASH_MISMATCH", "SOURCE_UNAVAILABLE", "SOURCE_NOT_READY",
+            }:
+                Snapshot.objects.filter(pk=snapshot.pk, state="ready").update(
+                    state="quarantined", error_code="SNAPSHOT_INTEGRITY_FAILED"
+                )
+            raise
         base.audit(self.project, self.principal, self.actor, "snapshot_read", release=snapshot.release)
         return manifest
 

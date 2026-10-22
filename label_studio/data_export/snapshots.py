@@ -15,7 +15,6 @@ from urllib.parse import unquote, urlsplit
 
 import rfc8785
 from data_import.models import FileUpload
-from defusedxml import ElementTree
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -24,13 +23,13 @@ from rest_framework.exceptions import APIException
 
 from . import approved as base
 from .approved_models import ApprovedDatasetReleaseAccessEvent as AccessEvent
+from .release_manifest import media_fields as profile_media_fields
 from .release_manifest import validator
 from .snapshot_models import ReleaseSnapshot as Snapshot
 
 SCHEMA = "ReleaseManifest/v1"
 MEDIA_LIMIT = 64 * 1024**2
 TOTAL_MEDIA_LIMIT = 256 * 1024**2
-MEDIA_TAGS = {"Image", "Audio", "AudioPlus", "Video", "Pdf", "HyperText", "TimeSeries"}
 ACTIVE = ("dispatch_pending", "queued", "running")
 
 
@@ -95,25 +94,9 @@ def directory(snapshot):
 
 def media_fields(xml):
     try:
-        tree = ElementTree.fromstring(xml)
-    except Exception:
+        return profile_media_fields(xml)
+    except ValueError:
         base.fail("MEDIA_SCHEMA_UNSUPPORTED", 422)
-    fields = set()
-    for node in tree.iter():
-        tag = node.tag.rsplit("}", 1)[-1]
-        if tag == "Text" and node.attrib.get("valueType", "text") != "text":
-            base.fail("MEDIA_SCHEMA_UNSUPPORTED", 422)
-        if tag in MEDIA_TAGS:
-            # HTML, time series and multi-resource transforms require separate resolvers.
-            if tag not in {"Image", "Audio", "AudioPlus", "Video", "Pdf"}:
-                base.fail("MEDIA_SCHEMA_UNSUPPORTED", 422)
-            value = node.attrib.get("value", "")
-            if not re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*", value):
-                base.fail("MEDIA_SCHEMA_UNSUPPORTED", 422)
-            fields.add(value[1:])
-        elif node.attrib.get("value", "").startswith("$") and tag != "Text":
-            base.fail("MEDIA_SCHEMA_UNSUPPORTED", 422)
-    return sorted(fields)
 
 
 def upload_for(reference, project):
@@ -125,6 +108,9 @@ def upload_for(reference, project):
         base.fail("MEDIA_SOURCE_UNSUPPORTED", 422)
     prefix = "/data/upload/"
     decoded = unquote(parsed.path)
+    script = unquote(settings.FORCE_SCRIPT_NAME or "").rstrip("/")
+    if script and decoded.startswith(script + prefix):
+        decoded = decoded[len(script) :]
     if not decoded.startswith(prefix) or any(p in ("", ".", "..") for p in decoded[len(prefix) :].split("/")):
         base.fail("MEDIA_SOURCE_UNSUPPORTED", 422)
     name = "upload/" + decoded[len(prefix) :]

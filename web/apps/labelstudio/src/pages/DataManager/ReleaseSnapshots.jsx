@@ -40,8 +40,13 @@ export const ReleaseSnapshots = ({ projectId, releaseId }) => {
       }
       return null;
     }
-    const result = binary ? await response.blob() : await response.json();
-    return start === epoch.current ? result : null;
+    try {
+      const result = binary ? await response.blob() : await response.json();
+      return start === epoch.current ? result : null;
+    } catch {
+      if (start === epoch.current) setError("SNAPSHOT_GENERATION_FAILED");
+      return null;
+    }
   };
   const operations = useRef({ request });
   operations.current = { request };
@@ -60,11 +65,17 @@ export const ReleaseSnapshots = ({ projectId, releaseId }) => {
     if (!snapshot || !["queued", "running", "dispatch_pending"].includes(snapshot.state)) return;
     const start = epoch.current;
     const id = snapshot.snapshot_id;
-    const timer = setTimeout(async () => {
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      if (cancelled || start !== epoch.current || selected.current !== id) return;
       const value = await operations.current.request("releaseSnapshotDetail", { params: { snapshotId: id } });
-      if (value && start === epoch.current && selected.current === id) setSnapshot(value);
-    }, 1500);
-    return () => clearTimeout(timer);
+      if (cancelled || start !== epoch.current || selected.current !== id) return;
+      if (value) { setSnapshot(value); setError(""); }
+      timer = setTimeout(poll, 1500);
+    };
+    timer = setTimeout(poll, 1500);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [snapshot]);
 
   const run = async (operation) => {

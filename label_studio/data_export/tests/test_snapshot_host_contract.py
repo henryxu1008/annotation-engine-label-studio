@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 
@@ -124,6 +125,9 @@ class TestSnapshotHostContract(APITestCase):
         host.objects[next(iter(host.objects))] = b"corrupted host copy"
         with pytest.raises(ContractRejected, match="HOST_COPY_INTEGRITY_FAILED"):
             host.accept("operation", snapshot.manifest_sha256, manifest, asset)
+        with pytest.raises(ContractRejected, match="HOST_COPY_INTEGRITY_FAILED"):
+            host.accept("another-operation", snapshot.manifest_sha256, manifest, asset)
+        assert len(host.operations) == len(host.bindings) == 1
 
     def test_actual_conll_converter_artifact_and_provenance_survive_handoff(self):
         snapshot = self.capture(self.frozen(self.body(fmt="CONLL2003")))
@@ -134,3 +138,76 @@ class TestSnapshotHostContract(APITestCase):
         assert document["content"]["runtime"]["sdk_version"] == "2.0.18"
         result = host.accept("standard-format", snapshot.manifest_sha256, manifest, asset)
         assert result["state"] == "ACCEPTED_SOURCE" and len(host.objects) == 3
+
+    def test_rejects_member_project_disagreement_before_host_commit(self):
+        snapshot, host, fetch, asset = self.fixture()
+        document = json.loads(fetch())
+        document["content"]["items"][0]["project_id"] = str(self.project.pk + 1000)
+        document["content_digest"] = sha(rfc8785.dumps(document["content"]))
+        blob = rfc8785.dumps(document)
+        with pytest.raises(ContractRejected, match="SOURCE_FINGERPRINT_CONFLICT"):
+            host.accept("wrong-member-project", sha(blob), lambda: blob, asset)
+        assert not host.operations and not host.bindings and not host.objects
+
+    def test_rejects_incomplete_or_inconsistent_media_graph_before_host_commit(self):
+        with override_settings(MEDIA_ROOT=self.root.name + "/uploads"):
+            snapshot, _ = self.media_snapshot()
+            snapshot, host, fetch, asset = self.fixture(snapshot)
+            original = json.loads(fetch())
+            for case in (
+                "missing_inventory", "missing_member", "both_missing", "duplicate_pin", "wrong_field", "wrong_member_hash"
+            ):
+                with self.subTest(case=case):
+                    document = copy.deepcopy(original)
+                    if case in ("missing_inventory", "both_missing"):
+                        document["media"] = []
+                    if case in ("missing_member", "both_missing"):
+                        document["content"]["items"][0]["media"] = []
+                    if case == "both_missing":
+                        document["content"]["media_profile"] = "no-media/v1"
+                    if case == "duplicate_pin":
+                        document["media"].append(copy.deepcopy(document["media"][0]))
+                    if case == "wrong_field":
+                        document["media"][0]["field"] = "another_field"
+                    if case == "wrong_member_hash":
+                        document["content"]["items"][0]["media"][0]["sha256"] = "0" * 64
+                    document["content_digest"] = sha(rfc8785.dumps(document["content"]))
+                    blob = rfc8785.dumps(document)
+                    with pytest.raises(ContractRejected, match="MEDIA_MEMBERSHIP_CONFLICT"):
+                        host.accept(case, sha(blob), lambda: blob, asset)
+                    assert not host.operations and not host.bindings and not host.objects
+
+    def test_artifact_inventory_and_both_native_representations_must_agree(self):
+        snapshot, host, fetch, asset = self.fixture()
+        original = json.loads(fetch())
+        for case in ("wrong_count", "duplicate_format", "missing_standard", "different_json"):
+            with self.subTest(case=case):
+                document = copy.deepcopy(original)
+                replacements = {}
+                if case == "wrong_count":
+                    document["artifacts"][0]["record_count"] += 1
+                if case == "duplicate_format":
+                    document["artifacts"][0]["format"] = document["artifacts"][1]["format"]
+                if case == "missing_standard":
+                    document["content"]["output"]["format"] = "CONLL2003"
+                if case == "different_json":
+                    native = next(a for a in document["artifacts"] if a["format"] == "JSON")
+                    replacements[native["id"]] = b"[]"
+                    native["sha256"], native["size_bytes"] = sha(b"[]"), 2
+                document["content_digest"] = sha(rfc8785.dumps(document["content"]))
+                blob = rfc8785.dumps(document)
+                expected = "NATIVE_ARTIFACT_CONFLICT" if case == "different_json" else "ARTIFACT_MEMBERSHIP_CONFLICT"
+                with pytest.raises(ContractRejected, match=expected):
+                    host.accept(case, sha(blob), lambda: blob, lambda identity: replacements.get(identity) or asset(identity))
+                assert not host.operations and not host.bindings and not host.objects
+
+    def test_new_operation_reuses_only_a_healthy_existing_binding(self):
+        snapshot, host, fetch, asset = self.fixture()
+        first = host.accept("first", snapshot.manifest_sha256, fetch, asset)
+        second = host.accept("second", snapshot.manifest_sha256, fetch, asset)
+        assert first["dataset_version_id"] == second["dataset_version_id"]
+        assert len(host.operations) == 2 and len(host.bindings) == 1
+        host.objects.clear()
+        with pytest.raises(ContractRejected, match="HOST_COPY_INTEGRITY_FAILED"):
+            host.accept("third", snapshot.manifest_sha256, fetch, asset)
+        assert len(host.operations) == 2 and not host.objects
