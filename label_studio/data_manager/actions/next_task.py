@@ -53,7 +53,7 @@ def next_task(project, queryset, **kwargs):
     if scope:
         scope = PackageScope.from_request(request, project)
         require_project_operation(scope.project, EDIT)
-        scope.require_task(next_task)
+        scope.require_task(next_task, response)
     response['queue'] = queue_info
     return response
 

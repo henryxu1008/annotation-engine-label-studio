@@ -44,7 +44,7 @@ Further reproduction found two linked continuation failures: project-wide stream
 
 Reuse this chat's clean managed worktree and stopped owned PostgreSQL/test/frontend/browser containers, with a fresh synthetic database and temporary source/assets. Preserve the six retained #76 containers, all data volumes, primary dirty checkout and prior sealed reports. Do not use the other executor's fork-host-raw-live checkout. IAM recovery and Core business integration remain deferred.
 
-## Local acceptance (2026-10-22)
+## Original candidate acceptance (5ff52f4a2, 2026-10-22)
 
 - PostgreSQL: 197 selected package, assignment authorization, submission/review, project-operation, personal-work and real write-concurrency regressions passed.
 - SQLite: 50 passed; 5 PostgreSQL-specific concurrency cases skipped here and covered on PostgreSQL.
@@ -52,3 +52,13 @@ Reuse this chat's clean managed worktree and stopped owned PostgreSQL/test/front
 - Fresh Edge contexts: six annotation, review and returned-work journeys passed in en-US and zh-CN, each using two synthetic packages. Single-task link/reload, continuous submit, native previous/next, scoped history, exhaustion with B still eligible, direct out-of-package denial, package review refresh, rejection/approval, same-annotation revision 2 with preserved old hash/review, and successful final decision without project-history fallback passed. Zero page exceptions.
 
 This is local candidate evidence, not GitHub CI or retained-pilot/production installation. No migrations, batch assignment, real #86 lifecycle provider, #80 release/content semantics, IAM recovery or Core business integration were exercised or enabled by this slice. #83 remains open.
+
+## Independent review corrections (2026-10-22)
+
+The complete original candidate review requested changes for four reproduced issues. Seven targeted API regressions failed before repair: both next-task entry points filtered with an ordinary transport account before resolving its mapped actor; a cancelled and recreated assignment to the same person still authorized an already-materialized old payload and history annotation reference; a project becoming READ_WORK-only during serialization retained can_label=true; and consuming the last row of review page 2 returned translated invalid-page text without a stable recovery code.
+
+Scoped candidate filtering now starts with the trusted actor. Final task reads compare the serialized assignment ID/version with the current active assignment, recheck child annotation/draft access, and narrow edit capability with a fresh project policy. A retained task ID alone cannot authorize an old working answer. The response-only history projection clears inaccessible annotation IDs without rewriting the global history. Submission pagination exposes SUBMISSION_PAGE_OUT_OF_RANGE; the existing reviewer workspace retries page 1 only for that code, retaining the package context and stopping on ordinary 403/404 responses.
+
+These guards reuse existing assignment and project-operation authority. No new write locks, assignment commands, state transitions, review ledger, DatasetVersion or release path are added. Serializer-seam regressions deterministically execute real manager cancellation/reassignment after materialization; they are not claimed as two-connection PostgreSQL concurrency tests.
+
+Repair verification: PostgreSQL 209 passed (including existing real write-concurrency cases); SQLite 55 passed and 5 PostgreSQL-only cases skipped; frontend 72 component/store regressions passed; production build passed. Fresh Edge contexts passed the six annotation/review/returned-work journeys again, plus two 51-row review-page recovery journeys in en-US/zh-CN, with no page exceptions. The consumed last page returned the machine code, recovered page 1 within the same package, and retained context after reload. Source hashes matched the isolated worktree for 13 tested backend Python files, 10 browser backend files and 13 frontend files (UTF-8/LF normalization). This remains local evidence; remote CI and publication were not run.

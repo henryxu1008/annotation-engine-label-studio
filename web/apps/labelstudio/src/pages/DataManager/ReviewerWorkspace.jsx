@@ -67,9 +67,9 @@ export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
 
     if (
       nextPendingPage > 1 &&
-      reviewableResult?.response?.detail === "Invalid page."
+      reviewableResult?.response?.display_context?.reason === "SUBMISSION_PAGE_OUT_OF_RANGE"
     ) {
-      const fallbackPendingPage = nextPendingPage - 1;
+      const fallbackPendingPage = 1;
       [reviewableResult, historyResult] = await loadPages(fallbackPendingPage, nextHistoryPage);
       if (generationRef.current !== generation) return;
       nextPendingPage = fallbackPendingPage;

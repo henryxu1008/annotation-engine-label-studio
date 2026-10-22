@@ -767,6 +767,13 @@ The package navigation slice is documented in [Package-scoped continuous annotat
 Keep live visibility in every aggregate and recheck the original role and page
 package scope before serializing a read response; use a fresh Project for the
 final READ_WORK policy without adding a project write lock to progress GETs.
+After materializing a scoped Editor/next response, compare its assignment ID
+and version with the current actor's active assignment, including replacement
+assignments to the same actor. Revalidate annotation/draft ownership and narrow
+can_label using the fresh EDIT policy. Scoped history may clear an inaccessible
+annotation reference in its response but must preserve the global history.
+Review pagination recovery uses SUBMISSION_PAGE_OUT_OF_RANGE rather than
+translated error text; revoked or unavailable scope never triggers fallback.
 
 `access_control.project_operations` is the common operation-policy boundary for
 single-assignment creation/cancellation, interactive Annotation/Draft writes,

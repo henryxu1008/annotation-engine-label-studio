@@ -771,7 +771,11 @@ class ProjectActionsAPI(APIView):
             queryset = queryset.order_by()
 
         if action_id == 'next_task':
-            allowed_task_ids = Task.objects.for_user(request.user).filter(project=project).values_list('id', flat=True)
+            from task_packages.scope import PackageScope
+
+            scope = PackageScope.from_request(request, project)
+            queue_actor = scope.actor if scope else request.user
+            allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
             queryset = queryset.filter(id__in=allowed_task_ids)
 
         # wrong action id

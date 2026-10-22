@@ -27,7 +27,7 @@ from organizations.models import OrganizationMember
 from projects.functions.stream_history import fill_history_annotation
 from projects.models import Project, ProjectMember
 from rest_framework import generics, viewsets
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -438,7 +438,7 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         serializer = self.get_serializer_class()(self.task, many=False, context=context, expand=expand)
         data = serializer.data
         if scope:
-            PackageScope.from_request(request, project).require_task(self.task)
+            PackageScope.from_request(request, project).require_task(self.task, data)
         response = Response(data)
         if scope:
             response['Cache-Control'] = 'private, no-store'
@@ -1160,6 +1160,13 @@ class SubmissionPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+    def paginate_queryset(self, queryset, request, view=None):
+        try:
+            return super().paginate_queryset(queryset, request, view)
+        except NotFound as error:
+            error.display_context = {'reason': 'SUBMISSION_PAGE_OUT_OF_RANGE'}
+            raise
 
 
 def submissions_for_actor(actor):
