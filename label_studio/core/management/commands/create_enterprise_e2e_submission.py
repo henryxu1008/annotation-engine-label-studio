@@ -1,10 +1,9 @@
+from access_control.project_operations import SUBMIT, local_principal, lock_project_operation
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-
-from tasks.models import TaskAssignment
+from tasks.models import Task, TaskAssignment
 from tasks.submissions import create_submission
 from users.models import User
-
 
 ACTORS = {
     'annotator_a': 'e2e-annotator-a@example.com',
@@ -22,10 +21,20 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         actor = User.objects.get(email=ACTORS[options['actor']])
+        project_id = Task.objects.filter(pk=options['task_id']).values_list('project_id', flat=True).first()
+        if project_id is None:
+            raise CommandError('Task was not found.')
+        # This outer transaction also saves Annotation (and its Task signals).
+        # Acquire the same root fence as Editor/revocation before any such write.
+        project, actor = lock_project_operation(project_id, local_principal(actor), SUBMIT)
+        task = Task.objects.select_for_update().filter(pk=options['task_id'], project=project).first()
+        if task is None:
+            raise CommandError('Task is no longer in this project.')
         assignment = (
             TaskAssignment.objects.select_for_update()
             .filter(
-                task_id=options['task_id'],
+                project=project,
+                task=task,
                 assignee=actor,
                 status__in=TaskAssignment.ACTIVE_STATUSES,
             )

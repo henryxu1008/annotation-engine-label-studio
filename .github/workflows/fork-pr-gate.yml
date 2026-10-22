@@ -96,6 +96,8 @@ jobs:
             projects/tests/test_project_member_management.py \
             projects/tests/test_project_write_surface_hardening.py \
             tasks/tests/test_task_assignment_authorization.py \
+            tasks/tests/test_project_operation_policy.py \
+            tasks/tests/test_my_work.py \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \
             organizations/tests/test_api.py::TestOrganizationInviteLoggingAPI
@@ -117,6 +119,9 @@ jobs:
             users/tests/test_session_contract.py users/tests/test_session_revocation.py users/tests/test_session_version_migration.py \
             tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_task_assignment_authorization.py
+          poetry run pytest -q \
+            tasks/tests/test_project_write_concurrency.py \
+            tasks/tests/test_project_operation_policy.py tasks/tests/test_my_work.py
 
       - name: Run request locale and translated template regressions
         working-directory: label_studio

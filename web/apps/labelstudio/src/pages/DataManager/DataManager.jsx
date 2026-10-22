@@ -16,6 +16,7 @@ import { ImportModal } from "../CreateProject/Import/ImportModal";
 import { ExportPage } from "../ExportPage/ExportPage";
 import { APIConfig } from "./api-config";
 import { AssignmentManager } from "./AssignmentManager";
+import { MyWorkWorkspace } from "./MyWorkWorkspace";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
@@ -66,6 +67,7 @@ const buildLink = (path, params) => {
 const CollaborationModalTitle = ({ kind, taskId }) => {
   const { t } = useLocaleTranslation("collaboration");
   if (kind === "assignments") return t("taskAssignmentsTitle", { id: taskId });
+  if (kind === "myWork") return t("myWorkTitle");
   if (kind === "reviews") return t("reviewSubmissionsTitle");
   if (kind === "submissions") return t("submissionHistory");
   return t("releaseWorkspaceTitle");
@@ -410,6 +412,16 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openMyWork = () => {
+    if (!localePreference.ready) return;
+    const dialog = modal({
+      title: <CollaborationModalTitle kind="myWork" />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <MyWorkWorkspace projectId={project.id} onOpenReviewQueue={() => { dialog.close(); openReviews(); }} />,
+      style: { width: 960 },
+    });
+  };
+
   const links = {
     "/settings": t("settings"),
   };
@@ -459,6 +471,9 @@ DataManagerPage.context = ({ dmRef }) => {
 
   return project && project.id ? (
     <Space size="small">
+      <Button size="small" look="outlined" onClick={openMyWork} disabled={!localePreference.ready} data-testid="open-my-work">
+        {tc("myWorkTitle")}
+      </Button>
       {canManageAssignments && (
         <Button
           size="small"

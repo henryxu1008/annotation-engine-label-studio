@@ -1465,11 +1465,18 @@ class TestDraftContentConcurrencyRace(APITransactionTestCase):
         )
         barrier = Barrier(2)
 
-        def save(value):
+        # Construct complete request stacks before concurrent requests, as a
+        # real worker does. Cold concurrent construction races the upstream
+        # slash middleware's temporary global MIDDLEWARE mutation.
+        clients = [APIClient(), APIClient()]
+        for client in clients:
+            client.force_authenticate(user=self.annotator_a)
+            client.handler.load_middleware()
+
+        def save(item):
+            client, value = item
             close_old_connections()
             try:
-                client = APIClient()
-                client.force_authenticate(user=self.annotator_a)
                 barrier.wait(timeout=10)
                 response = client.patch(f'/api/drafts/{draft.pk}', {
                     'result': [{'value': value}], 'draft_revision': 1,
@@ -1482,7 +1489,7 @@ class TestDraftContentConcurrencyRace(APITransactionTestCase):
                 connections.close_all()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(save, ('tab A', 'tab B')))
+            results = list(pool.map(save, zip(clients, ('tab A', 'tab B'))))
         assert sorted(status for status, _ in results) == [200, 409], results
         draft.refresh_from_db()
         assert draft.revision == 2

@@ -14,6 +14,7 @@
   "apps/labelstudio/src/pages/CreateProject/Import/ImportModal.jsx",
   "apps/labelstudio/src/pages/DataManager/AssignmentManager.jsx",
   "apps/labelstudio/src/pages/DataManager/DataManager.jsx",
+  "apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.jsx",
   "apps/labelstudio/src/pages/DataManager/ReviewerWorkspace.jsx",
   "apps/labelstudio/src/pages/DataManager/SubmissionReleaseWorkspace.jsx",
   "apps/labelstudio/src/pages/ExportPage/ExportPage.jsx",

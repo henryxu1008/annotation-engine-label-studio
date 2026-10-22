@@ -28,6 +28,7 @@ export const API_CONFIG = {
     projectMembers: "GET:/projects/:pk/members/",
     projectMemberCapability: "GET:/projects/:pk/members/capability/",
     projectReviewCapability: "GET:/projects/:pk/review-capability/",
+    myWork: "GET:/projects/:pk/my-work/",
     projectMemberCandidates: "GET:/projects/:pk/members/candidates/",
     createProjectMember: "POST:/projects/:pk/members/",
     updateProjectMember: "PATCH:/projects/:pk/members/:memberPk/",

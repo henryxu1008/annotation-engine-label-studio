@@ -750,3 +750,126 @@ unchanged. Cover reload of a saved correction before submitting revision 2.
 Without an explicit annotation selection, keep the restored correction's existing
 annotation selected rather than opening a new blank annotation; explicit user
 selection continues to take precedence.
+
+### Project write fencing and personal work (#83, first slice)
+
+`access_control.project_operations` is the common operation-policy boundary for
+single-assignment creation/cancellation, interactive Annotation/Draft writes,
+immutable submission and review decisions. Write transactions acquire Project
+first, then OrganizationMember rows, User rows and ProjectMember rows (each set
+in primary-key order), then Task, Assignment and the existing summary/draft or
+submission locks. Use single-table row-lock queries and reuse the locked
+objects, avoiding joined users/tasks, nullable joins and backend-specific OF
+support.
+Never enter this fence after acquiring an assignment lock unless this same
+transaction already owns the project/authority fence. PostgreSQL tests exercise
+actual Editor and member APIs; a submission-helper-only test cannot detect the
+former Assignment -> Project / Project -> Assignment deadlock.
+
+Re-read account activity, current organization membership, project role and
+target eligibility under the fence. Single-task assignment POST reuses the
+same target validation as its preflight serializer and records the trusted
+`resolve_actor` mapping as `assigned_by`. Cancellation increases the existing
+assignment version; a later assignment is a new row without copied answers.
+Security cancellation/member revocation remains available while ordinary work
+is blocked. Revocation wins -> stale Editor write is denied; Editor wins -> its
+completed immutable submission remains historical evidence and revocation
+invalidates subsequent writes. The pre-write task token and draft CAS checks
+remain required. Project-first fencing also serializes concurrent review with
+submission supersession and role removal; manager does not become reviewer.
+
+`ANNOTATION_PROJECT_OPERATION_PROVIDER` explicitly defaults to the versioned
+`LegacyProjectOperationProvider` for compatibility with existing fork-local
+single-task workflows. Its state is **legacy**, never inferred active from
+`Project.is_draft`/`is_published`. It grants no batch-dispatch operation. A missing
+provider or unknown policy state denies work. #86 owns an authoritative project
+lifecycle/provider; a test paused/draft policy proves these covered write paths
+obey its denied operations. This patch does not implement #86 transitions or
+claim coverage of import, storage, project configuration, deletion or release
+policy. Host-controlled/batch writes remain unavailable pending that contract.
+
+`GET /api/projects/{project}/my-work/` projects current personal facts without
+mutations, new task states or migrations. Supported filters are `kind`
+(annotation/review), `state` (annotation only), `page`, and `page_size` (50 default,
+100 maximum). Counts cover the same authorized base queue, before the optional
+state filter; pagination count covers the filtered queue. Unknown identity/user
+filters are rejected. Scope and audit identity come from `resolve_actor`, with
+an explicit current organization membership check. Replies, including failures,
+are private/no-store. No Task data, annotation result or snapshot is returned.
+
+Annotation rows start from the actor's active assignments. Latest means highest
+revision per assignment. Rejected -> rework with its reason; different valid
+saved draft -> in progress while retaining the previous submission badge;
+unchanged draft -> preserve pending/approved status. Empty first draft is work,
+not completion. Result comparison ignores JSON object insertion order and
+lead-time but preserves array order and region IDs, using native PostgreSQL
+jsonb or SQLite json_tree facilities. Duplicate/mismatched draft sources or a
+latest superseded-only revision yield blocked conflict rows without repairs.
+Cancelled assignments disappear from annotation work, without deleting history.
+Queries compute states/counts in the database and fetch metadata for one page;
+query count must not grow with page length.
+
+Review rows mirror the existing pending, non-self review queue and retain
+snapshots whose source assignment was cancelled. They never grant Task/Editor
+access. My work links reuse the existing Editor and review workspace; these
+recheck permissions when opened or written. The bilingual read-only list clears
+old rows on refresh failure and ignores disposed requests. It does not claim to
+display unconfirmed browser input or grant authority from cached action flags.
+
+An out-of-range work page returns `display_context.reason=WORK_PAGE_OUT_OF_RANGE`
+from the paginator only. The client retries page one once using that code,
+independent of DRF's translated detail. Other 403/404 responses clear the list
+without retrying, so revoked project access cannot masquerade as pagination.
+Editor anchors use AsyncPage's existing `data-external` native-navigation opt-out:
+its query-only partial navigation otherwise retains the old DataManager/modal
+instead of initializing the requested task. Native navigation retains the
+existing browser unsaved-work guard. Work-list classes use the common `cn`
+helper to match the build's CSS prefix.
+
+This slice does not enable TaskBatch, bulk assignment, self-claim, deadlines,
+load balancing, host/Core integration or #79 delivery. Keep PostgreSQL real
+transaction interleavings, SQLite projection tests, provider-mapping/negative
+authorization cases, and bilingual component regressions in the fork gates.
+
+Concurrent API tests must initialize each independent client middleware stack
+before starting request threads, as a production worker does. The existing
+`CommonMiddlewareAppendSlashWithoutRedirect.__init__` temporarily mutates global
+MIDDLEWARE while constructing its replay handler. Cold concurrent test-client
+construction can therefore omit slash handling and return 404 before a write
+ever reaches the service. Warming the stacks preserves the real simultaneous
+write/CAS assertions; it does not resolve that separate baseline initialization
+architecture risk. This slice leaves middleware behavior unchanged and makes no
+claim about a cold concurrent handler-startup acceptance.
+
+The My Work entry and its Editor/review destinations resolve the same trusted
+local actor. Task detail, project bootstrap, DataManager views/columns/task
+collections, ML bootstrap metadata, submission lists/details and uploaded-image reads must not borrow
+the session user's project/manager role. The shared visible-project query repeats
+live organization membership in SQL; cancellation still preserves authorized
+submission history while removing Editor access. View creation records the
+mapped actor, updates retain the creator, and source/target projects are checked.
+
+Object permissions use DRF's existing `HasObjectPermission` with an explicit
+`HasActorObjectPermission` opt-in only on the migrated entry APIs. Keep the
+global default unchanged: legacy APIs may still scope collections by session
+identity, so globally replacing their object-check actor can grant unrelated
+access (including orphan user profiles). Regressions exercise the real provider
+seam across work-to-task, saved drafts/annotations, review/history, view startup,
+uploaded PNG bytes, project/organization/account revocation and reassignment,
+plus refusal to borrow a session manager's role or expand legacy profile access.
+Annotation/draft object reads recheck current project/organization authority;
+first-annotation creation and collection reads use the same mapped actor.
+ML metadata GET does not grant backend configuration: its POST requires the
+existing project-manager policy before serializer health/setup can contact a URL.
+Uploaded media retains its existing project-member policy, not assignment-only
+visibility. External-storage proxy/presign, local-storage roots and avatar
+identity migration are outside this slice and have no new runtime acceptance.
+
+Callers that wrap `create_submission` in an outer transaction must acquire the
+same Project/eligibility -> Task -> Assignment fence before any lower-level
+lock or Annotation save; model signals can write Task rows too. The existing
+`create_enterprise_e2e_submission` command now follows that order for existing
+shared tasks. Real PostgreSQL command/API interleavings cover command-first
+submission followed by revocation and revocation/cancellation/reassignment-first
+refusal without modifying the old Annotation. Seed commands only submit resources
+created in their own uncommitted transaction; API callers already use the fence.

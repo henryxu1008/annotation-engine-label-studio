@@ -6,10 +6,14 @@ import mimetypes
 import time
 from urllib.parse import unquote, urlparse
 
-from core.decorators import override_report_only_csp
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor
-from access_control.project_access import get_managed_project_or_404, managed_projects_for_user, require_project_manager
+from access_control.project_access import (
+    get_managed_project_or_404,
+    managed_projects_for_user,
+    require_project_manager,
+)
+from core.decorators import override_report_only_csp
 from core.feature_flags import flag_set
 from core.permissions import ViewClassPermission, all_permissions
 from core.redis import start_job_async_or_sync
@@ -964,13 +968,16 @@ class UploadedFileResponse(generics.RetrieveAPIView):
     @csp(SANDBOX=[])
     def get(self, *args, **kwargs):
         request = self.request
+        principal, actor = resolve_actor(request)
         filename = kwargs['filename']
         # XXX needed, on windows os.path.join generates '\' which breaks FileUpload
         file = settings.UPLOAD_DIR + ('/' if not settings.UPLOAD_DIR.endswith('/') else '') + filename
         logger.debug(f'Fetch uploaded file by user {request.user} => {file}')
         file_upload = FileUpload.objects.filter(file=file).last()
 
-        if not file_upload.has_permission(request.user):
+        if file_upload is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if not file_upload.has_permission(actor) or not authorization.can_view_project(principal, file_upload.project):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
         file = file_upload.file
@@ -1026,10 +1033,15 @@ class DownloadStorageData(APIView):
 
         file_obj = None
         if filepath.startswith(settings.UPLOAD_DIR):
+            principal, actor = resolve_actor(request)
             logger.debug(f'Fetch uploaded file by user {request.user} => {filepath}')
             file_upload = FileUpload.objects.filter(file=filepath).last()
 
-            if file_upload is not None and file_upload.has_permission(request.user):
+            if (
+                file_upload is not None
+                and file_upload.has_permission(actor)
+                and authorization.can_view_project(principal, file_upload.project)
+            ):
                 file_obj = file_upload.file
         elif filepath.startswith(settings.AVATAR_PATH):
             user = User.objects.filter(avatar=filepath).first()
