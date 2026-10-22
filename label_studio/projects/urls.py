@@ -20,6 +20,7 @@ _api_urlpatterns = [
     path('', api.ProjectListAPI.as_view(), name='project-list'),
     path('<int:pk>/', api.ProjectAPI.as_view(), name='project-detail'),
     path('<int:pk>/my-work/', MyWorkAPI.as_view(), name='project-my-work'),
+    path('<int:pk>/task-packages/', include(('task_packages.urls', 'task_packages'), namespace='task-packages')),
     path('<int:pk>/members/', api.ProjectMemberListCreateAPI.as_view(), name='project-member-list'),
     path(
         '<int:pk>/members/candidates/',

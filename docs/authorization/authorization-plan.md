@@ -758,6 +758,14 @@ selection continues to take precedence.
 
 ### Project write fencing and personal work (#83, first slice)
 
+The second #83 slice is documented in [Fixed task packages](fixed-task-packages.md).
+It adds an opt-in fixed membership list and read-only progress, declares the
+ORGANIZE_WORK operation for the common #86 policy boundary, and reuses the same
+assignment state expression. It does not enable dispatch or a lifecycle engine.
+Keep live visibility in every aggregate and recheck the original role and page
+package scope before serializing a read response; use a fresh Project for the
+final READ_WORK policy without adding a project write lock to progress GETs.
+
 `access_control.project_operations` is the common operation-policy boundary for
 single-assignment creation/cancellation, interactive Annotation/Draft writes,
 immutable submission and review decisions. Write transactions acquire Project
@@ -878,3 +886,13 @@ shared tasks. Real PostgreSQL command/API interleavings cover command-first
 submission followed by revocation and revocation/cancellation/reassignment-first
 refusal without modifying the old Annotation. Seed commands only submit resources
 created in their own uncommitted transaction; API callers already use the fence.
+
+Fixed task-package detail reads revalidate each returned assignment ID/version
+or pending submission ID/revision through the existing actor/project/live-task
+querysets after the final project/package policy check. Partial cancellation,
+reassignment or review departure rejects the materialized page with
+PACKAGE_ACCESS_CHANGED even if another row keeps the package visible. This is
+a bounded scope check without Project write locks; ordinary progress values
+remain a live projection. PostgreSQL regressions interleave real cancellation,
+reassignment and review APIs with a paused detail read. Existing Editor/submit
+and review write fences remain authoritative independently of these links.

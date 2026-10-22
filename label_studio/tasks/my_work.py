@@ -75,8 +75,24 @@ class JSONContentEqual(Func):
 
 
 def annotation_work(project, actor):
+    return annotate_assignment_work(
+        TaskAssignment.objects.filter(
+            project=project,
+            project_id__in=work_projects(actor, ['annotator', 'manager']),
+            assignee=actor,
+            status__in=TaskAssignment.ACTIVE_STATUSES,
+        )
+    )
+
+
+def annotate_assignment_work(scoped_assignments):
+    """Annotate an already-authorized queryset; callers own its visibility scope.
+
+    Compare each assignee's drafts, including manager aggregate projections.
+    This helper grants no resource access and does not return result payloads.
+    """
     latest = Submission.objects.filter(assignment_id=OuterRef('pk')).order_by('-revision')
-    own_drafts = AnnotationDraft.objects.filter(assignment_id=OuterRef('pk'), user=actor)
+    own_drafts = AnnotationDraft.objects.filter(assignment_id=OuterRef('pk'), user_id=OuterRef('assignee_id'))
     valid_drafts = own_drafts.filter(task_id=OuterRef('task_id')).filter(
         Q(annotation_id=OuterRef('annotation_id'))
         | Q(annotation_id__isnull=True, assignment__annotation_id__isnull=True)
@@ -89,12 +105,7 @@ def annotation_work(project, actor):
             output_field=IntegerField(),
         )
 
-    rows = TaskAssignment.objects.filter(
-        project=project,
-        project_id__in=work_projects(actor, ['annotator', 'manager']),
-        assignee=actor,
-        status__in=TaskAssignment.ACTIVE_STATUSES,
-    ).annotate(
+    rows = scoped_assignments.annotate(
         latest_submission_id=Subquery(latest.values('pk')[:1]),
         latest_revision=Subquery(latest.values('revision')[:1]),
         latest_status=Subquery(latest.values('status')[:1]),

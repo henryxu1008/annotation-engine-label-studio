@@ -23,6 +23,7 @@ EDIT = 'edit'
 SUBMIT = 'submit'
 REVIEW = 'review'
 ASSIGN = 'assign'
+ORGANIZE_WORK = 'organize_work'
 SECURITY_CANCEL = 'security_cancel'
 LEGACY_OPERATIONS = frozenset({READ_WORK, EDIT, SUBMIT, REVIEW, ASSIGN})
 
@@ -40,6 +41,8 @@ class ProjectOperationPolicy:
 
 class LegacyProjectOperationProvider:
     def evaluate(self, project):
+        if getattr(settings, 'ANNOTATION_FIXED_PACKAGES_ENABLED', False):
+            return ProjectOperationPolicy('legacy-fixed-list-v1', 'legacy', LEGACY_OPERATIONS | {ORGANIZE_WORK})
         return ProjectOperationPolicy('legacy-single-task-v1', 'legacy', LEGACY_OPERATIONS)
 
 
