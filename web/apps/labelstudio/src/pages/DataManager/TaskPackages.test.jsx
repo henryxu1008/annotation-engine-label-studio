@@ -207,4 +207,70 @@ describe("fixed task packages", () => {
     unmount();
     runtime.destroy();
   });
+
+  it.each(["en-US", "zh-CN"])("previews and retries on HTTP without native randomUUID in %s", async (locale) => {
+    Object.defineProperty(global.crypto, "randomUUID", { configurable: true, value: undefined });
+    mockCallApi
+      .mockResolvedValueOnce({ ...list, results: [] })
+      .mockResolvedValueOnce({ error: true })
+      .mockResolvedValueOnce({ id: 7 })
+      .mockResolvedValue(detail);
+    const { runtime, unmount } = mount(locale, { initialTaskIds: [9] });
+    const zh = locale === "zh-CN";
+    fireEvent.change(await screen.findByLabelText(zh ? "任务包名称" : "Package name"), { target: { value: "HTTP" } });
+    fireEvent.click(screen.getByRole("button", { name: zh ? "预览固定清单" : "Preview fixed selection" }));
+    const confirm = zh ? "确认创建／重试" : "Confirm creation / retry";
+    fireEvent.click(screen.getByRole("button", { name: confirm }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: confirm }));
+    await screen.findByRole("heading", { name: "Trial 试用" });
+    const calls = mockCallApi.mock.calls.filter(([method]) => method === "createTaskPackage");
+    expect(calls[0][1].headers["Idempotency-Key"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(calls[1][1].headers).toEqual(calls[0][1].headers);
+    unmount();
+    runtime.destroy();
+  });
+
+  it.each(["en-US", "zh-CN"])(
+    "shows the real creation failure reason and clears revoked forms in %s",
+    async (locale) => {
+      const zh = locale === "zh-CN";
+      const invalid = {
+        error: true,
+        status: 400,
+        response: { display_context: { reason: "PACKAGE_TASKS_UNAVAILABLE" } },
+      };
+      const conflict = { error: true, status: 409, response: { display_context: { reason: "PACKAGE_KEY_CONFLICT" } } };
+      mockCallApi
+        .mockResolvedValueOnce({ ...list, results: [] })
+        .mockResolvedValueOnce(invalid)
+        .mockResolvedValueOnce(conflict)
+        .mockResolvedValueOnce({ error: true, status: 403 });
+      const { runtime, unmount } = mount(locale, { initialTaskIds: [9] });
+      fireEvent.change(await screen.findByLabelText(zh ? "任务包名称" : "Package name"), {
+        target: { value: "Errors" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: zh ? "预览固定清单" : "Preview fixed selection" }));
+      const confirm = zh ? "确认创建／重试" : "Confirm creation / retry";
+      fireEvent.click(screen.getByRole("button", { name: confirm }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toContain(
+          zh ? "部分任务已不在当前项目中" : "Some tasks are no longer available",
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: confirm }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toContain(
+          zh ? "该请求编号已对应其他内容" : "This request key identifies different content",
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: confirm }));
+      await waitFor(() => expect(screen.queryByLabelText(zh ? "任务包名称" : "Package name")).toBeNull());
+      expect(screen.getByRole("alert").textContent).toContain(zh ? "访问权限已变化" : "Access has changed");
+      unmount();
+      runtime.destroy();
+    },
+  );
 });

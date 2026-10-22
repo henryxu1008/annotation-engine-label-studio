@@ -5,7 +5,10 @@ from uuid import uuid4
 
 from access_control.identity import Principal
 from access_control.project_operations import (
+    EDIT,
+    ORGANIZE_WORK,
     READ_WORK,
+    REVIEW,
     ProjectOperationPolicy,
     local_principal,
     lock_project_operation,
@@ -17,6 +20,7 @@ from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.test import APIClient, APITestCase
+from task_packages import api as package_api
 from task_packages.models import TaskPackage, TaskPackageItem
 from tasks.models import AnnotationDraft, Submission, Task, TaskAssignment
 from tasks.tests.factories import TaskFactory
@@ -28,6 +32,19 @@ class ReadOnlyPolicy:
 
     def evaluate(self, project):
         return ProjectOperationPolicy('lifecycle-fixture-v1', self.state, frozenset({READ_WORK}), 'PROJECT_READ_ONLY')
+
+
+class ChangedProjectPolicy:
+    """Test-only stand-in for #86 reading persisted project state, not a state machine."""
+
+    def evaluate(self, project):
+        if project.description == 'deny-reads':
+            return ProjectOperationPolicy('fresh-project-v1', 'paused', frozenset(), 'PROJECT_READ_ONLY')
+        if project.description == 'read-only':
+            return ProjectOperationPolicy('fresh-project-v1', 'paused', frozenset({READ_WORK}), 'PROJECT_READ_ONLY')
+        return ProjectOperationPolicy(
+            'fresh-project-v1', 'legacy', frozenset({READ_WORK, EDIT, REVIEW, ORGANIZE_WORK})
+        )
 
 
 class PackageFixture:
@@ -288,6 +305,106 @@ class TestPackages(PackageFixture, APITestCase):
             assert self.detail(package_id).json()['results'][0]['assignment_id'] == own.pk
             assert self.create().status_code == 403
 
+    def test_manager_list_rechecks_role_before_serializing_private_metadata(self):
+        self.create()
+        ProjectMember.objects.filter(project=self.project, user=self.other).update(role='manager')
+        self.client.force_authenticate(self.other)
+        original = package_api.package_metadata
+
+        def demote_before_serializing(package, role):
+            ProjectMember.objects.filter(project=self.project, user=self.other).update(role='annotator')
+            return original(package, role)
+
+        with patch('task_packages.api.package_metadata', side_effect=demote_before_serializing):
+            response = self.client.get(self.url)
+        assert response.status_code in (403, 404), response.json()
+        assert b'source_note' not in response.content and b'membership_hash' not in response.content
+
+    def test_list_rechecks_package_scope_after_last_own_assignment_is_cancelled(self):
+        self.create()
+        assignment = self.assignment()
+        self.client.force_authenticate(self.annotator)
+        original = package_api.package_metadata
+
+        def cancel_before_serializing(package, role):
+            TaskAssignment.objects.filter(pk=assignment.pk).update(status='cancelled')
+            return original(package, role)
+
+        with patch('task_packages.api.package_metadata', side_effect=cancel_before_serializing):
+            response = self.client.get(self.url)
+        assert response.status_code in (403, 404), response.json()
+        assert '固定包 A' not in response.content.decode()
+
+    def test_detail_rechecks_package_scope_after_last_own_assignment_is_cancelled(self):
+        package_id = self.create().json()['id']
+        assignment = self.assignment()
+        self.client.force_authenticate(self.annotator)
+        original = package_api.current_read_policy
+
+        def cancel_before_final_check(*args, **kwargs):
+            TaskAssignment.objects.filter(pk=assignment.pk).update(status='cancelled')
+            return original(*args, **kwargs)
+
+        with patch('task_packages.api.current_read_policy', side_effect=cancel_before_final_check):
+            response = self.detail(package_id)
+        assert response.status_code in (403, 404), response.json()
+        assert 'package' not in response.json()
+
+    def test_detail_rechecks_package_scope_after_last_reviewable_submission_leaves_pending(self):
+        package_id = self.create().json()['id']
+        submission = self.submission(self.assignment())
+        self.client.force_authenticate(self.reviewer)
+        original = package_api.current_read_policy
+
+        def approve_before_final_check(*args, **kwargs):
+            Submission.objects.filter(pk=submission.pk).update(status='approved')
+            return original(*args, **kwargs)
+
+        with patch('task_packages.api.current_read_policy', side_effect=approve_before_final_check):
+            response = self.detail(package_id)
+        assert response.status_code in (403, 404), response.json()
+        assert 'package' not in response.json()
+
+    def test_read_actions_consume_fresh_project_policy_after_queries(self):
+        package_id = self.create().json()['id']
+        self.submission(self.assignment())
+        original = package_api.current_read_policy
+
+        def transition_before_final_check(*args, **kwargs):
+            type(self.project).objects.filter(pk=self.project.pk).update(description='read-only')
+            return original(*args, **kwargs)
+
+        with override_settings(ANNOTATION_PROJECT_OPERATION_PROVIDER=f'{__name__}.ChangedProjectPolicy'):
+            for actor, role in ((self.manager, 'manager'), (self.annotator, 'annotator'), (self.reviewer, 'reviewer')):
+                type(self.project).objects.filter(pk=self.project.pk).update(description='')
+                self.client.force_authenticate(actor)
+                with patch('task_packages.api.current_read_policy', side_effect=transition_before_final_check):
+                    response = self.client.get(self.url) if role == 'manager' else self.detail(package_id)
+                assert response.status_code == 200, response.content
+                data = response.json()
+                if role == 'manager':
+                    assert data['can_create'] is False
+                elif role == 'annotator':
+                    assert data['results'] and all(row['editor_url'] is None for row in data['results'])
+                    assert data['policy']['state'] == 'paused'
+                else:
+                    assert data['can_review'] is False and data['policy']['state'] == 'paused'
+
+    def test_final_read_policy_denial_discards_materialized_package_data(self):
+        package_id = self.create().json()['id']
+        original = package_api.current_read_policy
+
+        def deny_before_final_check(*args, **kwargs):
+            type(self.project).objects.filter(pk=self.project.pk).update(description='deny-reads')
+            return original(*args, **kwargs)
+
+        with override_settings(ANNOTATION_PROJECT_OPERATION_PROVIDER=f'{__name__}.ChangedProjectPolicy'), patch(
+            'task_packages.api.current_read_policy', side_effect=deny_before_final_check
+        ):
+            response = self.detail(package_id)
+        assert response.status_code == 403, response.content
+        assert 'package' not in response.json() and 'counts' not in response.json()
+
     def test_feature_off_and_read_only_policy_are_independent(self):
         package_id = self.create().json()['id']
         with override_settings(ANNOTATION_FIXED_PACKAGES_ENABLED=False):
@@ -327,16 +444,23 @@ class TestPackages(PackageFixture, APITestCase):
 
 @override_settings(ANNOTATION_FIXED_PACKAGES_ENABLED=True)
 class TestPackageConcurrency(PackageFixture, TransactionTestCase):
+    @staticmethod
+    def client_for(user):
+        # Reuse the existing write-fence harness's middleware warm-up. Upstream
+        # SlashMiddleware construction must not race in HTTP worker threads.
+        from tasks.tests.test_project_write_concurrency import TestProjectWriteConcurrency
+
+        return TestProjectWriteConcurrency.client_for(user)
+
     def test_same_key_serializes_to_one_fixed_package(self):
         if connection.vendor != 'postgresql':
             self.skipTest('Real row-lock behavior requires PostgreSQL')
         barrier = Barrier(2)
         key = str(uuid4())
+        clients = [self.client_for(self.manager) for _ in range(2)]
 
-        def create():
+        def create(client):
             close_old_connections()
-            client = APIClient()
-            client.force_authenticate(self.manager)
             try:
                 barrier.wait(timeout=10)
                 return client.post(
@@ -349,7 +473,7 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
                 close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(create) for _ in range(2)]
+            futures = [pool.submit(create, client) for client in clients]
             assert sorted(f.result(timeout=30) for f in futures) == [200, 201]
         assert TaskPackage.objects.count() == 1 and TaskPackageItem.objects.count() == 3
 
@@ -358,11 +482,10 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
             self.skipTest('Real row-lock behavior requires PostgreSQL')
         ProjectMember.objects.filter(project=self.project, user=self.other).update(role='manager')
         entered = Event()
+        client = self.client_for(self.other)
 
         def create():
             close_old_connections()
-            client = APIClient()
-            client.force_authenticate(self.other)
             try:
                 return client.post(
                     self.url,
@@ -388,3 +511,44 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
                 ProjectMember.objects.filter(project=self.project, user=self.other).update(enabled=False)
             assert future.result(timeout=30) in (403, 404)
         assert TaskPackage.objects.count() == 0
+
+    def test_manager_read_rejects_committed_revocation_before_global_progress(self):
+        if connection.vendor != 'postgresql':
+            self.skipTest('Independent committed read/write connections require PostgreSQL')
+        package_id = self.create().json()['id']
+        self.submission(self.assignment())
+        member = ProjectMember.objects.get(project=self.project, user=self.other)
+        reader = self.client_for(self.other)
+        writer = self.client_for(self.manager)
+        original = package_api.live_items
+        for change in ({'enabled': False}, {'role': 'annotator'}):
+            ProjectMember.objects.filter(pk=member.pk).update(role='manager', enabled=True)
+            entered, release = Event(), Event()
+
+            def pause_before_aggregates(project):
+                entered.set()
+                assert release.wait(15)
+                return original(project)
+
+            def read():
+                close_old_connections()
+                try:
+                    return reader.get(f'{self.url}{package_id}/')
+                finally:
+                    close_old_connections()
+
+            with patch('task_packages.api.live_items', side_effect=pause_before_aggregates), ThreadPoolExecutor(
+                max_workers=1
+            ) as pool:
+                future = pool.submit(read)
+                try:
+                    assert entered.wait(15)
+                    revoked = writer.patch(
+                        f'/api/projects/{self.project.pk}/members/{member.pk}/', change, format='json'
+                    )
+                    assert revoked.status_code == 200, revoked.content
+                finally:
+                    release.set()
+                response = future.result(timeout=30)
+            assert response.status_code in (403, 404), response.json()
+            assert b'counts' not in response.content and b'source_note' not in response.content

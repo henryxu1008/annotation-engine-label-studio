@@ -747,6 +747,9 @@ The second #83 slice is documented in [Fixed task packages](fixed-task-packages.
 It adds an opt-in fixed membership list and read-only progress, declares the
 ORGANIZE_WORK operation for the common #86 policy boundary, and reuses the same
 assignment state expression. It does not enable dispatch or a lifecycle engine.
+Keep live visibility in every aggregate and recheck the original role and page
+package scope before serializing a read response; use a fresh Project for the
+final READ_WORK policy without adding a project write lock to progress GETs.
 
 `access_control.project_operations` is the common operation-policy boundary for
 single-assignment creation/cancellation, interactive Annotation/Draft writes,

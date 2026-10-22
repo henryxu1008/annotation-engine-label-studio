@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { displayWorkState } from "./MyWorkWorkspace";
-import { collaborationErrorCode } from "./collaborationDisplay";
 import "./TaskPackages.scss";
 
 const failed = (result) => !result || result.error || result.$meta?.ok === false;
@@ -130,7 +130,7 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
       task_ids: taskIds.sort((a, b) => a - b),
     };
     // Keep the same key and body after an ambiguous network failure.
-    request.current = { body, key: crypto.randomUUID() };
+    request.current = { body, key: uuidv4() };
     setPreview(body);
   };
 
@@ -148,7 +148,16 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
       });
       if (current !== generation.current) return;
       if (failed(response)) {
-        const reason = collaborationErrorCode(response, "createFailed");
+        const status = response?.status ?? response?.$meta?.status;
+        if ([401, 403, 404].includes(status)) {
+          // A revoked manager must not retain an actionable creation preview.
+          setData(null);
+          setPreview(null);
+          request.current = null;
+          setError("accessChanged");
+          return;
+        }
+        const reason = response?.response?.display_context?.reason;
         setError(
           reason === "PACKAGE_KEY_CONFLICT"
             ? "keyConflict"

@@ -191,6 +191,7 @@
   "app:hotkeySectionParagraphsTitle",
   "app:hotkeySectionParagraphsDescription",
   "taskPackages:loadFailed",
+  "taskPackages:accessChanged",
   "taskPackages:createFailed",
   "taskPackages:keyConflict",
   "taskPackages:tasksUnavailable",

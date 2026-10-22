@@ -114,6 +114,26 @@ def package_metadata(package, role):
     return data
 
 
+def current_read_policy(project, actor, role, *, package_ids=()):
+    """Do not serialize cached role privileges after a concurrent revocation.
+
+    Queries retain their own live scope; this final check also guards metadata
+    already materialized before revocation. Avoid taking a project write lock
+    for progress reads. #86 receives a freshly loaded project, not cached state.
+    """
+    current = Project.objects.filter(pk=project.pk, pk__in=work_projects(actor, [role])).first()
+    if current is None:
+        fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current project access has changed.')
+    policy = require_project_operation(current, READ_WORK)
+    if package_ids:
+        # One query for the entire page, including the last-assignment and last
+        # pending-review cases. Metadata materialized earlier is not authority.
+        visible = set(visible_packages(current, actor, role).filter(pk__in=package_ids).values_list('pk', flat=True))
+        if visible != set(package_ids):
+            fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current package access has changed.')
+    return policy
+
+
 class PackagePagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = 'page_size'
@@ -155,7 +175,8 @@ class PackageAPIBase(generics.GenericAPIView):
 
 class PackageCapabilityAPI(PackageAPIBase):
     def get(self, request, pk):
-        _, _, _, role, policy = self.context(request, pk, capability=True)
+        _, actor, project, role, _ = self.context(request, pk, capability=True)
+        policy = current_read_policy(project, actor, role)
         enabled = settings.ANNOTATION_FIXED_PACKAGES_ENABLED
         return Response(
             {'enabled': enabled, 'can_create': enabled and role == 'manager' and policy.allows(ORGANIZE_WORK)}
@@ -164,9 +185,10 @@ class PackageCapabilityAPI(PackageAPIBase):
 
 class PackageListAPI(PackageAPIBase):
     def get(self, request, pk):
-        _, actor, project, role, policy = self.context(request, pk)
+        _, actor, project, role, _ = self.context(request, pk)
         page = self.paginate_queryset(visible_packages(project, actor, role).order_by('-pk'))
         response = self.get_paginated_response([package_metadata(package, role) for package in page])
+        policy = current_read_policy(project, actor, role, package_ids=[package.pk for package in page])
         response.data.update(role=role, can_create=role == 'manager' and policy.allows(ORGANIZE_WORK))
         return response
 
@@ -225,8 +247,10 @@ class PackageListAPI(PackageAPIBase):
 class PackageDetailAPI(PackageAPIBase):
     def get(self, request, pk, package_id):
         _, actor, project, role, policy = self.context(request, pk)
-        package = generics.get_object_or_404(visible_packages(project, actor, role), pk=package_id)
-        live = live_items(project).filter(package=package)
+        packages = visible_packages(project, actor, role)
+        package = generics.get_object_or_404(packages, pk=package_id)
+        items = TaskPackageItem.objects.filter(package=package, package_id__in=packages.values('pk'))
+        live = live_items(project).filter(pk__in=items.values('pk'))
         task_ids = live.values('task_id')
         assignments = TaskAssignment.objects.filter(
             project=project,
@@ -267,13 +291,13 @@ class PackageDetailAPI(PackageAPIBase):
             counts.update(work.aggregate(**{state: Count('pk', filter=Q(work_state=state)) for state in WORK_STATES}))
             counts['assignments'] = sum(counts[state] for state in WORK_STATES)
             if role == 'manager':
+                fixed_tasks, available_tasks = items.count(), live.count()
                 counts.update(
-                    fixed_tasks=package.items.count(),
-                    available_tasks=live.count(),
-                    unavailable_tasks=package.items.count() - live.count(),
+                    fixed_tasks=fixed_tasks,
+                    available_tasks=available_tasks,
+                    unavailable_tasks=fixed_tasks - available_tasks,
                     unassigned_tasks=live.exclude(task_id__in=assignments.values('task_id')).count(),
                 )
-                eligible = Project.objects.filter(pk__in=work_projects(actor, ['manager']))
                 # Counts describe active assignment rows, including rows left after assignee revocation.
                 member = ProjectMember.objects.filter(
                     project=project, user_id=OuterRef('pk'), enabled=True, role__in=['manager', 'annotator']
@@ -294,9 +318,7 @@ class PackageDetailAPI(PackageAPIBase):
                 counts['blocked_assignments'] = assignments.exclude(
                     assignee_id__in=eligible_users.values('pk')
                 ).count()
-                page = self.paginate_queryset(
-                    package.items.filter(package__project_id__in=eligible).order_by('original_task_id')
-                )
+                page = self.paginate_queryset(items.order_by('original_task_id'))
                 ids = [item.original_task_id for item in page]
                 available = set(live.filter(original_task_id__in=ids).values_list('original_task_id', flat=True))
                 states = list(
@@ -326,6 +348,10 @@ class PackageDetailAPI(PackageAPIBase):
                     }
                     for row in page
                 ]
+        policy = current_read_policy(project, actor, role, package_ids=[package.pk])
+        if role == 'annotator' and not policy.allows(EDIT):
+            for row in results:
+                row['editor_url'] = None
         response = self.get_paginated_response(results)
         response.data.update(
             package=package_metadata(package, role),

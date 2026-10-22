@@ -20,6 +20,13 @@ task rejects the whole operation. A project-scoped UUID `Idempotency-Key` stores
 the canonical request digest and trusted creator with the package itself; an
 identical authorized replay returns the same object, while changed content or
 actor returns 409. No TaskAssignment, Annotation, Draft or Submission is created.
+UUID generation reuses the already-locked `uuid` 8.3.2 implementation, declared
+as a direct dependency. It works on ordinary HTTP origins where the browser's
+secure-context-only `crypto.randomUUID` is absent, preserving the UUID API
+contract without changing certificate trust. The UI reads creation failure
+machine codes from the actual API error envelope: unavailable tasks require
+selection repair, conflicting keys require checking the existing creation,
+and authorization failures discard the old creation form.
 
 Membership cannot be edited or deleted through this API. Each item retains its
 original task ID and creation time plus a nullable live FK. Deletion, relocation
@@ -41,6 +48,14 @@ Collection and detail queries share the same scope. Request actor, reviewer,
 assignee, lifecycle and dynamic-filter fields are rejected. Replies and errors
 are private/no-store. No task body, annotation result or submission snapshot is
 returned.
+
+Every fixed-item/live-task/pending-review aggregate retains the same live
+visibility predicates. Before returning, recheck the exact original project
+role and this page's package IDs in one query, including last-assignment
+cancellation and the last eligible review leaving pending. A changed scope
+rejects the whole response instead of returning previously materialized private
+metadata or counts. Refresh READ_WORK policy from a newly loaded Project before
+exposing action flags. These GETs do not acquire the project write fence.
 
 | Project role | Visible scope | Actions |
 | --- | --- | --- |

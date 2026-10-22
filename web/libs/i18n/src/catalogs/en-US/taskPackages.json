@@ -6,6 +6,7 @@
   "loading": "Loading…",
   "empty": "No work visible in your current scope.",
   "loadFailed": "Unable to load current work. Access may have changed. Refresh to retry; old rows have been cleared.",
+  "accessChanged": "Access has changed or this project is unavailable. The old creation form has been cleared. Refresh to check your current access.",
   "createTitle": "Create a fixed package",
   "name": "Package name",
   "instructions": "Shared instructions",
