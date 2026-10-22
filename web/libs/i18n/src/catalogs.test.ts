@@ -19,7 +19,7 @@ describe("catalog validator", () => {
     writeFileSync(file, JSON.stringify(data));
   }
 
-  it("accepts locale-specific plural suffixes and all seven namespaces", () => {
+  it("accepts locale-specific plural suffixes and all registered namespaces", () => {
     expect(validateCatalogs(copy)).toEqual([]);
   });
   it("fails when a translation key is deleted", () => {

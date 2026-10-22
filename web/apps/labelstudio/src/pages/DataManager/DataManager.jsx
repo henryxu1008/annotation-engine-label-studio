@@ -17,6 +17,7 @@ import { ExportPage } from "../ExportPage/ExportPage";
 import { APIConfig } from "./api-config";
 import { AssignmentManager } from "./AssignmentManager";
 import { MyWorkWorkspace } from "./MyWorkWorkspace";
+import { TaskPackageEntry, TaskPackages, TaskPackageTitle } from "./TaskPackages";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
@@ -422,6 +423,19 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openTaskPackages = () => {
+    if (!localePreference.ready) return;
+    const selection = dmRef?.store?.currentSelection;
+    // Freeze only explicitly checked IDs, never reinterpret "select all" or a live filter.
+    const initialTaskIds = selection?.all === false ? [...(selection.included ?? [])] : [];
+    const dialog = modal({
+      title: <TaskPackageTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <TaskPackages projectId={project.id} initialTaskIds={initialTaskIds} onOpenReviewQueue={() => { dialog.close(); openReviews(); }} />,
+      style: { width: 960 },
+    });
+  };
+
   const links = {
     "/settings": t("settings"),
   };
@@ -474,6 +488,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <Button size="small" look="outlined" onClick={openMyWork} disabled={!localePreference.ready} data-testid="open-my-work">
         {tc("myWorkTitle")}
       </Button>
+      <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
       {canManageAssignments && (
         <Button
           size="small"

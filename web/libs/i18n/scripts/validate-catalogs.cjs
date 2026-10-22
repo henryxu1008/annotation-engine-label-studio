@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const LOCALES = ["en-US", "zh-CN"];
-const NAMESPACES = ["common", "app", "projects", "datamanager", "editor", "collaboration", "errors"];
+const NAMESPACES = ["common", "app", "projects", "datamanager", "editor", "collaboration", "errors", "taskPackages"];
 const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/;
 const INTERPOLATION = /{{\s*([a-zA-Z][\w.]*)\s*}}/g;
 
@@ -112,7 +112,7 @@ function validateCatalogs(rootDir = path.resolve(__dirname, "../src/catalogs")) 
 if (require.main === module) {
   const errors = validateCatalogs();
   if (errors.length) { console.error(errors.join("\n")); process.exitCode = 1; }
-  else console.log("i18n catalogs valid (en-US, zh-CN; seven namespaces)");
+  else console.log(`i18n catalogs valid (en-US, zh-CN; ${NAMESPACES.length} namespaces)`);
 }
 
 module.exports = { validateCatalogs };

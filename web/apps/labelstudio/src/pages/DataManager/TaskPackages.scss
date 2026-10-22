@@ -1,0 +1,15 @@
+.task-packages {
+  display: grid;
+  gap: 12px;
+  max-height: 75vh;
+  overflow: auto;
+
+  &__toolbar { display: flex; gap: 8px; align-items: center; }
+  &__instructions { white-space: pre-wrap; }
+  &__ids { overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
+  &__counts { display: flex; flex-wrap: wrap; gap: 16px; }
+  &__counts dd { margin: 0; }
+  form, label { display: grid; gap: 8px; }
+  input, textarea { padding: 8px; border: 1px solid var(--color-neutral-border, #888); }
+  th, td { text-align: start; padding: 8px; }
+}

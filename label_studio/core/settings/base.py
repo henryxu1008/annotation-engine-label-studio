@@ -235,6 +235,7 @@ INSTALLED_APPS = [
     'data_export',
     'projects',
     'tasks',
+    'task_packages',
     'data_manager',
     'io_storages',
     'ml',
@@ -893,6 +894,7 @@ ANNOTATION_PROJECT_OPERATION_PROVIDER = get_env(
     'ANNOTATION_PROJECT_OPERATION_PROVIDER',
     'access_control.project_operations.LegacyProjectOperationProvider',
 )
+ANNOTATION_FIXED_PACKAGES_ENABLED = get_bool_env('ANNOTATION_FIXED_PACKAGES_ENABLED', False)
 DEBUG_CONTEXTLOG = get_bool_env('DEBUG_CONTEXTLOG', False)
 
 _REDIS_SSL_CERTS_REQS = get_env('REDIS_SSL_CERTS_REQS', 'required')
