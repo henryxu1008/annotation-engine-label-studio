@@ -2,10 +2,15 @@
 """
 import logging
 
-from asgiref.sync import async_to_sync, sync_to_async
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
-from access_control.project_access import get_visible_project_or_404, require_project_manager
+from access_control.project_access import (
+    get_visible_project_or_404,
+    require_project_manager,
+    visible_projects_for_actor,
+)
+from asgiref.sync import async_to_sync, sync_to_async
+from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.permissions import ViewClassPermission, all_permissions
 from core.utils.common import int_from_request, load_func
@@ -33,6 +38,7 @@ from projects.serializers import ProjectSerializer
 from rest_framework import generics, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from tasks.models import Annotation, Prediction, Task
@@ -151,6 +157,7 @@ _view_request_body = {
     ),
 )
 class ViewAPI(viewsets.ModelViewSet):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     serializer_class = ViewSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['project']
@@ -163,7 +170,17 @@ class ViewAPI(viewsets.ModelViewSet):
     )
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        _, actor = resolve_actor(self.request)
+        project = generics.get_object_or_404(
+            visible_projects_for_actor(actor), pk=serializer.validated_data['project'].pk
+        )
+        serializer.save(user=actor, project=project)
+
+    def perform_update(self, serializer):
+        _, actor = resolve_actor(self.request)
+        project = serializer.validated_data.get('project', serializer.instance.project)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=project.pk)
+        serializer.save(project=project, user=serializer.instance.user)
 
     @extend_schema(
         tags=['Data Manager'],
@@ -193,9 +210,8 @@ class ViewAPI(viewsets.ModelViewSet):
             data=request.data if 'project' in request.data else {'project': request.query_params.get('project')}
         )
         serializer.is_valid(raise_exception=True)
-        project = generics.get_object_or_404(
-            Project.objects.for_user(request.user), pk=serializer.validated_data['project'].id
-        )
+        _, actor = resolve_actor(request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=serializer.validated_data['project'].id)
         queryset = self.filter_queryset(self.get_queryset()).filter(project=project)
         queryset.all().delete()
         return Response(status=204)
@@ -220,7 +236,8 @@ class ViewAPI(viewsets.ModelViewSet):
         project_id = serializer.validated_data['project']
         view_ids = serializer.validated_data['ids']
 
-        project = generics.get_object_or_404(Project.objects.for_user(request.user), pk=project_id)
+        _, actor = resolve_actor(request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=project_id)
 
         queryset = self.filter_queryset(self.get_queryset()).filter(project=project)
         views = list(queryset.filter(id__in=view_ids))
@@ -237,7 +254,8 @@ class ViewAPI(viewsets.ModelViewSet):
         return Response(status=200)
 
     def get_queryset(self):
-        return View.objects.filter(project__organization=self.request.user.active_organization).order_by('order', 'id')
+        _, actor = resolve_actor(self.request)
+        return View.objects.filter(project_id__in=visible_projects_for_actor(actor).values('pk')).order_by('order', 'id')
 
 
 class TaskPagination(PageNumberPagination):
@@ -347,6 +365,7 @@ class TaskPagination(PageNumberPagination):
 
 
 class TaskListAPI(generics.ListCreateAPIView):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     task_serializer_class = DataManagerTaskSerializer
     permission_required = ViewClassPermission(
         GET=all_permissions.tasks_view,
@@ -372,7 +391,9 @@ class TaskListAPI(generics.ListCreateAPIView):
     def get_task_queryset(self, request, prepare_params):
         queryset = Task.prepared.only_filtered(prepare_params=prepare_params)
         _, actor = resolve_actor(request)
-        allowed_task_ids = Task.objects.for_user(actor).values_list('id', flat=True)
+        allowed_task_ids = Task.objects.for_user(actor).filter(
+            project_id__in=visible_projects_for_actor(actor).values('pk')
+        ).values_list('id', flat=True)
         return queryset.filter(id__in=allowed_task_ids)
 
     @staticmethod
@@ -517,14 +538,16 @@ class TaskListAPI(generics.ListCreateAPIView):
     ),
 )
 class ProjectColumnsAPI(APIView):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     permission_required = all_permissions.projects_view
 
     def get(self, request):
         pk = int_from_request(request.GET, 'project', 1)
-        project = generics.get_object_or_404(Project, pk=pk)
+        _, actor = resolve_actor(request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=pk)
         self.check_object_permissions(request, project)
         GET_ALL_COLUMNS = load_func(settings.DATA_MANAGER_GET_ALL_COLUMNS)
-        data = GET_ALL_COLUMNS(project, request.user)
+        data = GET_ALL_COLUMNS(project, actor)
         return Response(data)
 
 
@@ -540,11 +563,13 @@ class ProjectColumnsAPI(APIView):
     ),
 )
 class ProjectStateAPI(APIView):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     permission_required = all_permissions.projects_view
 
     def get(self, request):
         pk = int_from_request(request.GET, 'project', 1)  # replace 1 to None, it's for debug only
-        project = generics.get_object_or_404(Project, pk=pk)
+        _, actor = resolve_actor(request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=pk)
         self.check_object_permissions(request, project)
         data = ProjectSerializer(project).data
 

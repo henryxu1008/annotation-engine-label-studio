@@ -58,6 +58,22 @@ describe("collaboration language and immutable workflow", () => {
   };
 
   const ensureEnglish = () => {
+    cy.location("pathname").then((path) => {
+      if (/\/projects\/\d+\/data\/?$/.test(path)) {
+        // Initial Data Manager view selection canonicalizes the URL. Menubar
+        // deliberately closes menus on navigation; wait for that transition
+        // before opening the account menu, not for an arbitrary duration.
+        cy.location("search", { timeout: 30000 }).should((search) => {
+          expect(new URLSearchParams(search).get("tab"), "initial view selected").to.match(/^\d+$/);
+        });
+      }
+    });
+    cy.get('[data-testid="user-menu-trigger"]').should(($trigger) => {
+      const bounds = $trigger[0].getBoundingClientRect();
+      const viewport = $trigger[0].ownerDocument.defaultView!.innerWidth;
+      expect(bounds.left, "account menu left edge").to.be.at.least(0);
+      expect(bounds.right, "account menu right edge").to.be.at.most(viewport);
+    });
     cy.get('[data-testid="user-menu-trigger"]').click();
     cy.get('[data-testid="menu-language-select"]').then(($select) => {
       if ($select.val() !== "en-US") cy.get('[data-testid="menu-language-select"]').should('be.enabled').select("en-US");
@@ -114,6 +130,10 @@ describe("collaboration language and immutable workflow", () => {
   });
 
   it("keeps the typed rejection reason and exact pending hash through a modal switch", () => {
+    // Reproduce the startup ordering that used to close the account menu in CI.
+    cy.intercept("GET", "**/api/dm/views*", (request) => {
+      request.on("response", (response) => response.setDelay(1000));
+    });
     loginAndVisit(fixture.users.reviewer.email, `/projects/${fixture.project_id}/data`);
     ensureEnglish();
     cy.get('[data-testid="open-review-workspace"]', { timeout: 30000 }).click();

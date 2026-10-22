@@ -106,8 +106,12 @@ class AuthorizationService:
     def can_label_task(cls, principal: Principal, task) -> bool:
         from projects.models import ProjectMember
 
+        from .project_operations import EDIT, project_operation_policy
+
         role = cls.project_role(principal, task.project)
         if role not in (ProjectMember.Role.ANNOTATOR, ProjectMember.Role.MANAGER):
+            return False
+        if not project_operation_policy(task.project).allows(EDIT):
             return False
         return cls.active_task_assignment(principal, task) is not None
 
@@ -122,7 +126,11 @@ class AuthorizationService:
 
     @classmethod
     def can_update_annotation(cls, principal: Principal, annotation) -> bool:
+        from .project_operations import EDIT, project_operation_policy
+
         if annotation.task_id is None:
+            return False
+        if not project_operation_policy(annotation.project).allows(EDIT):
             return False
         assignment = cls.active_task_assignment(principal, annotation.task)
         return assignment is not None and assignment.annotation_id == annotation.id

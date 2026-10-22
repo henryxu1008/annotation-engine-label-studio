@@ -1,6 +1,7 @@
 .breadcrumbs {
   height: 100%;
   display: flex;
+  min-width: 0;
   align-items: center;
   margin-right: 20px;
 
@@ -24,6 +25,7 @@
   &__list {
     height: 100%;
     display: flex;
+    min-width: 0;
     align-items: center;
     list-style-type: none;
     margin: 0;
@@ -62,6 +64,15 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    &:nth-child(2) {
+      min-width: 0;
+
+      & > a {
+        min-width: 0;
+        overflow: hidden;
+      }
     }
 
     &:only-child {

@@ -680,6 +680,7 @@ class TestApprovedExports(APITestCase):
     def test_same_task_different_assignments_remain_separate_standard_samples(self):
         first = self.sources[0]
         other_author = UserFactory(active_organization=self.organization)
+        ProjectMember.objects.create(project=self.project, user=other_author, role=ProjectMember.Role.ANNOTATOR)
         annotation = Annotation.objects.create(
             task=first.assignment.task,
             project=self.project,
@@ -992,6 +993,8 @@ class TestApprovedExportConcurrency(TransactionTestCase):
         project = ProjectFactory(organization=organization, label_config=XML)
         annotator = UserFactory(active_organization=organization)
         reviewer = UserFactory(active_organization=organization)
+        ProjectMember.objects.create(project=project, user=annotator, role=ProjectMember.Role.ANNOTATOR)
+        ProjectMember.objects.create(project=project, user=reviewer, role=ProjectMember.Role.REVIEWER)
         task = TaskFactory(project=project, data={"text": "Alpha sample"})
         annotation = Annotation.objects.create(project=project, task=task, completed_by=annotator, result=[])
         assignment = TaskAssignment.objects.create(

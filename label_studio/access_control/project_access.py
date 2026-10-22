@@ -6,6 +6,14 @@ from projects.models import Project
 from rest_framework import generics
 
 
+def visible_projects_for_actor(actor):
+    """Use the mapped actor's live project and organization membership in SQL."""
+    return Project.objects.for_user(actor).filter(
+        organization__organizationmember__user_id=actor.pk,
+        organization__organizationmember__deleted_at__isnull=True,
+    )
+
+
 def require_project_manager(request, project):
     principal = resolve_principal(request)
     authorization.require(

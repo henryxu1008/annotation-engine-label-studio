@@ -5,8 +5,9 @@ import os
 import pathlib
 
 from access_control.authorization import authorization
-from access_control.project_access import require_project_manager
-from access_control.identity import resolve_principal
+from access_control.identity import resolve_actor, resolve_principal
+from access_control.project_access import require_project_manager, visible_projects_for_actor
+from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.filters import ListFilter
 from core.label_config import config_essential_data_has_changed
@@ -41,8 +42,8 @@ from projects.serializers import (
     ProjectCountsSerializer,
     ProjectImportSerializer,
     ProjectLabelConfigSerializer,
-    ProjectModelVersionExtendedSerializer,
     ProjectMemberSerializer,
+    ProjectModelVersionExtendedSerializer,
     ProjectModelVersionParamsSerializer,
     ProjectReimportSerializer,
     ProjectSerializer,
@@ -53,7 +54,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.exceptions import ValidationError as RestValidationError
 from rest_framework.pagination import LimitOffsetPagination, PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.views import exception_handler
@@ -137,8 +138,8 @@ class ProjectReviewCapabilityAPI(generics.GenericAPIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, *args, **kwargs):
-        project = generics.get_object_or_404(Project.objects.for_user(request.user), pk=kwargs['pk'])
-        principal = resolve_principal(request)
+        principal, actor = resolve_actor(request)
+        project = generics.get_object_or_404(Project.objects.for_user(actor), pk=kwargs['pk'])
         authorization.require(
             authorization.can_review_project(principal, project),
             'Project reviewer role is required to review submissions.',
@@ -372,9 +373,15 @@ class ProjectMemberAPI(generics.RetrieveUpdateDestroyAPIView):
         )
 
     def _locked_project(self):
-        project = generics.get_object_or_404(
-            Project.objects.select_for_update().filter(organization=self.request.user.active_organization),
-            pk=self.kwargs['pk'],
+        from access_control.identity import resolve_actor
+        from access_control.project_operations import SECURITY_CANCEL, lock_project_operation
+
+        principal, _ = resolve_actor(self.request)
+        target_ids = ProjectMember.objects.filter(
+            pk=self.kwargs['member_pk'], project_id=self.kwargs['pk'],
+        ).values_list('user_id', flat=True)
+        project, _ = lock_project_operation(
+            self.kwargs['pk'], principal, SECURITY_CANCEL, related_user_ids=list(target_ids),
         )
         self._authorize_locked_project(project)
         return project
@@ -611,6 +618,7 @@ class ProjectCountsListAPI(generics.ListAPIView):
     ),
 )
 class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     parser_classes = (JSONParser, FormParser, MultiPartParser)
     queryset = Project.objects.with_counts()
     permission_required = ViewClassPermission(
@@ -629,8 +637,9 @@ class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
         serializer = GetFieldsSerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         fields = serializer.validated_data.get('include')
+        _, actor = resolve_actor(self.request)
         projects = ProjectManager.with_counts_annotate(
-            Project.objects.for_user(self.request.user),
+            visible_projects_for_actor(actor),
             fields=fields,
         )
 
