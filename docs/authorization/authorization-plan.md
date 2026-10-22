@@ -830,3 +830,27 @@ ever reaches the service. Warming the stacks preserves the real simultaneous
 write/CAS assertions; it does not resolve that separate baseline initialization
 architecture risk. This slice leaves middleware behavior unchanged and makes no
 claim about a cold concurrent handler-startup acceptance.
+
+The My Work entry and its Editor/review destinations resolve the same trusted
+local actor. Task detail, project bootstrap, DataManager views/columns/task
+collections, ML bootstrap metadata, submission lists/details and uploaded-image reads must not borrow
+the session user's project/manager role. The shared visible-project query repeats
+live organization membership in SQL; cancellation still preserves authorized
+submission history while removing Editor access. View creation records the
+mapped actor, updates retain the creator, and source/target projects are checked.
+
+Object permissions use DRF's existing `HasObjectPermission` with an explicit
+`HasActorObjectPermission` opt-in only on the migrated entry APIs. Keep the
+global default unchanged: legacy APIs may still scope collections by session
+identity, so globally replacing their object-check actor can grant unrelated
+access (including orphan user profiles). Regressions exercise the real provider
+seam across work-to-task, saved drafts/annotations, review/history, view startup,
+uploaded PNG bytes, project/organization/account revocation and reassignment,
+plus refusal to borrow a session manager's role or expand legacy profile access.
+Annotation/draft object reads recheck current project/organization authority;
+first-annotation creation and collection reads use the same mapped actor.
+ML metadata GET does not grant backend configuration: its POST requires the
+existing project-manager policy before serializer health/setup can contact a URL.
+Uploaded media retains its existing project-member policy, not assignment-only
+visibility. External-storage proxy/presign, local-storage roots and avatar
+identity migration are outside this slice and have no new runtime acceptance.

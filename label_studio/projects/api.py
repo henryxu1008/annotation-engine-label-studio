@@ -5,8 +5,9 @@ import os
 import pathlib
 
 from access_control.authorization import authorization
-from access_control.identity import resolve_principal
-from access_control.project_access import require_project_manager
+from access_control.identity import resolve_actor, resolve_principal
+from access_control.project_access import require_project_manager, visible_projects_for_actor
+from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.filters import ListFilter
 from core.label_config import config_essential_data_has_changed
@@ -53,7 +54,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.exceptions import ValidationError as RestValidationError
 from rest_framework.pagination import LimitOffsetPagination, PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.views import exception_handler
@@ -137,8 +138,8 @@ class ProjectReviewCapabilityAPI(generics.GenericAPIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, *args, **kwargs):
-        project = generics.get_object_or_404(Project.objects.for_user(request.user), pk=kwargs['pk'])
-        principal = resolve_principal(request)
+        principal, actor = resolve_actor(request)
+        project = generics.get_object_or_404(Project.objects.for_user(actor), pk=kwargs['pk'])
         authorization.require(
             authorization.can_review_project(principal, project),
             'Project reviewer role is required to review submissions.',
@@ -617,6 +618,7 @@ class ProjectCountsListAPI(generics.ListAPIView):
     ),
 )
 class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     parser_classes = (JSONParser, FormParser, MultiPartParser)
     queryset = Project.objects.with_counts()
     permission_required = ViewClassPermission(
@@ -635,8 +637,9 @@ class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
         serializer = GetFieldsSerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         fields = serializer.validated_data.get('include')
+        _, actor = resolve_actor(self.request)
         projects = ProjectManager.with_counts_annotate(
-            Project.objects.for_user(self.request.user),
+            visible_projects_for_actor(actor),
             fields=fields,
         )
 

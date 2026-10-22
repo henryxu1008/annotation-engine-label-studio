@@ -2,6 +2,9 @@
 """
 import logging
 
+from access_control.identity import resolve_actor
+from access_control.project_access import require_project_manager, visible_projects_for_actor
+from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.permissions import ViewClassPermission, all_permissions
 from django.conf import settings
@@ -11,9 +14,10 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from ml.models import MLBackend
 from ml.serializers import MLBackendSerializer, MLInteractiveAnnotatingRequest
-from projects.models import Project, Task
+from projects.models import Task
 from rest_framework import generics, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -125,15 +129,29 @@ class MLBackendListAPI(generics.ListCreateAPIView):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['is_interactive']
 
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [HasActorObjectPermission(), IsAuthenticated()]
+        return super().get_permissions()
+
     def get_queryset(self):
         project_pk = self.request.query_params.get('project')
-        project = generics.get_object_or_404(Project, pk=project_pk)
+        _, actor = resolve_actor(self.request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=project_pk)
 
         self.check_object_permissions(self.request, project)
 
         ml_backends = project.update_ml_backends_state()
 
         return ml_backends
+
+    def post(self, request, *args, **kwargs):
+        # Reading Editor bootstrap metadata is not permission to configure a
+        # backend or contact a supplied URL during serializer validation.
+        _, actor = resolve_actor(request)
+        project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=request.data.get('project'))
+        require_project_manager(request, project)
+        return super().post(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         ml_backend = serializer.save()

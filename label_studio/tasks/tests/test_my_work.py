@@ -1,7 +1,13 @@
+import base64
 import json
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from access_control.identity import Principal
+from data_import.models import FileUpload
+from data_manager.models import View
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -240,6 +246,356 @@ class TestMyWork(APITestCase):
         with patch('tasks.my_work.resolve_actor', return_value=(principal, self.annotator)):
             data = self.get()
         assert [row['assignment_id'] for row in data['results']] == [own.pk]
+
+    def mapped_provider(self, actor, session_user=None):
+        # Exercise the real identity seam for every endpoint, not a mock of the
+        # work projection alone. The authenticated session must remain intact.
+        session_user = session_user or UserFactory(active_organization=OrganizationFactory())
+        self.client.force_authenticate(user=session_user)
+
+        class MappedProvider:
+            def resolve(self, request):
+                assert request.user.pk == session_user.pk
+                return Principal(f'mapped:{actor.pk}', 'test-mapped', actor.email, actor.pk)
+
+        return patch('access_control.identity.get_identity_provider', return_value=MappedProvider())
+
+    def test_mapping_does_not_expand_unmigrated_user_profile_permissions(self):
+        session_user = UserFactory(active_organization=None)
+        unrelated = UserFactory(active_organization=None, first_name='Unrelated')
+        with self.mapped_provider(self.annotator, session_user=session_user):
+            assert self.client.get(f'/api/users/{unrelated.pk}/').status_code == 403
+            assert self.client.patch(
+                f'/api/users/{unrelated.pk}/', {'first_name': 'Changed'}, format='json'
+            ).status_code == 403
+        unrelated.refresh_from_db()
+        assert unrelated.first_name == 'Unrelated'
+
+    def test_mapped_work_opens_editor_with_only_actor_annotation_and_draft(self):
+        own = self.assignment(result=[])
+        draft = self.draft(own, [])
+        other = AnnotationFactory(task=own.task, completed_by=self.other, result=[{'private': 'other answer'}])
+        TaskAssignment.objects.create(
+            task=own.task, project=self.project, assignee=self.other, assigned_by=self.manager, annotation=other
+        )
+        with self.mapped_provider(self.annotator):
+            row = self.get()['results'][0]
+            assert row['assignment_id'] == own.pk
+            assert row['allowed_actions'] == ['open_editor']
+            task_id = parse_qs(urlparse(row['editor_url']).query)['task'][0]
+            project = self.client.get(f'/api/projects/{self.project.pk}/')
+            assert project.status_code == 200, project.content
+            editor = self.client.get(f'/api/tasks/{task_id}/')
+            assert editor.status_code == 200, editor.content
+            data = editor.json()
+            assert data['assignment_id'] == own.pk
+            assert data['assignment_version'] == own.version
+            assert data['can_label'] is True
+            assert {item['id'] for item in data['annotations']} == {own.annotation_id}
+            assert {item['id'] for item in data['drafts']} == {draft.pk}
+            assert 'other answer' not in json.dumps(data)
+            for endpoint in ('/api/dm/project/', '/api/dm/columns/'):
+                response = self.client.get(endpoint, {'project': self.project.pk})
+                assert response.status_code == 200, response.content
+            saved = self.client.patch(
+                f'/api/annotations/{own.annotation_id}/',
+                {
+                    'result': [], 'assignment_id': own.pk, 'assignment_version': own.version,
+                    'draft_id': draft.pk, 'draft_revision': draft.revision,
+                },
+                format='json',
+            )
+            assert saved.status_code == 200, saved.content
+            own.annotation.refresh_from_db()
+            assert own.annotation.updated_by_id == self.annotator.pk
+
+    def test_mapped_editor_initialization_uses_actor_views_and_creation_owner(self):
+        own = self.assignment()
+        view = View.objects.create(project=self.project, user=self.manager, data={'title': 'Project tasks'})
+        foreign = ProjectFactory()
+        foreign_view = View.objects.create(project=foreign, user=foreign.created_by)
+        with self.mapped_provider(self.annotator):
+            assert self.get()['results'][0]['assignment_id'] == own.pk
+            tabs = self.client.get('/api/dm/views/', {'project': self.project.pk})
+            assert tabs.status_code == 200, tabs.content
+            assert [item['id'] for item in tabs.json()] == [view.pk]
+            assert self.client.get(f'/api/dm/views/{view.pk}/').status_code == 200
+            assert self.client.get(f'/api/dm/views/{foreign_view.pk}/').status_code == 404
+            created = self.client.post(
+                '/api/dm/views/',
+                {'project': self.project.pk, 'data': {'title': 'My tab'}, 'user': self.manager.pk},
+                format='json',
+            )
+            assert created.status_code == 201, created.content
+            assert View.objects.get(pk=created.json()['id']).user_id == self.annotator.pk
+            saved = self.client.patch(
+                f'/api/dm/views/{created.json()["id"]}/',
+                {'data': {'title': 'Saved tab'}, 'user': self.manager.pk}, format='json',
+            )
+            assert saved.status_code == 200, saved.content
+            assert View.objects.get(pk=created.json()['id']).user_id == self.annotator.pk
+            assert self.client.patch(
+                f'/api/dm/views/{view.pk}/', {'project': foreign.pk}, format='json'
+            ).status_code == 404
+            assert self.client.post(
+                '/api/dm/views/', {'project': foreign.pk}, format='json'
+            ).status_code == 404
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            assert self.client.get('/api/dm/views/', {'project': self.project.pk}).json() == []
+            assert self.client.get(f'/api/dm/views/{view.pk}/').status_code == 404
+            assert self.client.post(
+                '/api/dm/views/', {'project': self.project.pk, 'data': {}}, format='json'
+            ).status_code == 404
+
+    def test_mapped_ml_metadata_does_not_grant_backend_configuration(self):
+        self.assignment()
+        foreign = ProjectFactory(organization=self.organization)
+        with self.mapped_provider(self.annotator, session_user=self.manager):
+            assert self.get()['results']
+            response = self.client.get('/api/ml/', {'project': self.project.pk})
+            assert response.status_code == 200, response.content
+            assert response.json() == []
+            assert self.client.get('/api/ml/', {'project': foreign.pk}).status_code == 404
+            with patch('ml.serializers.MLBackendSerializer.validate') as validate:
+                response = self.client.post(
+                    '/api/ml/', {'project': self.project.pk, 'url': 'https://example.invalid'}, format='json'
+                )
+                assert response.status_code == 403
+                validate.assert_not_called()
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            assert self.client.get('/api/ml/', {'project': self.project.pk}).status_code == 404
+
+    def test_mapped_work_opens_review_queue_and_snapshot_with_actor_scope(self):
+        assignment = self.assignment(result=[])
+        pending = self.submission(assignment)
+        own = self.assignment(owner=self.reviewer, result=[])
+        self.submission(own)
+        assignment.cancel()  # Review consumes immutable snapshots, not Editor access.
+        with self.mapped_provider(self.reviewer):
+            data = self.get()
+            assert data['results'][0]['submission_id'] == pending.pk
+            assert data['results'][0]['allowed_actions'] == ['open_review_queue']
+            capability = self.client.get(f'/api/projects/{self.project.pk}/review-capability/')
+            assert capability.status_code == 200, capability.content
+            queue = self.client.get('/api/submissions/', {'project': self.project.pk, 'reviewable': 'true'})
+            assert queue.status_code == 200, queue.content
+            assert [item['id'] for item in queue.json()['results']] == [pending.pk]
+            snapshot = self.client.get(f'/api/submissions/{pending.pk}/')
+            assert snapshot.status_code == 200, snapshot.content
+            assert snapshot.json()['id'] == pending.pk
+            assert self.client.get(f'/api/tasks/{assignment.task_id}/').status_code == 404
+            reviewed = self.client.post(
+                f'/api/submissions/{pending.pk}/review/',
+                {'decision': 'approved', 'reviewer': self.manager.pk},
+                format='json',
+            )
+            assert reviewed.status_code == 200, reviewed.content
+            assert ReviewDecision.objects.get(submission=pending).reviewer_id == self.reviewer.pk
+            history = self.client.get('/api/submissions/', {'project': self.project.pk, 'history': 'true'})
+            assert history.status_code == 200, history.content
+            assert [item['id'] for item in history.json()['results']] == [pending.pk]
+
+    def test_mapped_new_work_can_submit_first_annotation_and_read_only_its_collection(self):
+        own = self.assignment()
+        other = AnnotationFactory(task=own.task, completed_by=self.other, result=[{'private': 'other answer'}])
+        TaskAssignment.objects.create(
+            task=own.task, project=self.project, assignee=self.other, assigned_by=self.manager, annotation=other
+        )
+        with self.mapped_provider(self.annotator):
+            assert self.get()['results'][0]['assignment_id'] == own.pk
+            assert self.client.get(f'/api/tasks/{own.task_id}/').status_code == 200
+            submitted = self.client.post(
+                f'/api/tasks/{own.task_id}/annotations/',
+                {
+                    'result': [], 'assignment_id': own.pk, 'assignment_version': own.version,
+                    'submit_for_review': True, 'completed_by': self.manager.pk,
+                }, format='json',
+            )
+            assert submitted.status_code == 201, submitted.content
+            result = self.client.get(f'/api/tasks/{own.task_id}/annotations/')
+            assert result.status_code == 200, result.content
+            assert [item['id'] for item in result.json()] == [submitted.json()['id']]
+            snapshot = Submission.objects.get(assignment=own)
+            assert snapshot.submitted_by_id == self.annotator.pk
+            assert self.client.get(f'/api/submissions/{snapshot.pk}/').status_code == 200
+            assert self.get()['results'][0]['state'] == 'submitted'
+
+    def test_mapped_annotation_and_draft_reads_recheck_project_and_organization(self):
+        own = self.assignment(result=[])
+        draft = self.draft(own, [])
+        with self.mapped_provider(self.annotator, session_user=self.manager):
+            urls = (f'/api/annotations/{own.annotation_id}/', f'/api/drafts/{draft.pk}/')
+            for url in urls:
+                assert self.client.get(url).status_code == 200
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            for url in urls:
+                assert self.client.get(url).status_code == 403
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=True)
+            OrganizationMember.objects.filter(organization=self.organization, user=self.annotator).update(
+                deleted_at='2026-10-20T00:00Z'
+            )
+            for url in urls:
+                assert self.client.get(url).status_code == 403
+
+    def test_mapped_editor_uploaded_image_uses_actor_and_rechecks_revocation(self):
+        image = base64.b64decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV5kAAAAASUVORK5CYII='
+        )
+        with TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media, USE_NGINX_FOR_UPLOADS=False):
+            upload = FileUpload.objects.create(
+                project=self.project, user=self.manager, file=SimpleUploadedFile('mapped.png', image)
+            )
+            foreign_upload = FileUpload.objects.create(
+                project=ProjectFactory(organization=self.organization),
+                user=self.manager, file=SimpleUploadedFile('other.png', image),
+            )
+            own = self.assignment()
+            own.task.data = {'image': upload.url}
+            own.task.file_upload = upload
+            own.task.save(update_fields=['data', 'file_upload'])
+            image_url = urlparse(upload.url).path
+            for actor, session_user in ((self.annotator, None), (self.other, self.manager)):
+                with self.subTest(actor=actor.pk), self.mapped_provider(actor, session_user=session_user):
+                    # Media retains the existing project-member permission;
+                    # this does not grant Editor access to unassigned tasks.
+                    if actor == self.annotator:
+                        assert self.get()['results'][0]['assignment_id'] == own.pk
+                        task = self.client.get(f'/api/tasks/{own.task_id}/')
+                        assert task.status_code == 200, task.content
+                        assert urlparse(task.json()['data']['image']).path == image_url
+                    urls = (image_url, f'/storage-data/uploaded/?filepath={upload.file.name}')
+                    assert self.client.get(urlparse(foreign_upload.url).path).status_code == 403
+                    for url in urls:
+                        response = self.client.get(url)
+                        assert response.status_code == 200, response.content if not response.streaming else ''
+                        assert b''.join(response.streaming_content) == image
+                        # Django's test-client iterator already closes the
+                        # response with its connection-signal guard. Closing it
+                        # again kills PostgreSQL's enclosing TestCase transaction.
+                        assert response.closed
+                    ProjectMember.objects.filter(project=self.project, user=actor).update(enabled=False)
+                    for url in urls:
+                        assert self.client.get(url).status_code == 403
+            with self.mapped_provider(self.reviewer, session_user=self.manager):
+                OrganizationMember.objects.filter(organization=self.organization, user=self.reviewer).update(
+                    deleted_at='2026-10-20T00:00Z'
+                )
+                for url in urls:
+                    assert self.client.get(url).status_code == 403
+
+    def test_mapped_work_links_do_not_borrow_session_manager_permissions(self):
+        own = self.assignment(result=[])
+        other = self.assignment(owner=self.other, result=[])
+        foreign = ProjectFactory()
+        foreign_task = TaskFactory(project=foreign)
+        with self.mapped_provider(self.annotator, session_user=self.manager):
+            assert self.get()['results'][0]['assignment_id'] == own.pk
+            assert self.client.get(f'/api/tasks/{other.task_id}/').status_code == 404
+            assert self.client.get(f'/api/tasks/{foreign_task.pk}/').status_code == 404
+            assert self.client.get(f'/api/projects/{foreign.pk}/').status_code == 404
+            assert self.client.get(
+                '/api/submissions/', {'project': self.project.pk, 'reviewable': 'true'}
+            ).status_code == 403
+            assert self.client.patch(
+                f'/api/tasks/{own.task_id}/', {'data': {'text': 'spoofed'}}, format='json'
+            ).status_code == 403
+
+    def test_mapped_editor_rechecks_project_revocation_after_work_was_read(self):
+        own = self.assignment(result=[])
+        with self.mapped_provider(self.annotator, session_user=self.manager):
+            assert self.get()['results'][0]['assignment_id'] == own.pk
+            assert self.client.get(f'/api/tasks/{own.task_id}/').status_code == 200
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            assert self.client.get(self.url).status_code == 404
+            assert self.client.get(f'/api/tasks/{own.task_id}/').status_code == 404
+            response = self.client.patch(
+                f'/api/annotations/{own.annotation_id}/',
+                {'result': [], 'assignment_id': own.pk, 'assignment_version': own.version},
+                format='json',
+            )
+            assert response.status_code == 403
+
+    def test_mapped_editor_rechecks_assignment_after_reassignment(self):
+        own = self.assignment(result=[])
+        with self.mapped_provider(self.annotator, session_user=self.manager):
+            assert self.get()['results'][0]['assignment_id'] == own.pk
+            draft_url = f'/api/tasks/{own.task_id}/annotations/{own.annotation_id}/drafts'
+            created = self.client.post(
+                draft_url, {'result': [], 'assignment_id': own.pk, 'assignment_version': own.version}, format='json'
+            )
+            assert created.status_code == 201, created.content
+            own.cancel()
+            TaskAssignment.objects.create(
+                task=own.task, project=self.project, assignee=self.other, assigned_by=self.manager
+            )
+            assert self.get()['results'] == []
+            assert self.client.get(f'/api/tasks/{own.task_id}/').status_code == 404
+            response = self.client.post(
+                draft_url,
+                {'result': [], 'assignment_id': own.pk, 'assignment_version': own.version},
+                format='json',
+            )
+            assert response.status_code == 404
+            assert AnnotationDraft.objects.filter(assignment=own).count() == 1
+
+    def test_mapped_inactive_actor_cannot_use_session_manager_or_cached_actions(self):
+        pending = self.submission(self.assignment(result=[]))
+        administrator = UserFactory(is_staff=True, is_superuser=True)
+        for actor in (self.annotator, self.reviewer):
+            with self.subTest(actor=actor.pk), self.mapped_provider(actor, session_user=self.manager):
+                assert self.get()['results']
+                type(actor).objects.filter(pk=actor.pk).update(is_active=False, session_actor=administrator)
+                for endpoint in (
+                    self.url,
+                    f'/api/projects/{self.project.pk}/',
+                    f'/api/tasks/{pending.assignment.task_id}/',
+                    '/api/submissions/',
+                    f'/api/submissions/{pending.pk}/',
+                ):
+                    response = self.client.get(endpoint)
+                    assert response.status_code == 401, response.content
+
+    def test_mapped_review_rechecks_revocation_on_queue_detail_and_write(self):
+        pending = self.submission(self.assignment(result=[]))
+        with self.mapped_provider(self.reviewer, session_user=self.manager):
+            assert self.get()['results'][0]['submission_id'] == pending.pk
+            ProjectMember.objects.filter(project=self.project, user=self.reviewer).update(enabled=False)
+            assert self.client.get(self.url).status_code == 404
+            assert self.client.get(
+                '/api/submissions/', {'project': self.project.pk, 'reviewable': 'true'}
+            ).status_code == 404
+            assert self.client.get(f'/api/submissions/{pending.pk}/').status_code == 404
+            assert self.client.post(
+                f'/api/submissions/{pending.pk}/review/', {'decision': 'approved'}, format='json'
+            ).status_code == 403
+        pending.refresh_from_db()
+        assert pending.status == 'pending'
+        assert not ReviewDecision.objects.filter(submission=pending).exists()
+
+    def test_mapped_organization_revocation_blocks_work_actions_and_snapshots(self):
+        pending = self.submission(self.assignment(result=[]))
+        for actor in (self.annotator, self.reviewer):
+            with self.subTest(actor=actor.pk), self.mapped_provider(actor, session_user=self.manager):
+                assert self.get()['results']
+                OrganizationMember.objects.filter(organization=self.organization, user=actor).update(
+                    deleted_at='2026-10-20T00:00Z'
+                )
+                assert self.client.get(self.url).status_code == 403
+                assert self.client.get(f'/api/projects/{self.project.pk}/').status_code == 404
+                assert self.client.get(f'/api/tasks/{pending.assignment.task_id}/').status_code in (403, 404)
+                for endpoint in ('/api/dm/project/', '/api/dm/columns/'):
+                    assert self.client.get(endpoint, {'project': self.project.pk}).status_code == 404
+                assert self.client.get('/api/dm/views/', {'project': self.project.pk}).json() == []
+                tasks = self.client.get('/api/tasks/', {'project': self.project.pk})
+                assert tasks.status_code == 200, tasks.content
+                assert tasks.json()['tasks'] == []
+                assert tasks.json()['total'] == 0
+                assert self.client.get(f'/api/submissions/{pending.pk}/').status_code == 404
+                assert self.client.get('/api/submissions/', {'project': self.project.pk}).json() == []
+                if actor == self.reviewer:
+                    assert self.client.get(
+                        '/api/submissions/', {'project': self.project.pk, 'reviewable': 'true'}
+                    ).status_code == 403
 
     def test_actual_list_and_count_queries_recheck_membership_after_preflight(self):
         from tasks.my_work import work_projects
