@@ -349,6 +349,27 @@ class PackageDetailAPI(PackageAPIBase):
                     for row in page
                 ]
         policy = current_read_policy(project, actor, role, package_ids=[package.pk])
+        # Another eligible row can keep the package visible after a returned row
+        # is revoked. Recheck this page's row identities using the same live SQL
+        # scope, without freezing progress values or taking a project write lock.
+        if role == 'annotator':
+            expected = {(row['assignment_id'], row['assignment_version'], row['task_id']) for row in results}
+            current = set(
+                assignments.filter(pk__in=[row['assignment_id'] for row in results]).values_list(
+                    'pk', 'version', 'task_id'
+                )
+            )
+            if current != expected:
+                fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current assignment access has changed.')
+        elif role == 'reviewer':
+            expected = {(row['submission_id'], row['revision'], row['task_id']) for row in results}
+            current = set(
+                pending.filter(pk__in=[row['submission_id'] for row in results]).values_list(
+                    'pk', 'revision', 'assignment__task_id'
+                )
+            )
+            if current != expected:
+                fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current pending review access has changed.')
         if role == 'annotator' and not policy.allows(EDIT):
             for row in results:
                 row['editor_url'] = None

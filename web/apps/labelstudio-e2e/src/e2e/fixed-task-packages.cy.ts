@@ -17,10 +17,16 @@ describe('fixed packages reuse existing work without dispatch', () => {
         cy.get('[data-testid="language-preference-select"]').select(locale);
         cy.get('html').should('have.attr', 'lang', locale);
         cy.visit(path);
+        if (email === fixture.users.manager.email) {
+          cy.window().its('dataManager.store.currentView', { timeout: 30000 }).should('exist').then((view: any) => {
+            view.selected.update({ all: false, included: [fixture.tasks.a.id] });
+          });
+        }
         cy.get('[data-testid="open-task-packages"]', { timeout: 30000 }).should('be.visible').click();
       };
 
       visit(fixture.users.manager.email);
+      cy.contains('label', zh ? '任务 ID（' : 'Task IDs (').find('textarea').should('have.value', String(fixture.tasks.a.id));
       cy.request(`/api/task-assignments/?project=${project}&task=${fixture.tasks.a.id}`).its('body').then((body) => {
         assignmentCount = (body.results ?? body).length;
       });

@@ -10,8 +10,10 @@ review ledger or release manifest. #83 remains open.
 With `ANNOTATION_FIXED_PACKAGES_ENABLED=true`, a project manager can preview and
 create a named list of 1–1000 explicit, unique Task IDs. Instructions are shared
 with authorized workers; source notes and membership digests are manager-only.
-Data Manager's explicitly checked IDs prefill the form. A dynamic filter or
-"select all" is never silently resolved into a fixed list.
+Data Manager's explicitly checked IDs prefill the form only when its current
+view targets tasks. Annotation-targeted or unknown views never provide Task IDs,
+even if the numeric ID sequences overlap. A dynamic filter or "select all" is
+never silently resolved into a fixed list.
 
 Creation validates the entire selection under the existing Project-first fence:
 Project → OrganizationMember → User → ProjectMember → ordered Task rows. The
@@ -37,8 +39,8 @@ duplicate assignments. Project deletion retains the existing cascade semantics;
 these rows are not a permanent audit ledger.
 
 This freezes **IDs only**. Task data, media, labeling configuration and answers
-are not frozen. #80 owns immutable dataset snapshots and release content; this
-candidate neither imports nor requires the unmerged PR #100 implementation.
+are not frozen. #80 owns immutable dataset snapshots and release content;
+package grouping neither calls nor replaces that independent implementation.
 
 ## Read authority and progress
 
@@ -56,6 +58,15 @@ cancellation and the last eligible review leaving pending. A changed scope
 rejects the whole response instead of returning previously materialized private
 metadata or counts. Refresh READ_WORK policy from a newly loaded Project before
 exposing action flags. These GETs do not acquire the project write fence.
+
+Detail responses also recheck every materialized page row using the same live
+assignment or pending-review scope. Losing one row rejects the whole response
+with PACKAGE_ACCESS_CHANGED even when another row keeps the package visible.
+Assignment identity includes its version and task ID; review identity includes
+its immutable revision and task ID. A refresh loads the remaining eligible rows.
+This adds one bounded SELECT for an ordinary role, not a content snapshot or a
+recalculation of every progress value. Pending reviews from cancelled source
+assignments remain eligible, and managers retain unavailable fixed members.
 
 | Project role | Visible scope | Actions |
 | --- | --- | --- |
@@ -108,5 +119,5 @@ an out-of-range page once by its specific machine code. Creation retries retain
 the request key/body. `fixed-task-packages.cy.ts` covers real browser creation
 and manager/annotator/reviewer views in en-US and zh-CN, including no dispatch.
 
-This local candidate is not pushed, deployed or enabled in the retained pilot.
-Production, IAM recovery and Core business integration remain out of scope.
+The feature defaults off; retained-pilot activation and production deployment
+remain separate work. IAM recovery and Core business integration are out of scope.

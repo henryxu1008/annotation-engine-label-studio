@@ -365,6 +365,66 @@ class TestPackages(PackageFixture, APITestCase):
         assert response.status_code in (403, 404), response.json()
         assert 'package' not in response.json()
 
+    def test_detail_rejects_partial_assignment_revocation_even_when_package_remains_visible(self):
+        package_id = self.create().json()['id']
+        revoked = self.assignment()
+        retained = self.assignment(task=self.tasks[1])
+        self.client.force_authenticate(self.annotator)
+        original = package_api.current_read_policy
+
+        def cancel_before_final_check(*args, **kwargs):
+            TaskAssignment.objects.filter(pk=revoked.pk).update(status='cancelled')
+            return original(*args, **kwargs)
+
+        with patch('task_packages.api.current_read_policy', side_effect=cancel_before_final_check):
+            response = self.detail(package_id)
+        assert response.status_code == 403, response.content
+        assert response.json()['display_context']['reason'] == 'PACKAGE_ACCESS_CHANGED'
+        assert 'results' not in response.json() and 'counts' not in response.json()
+        fresh = self.detail(package_id)
+        assert fresh.status_code == 200, fresh.content
+        assert [row['assignment_id'] for row in fresh.json()['results']] == [retained.pk]
+        assert fresh.json()['counts']['assignments'] == 1
+
+    def test_detail_rejects_partial_review_departure_even_when_package_remains_visible(self):
+        package_id = self.create().json()['id']
+        departed = self.submission(self.assignment())
+        retained = self.submission(self.assignment(task=self.tasks[1]))
+        self.client.force_authenticate(self.reviewer)
+        original = package_api.current_read_policy
+
+        def approve_before_final_check(*args, **kwargs):
+            Submission.objects.filter(pk=departed.pk).update(status='approved')
+            return original(*args, **kwargs)
+
+        with patch('task_packages.api.current_read_policy', side_effect=approve_before_final_check):
+            response = self.detail(package_id)
+        assert response.status_code == 403, response.content
+        assert response.json()['display_context']['reason'] == 'PACKAGE_ACCESS_CHANGED'
+        assert 'results' not in response.json() and 'counts' not in response.json()
+        fresh = self.detail(package_id)
+        assert fresh.status_code == 200, fresh.content
+        assert [row['submission_id'] for row in fresh.json()['results']] == [retained.pk]
+        assert fresh.json()['counts']['pending_review'] == 1
+
+    def test_detail_rechecks_returned_assignment_version_even_when_still_owned(self):
+        package_id = self.create().json()['id']
+        assignment = self.assignment()
+        self.client.force_authenticate(self.annotator)
+        original = package_api.current_read_policy
+
+        def rotate_before_final_check(*args, **kwargs):
+            TaskAssignment.objects.filter(pk=assignment.pk).update(version=assignment.version + 1)
+            return original(*args, **kwargs)
+
+        with patch('task_packages.api.current_read_policy', side_effect=rotate_before_final_check):
+            response = self.detail(package_id)
+        assert response.status_code == 403, response.content
+        assert 'results' not in response.json()
+        fresh = self.detail(package_id)
+        assert fresh.status_code == 200, fresh.content
+        assert fresh.json()['results'][0]['assignment_version'] == assignment.version + 1
+
     def test_read_actions_consume_fresh_project_policy_after_queries(self):
         package_id = self.create().json()['id']
         self.submission(self.assignment())
@@ -552,3 +612,75 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
                 response = future.result(timeout=30)
             assert response.status_code in (403, 404), response.json()
             assert b'counts' not in response.content and b'source_note' not in response.content
+
+    def read_after_committed_row_change(self, actor, package_id, change):
+        if connection.vendor != 'postgresql':
+            self.skipTest('Independent committed read/write connections require PostgreSQL')
+        reader = self.client_for(actor)
+        entered, release = Event(), Event()
+        original = package_api.current_read_policy
+
+        def pause_after_materialization(*args, **kwargs):
+            entered.set()
+            assert release.wait(15)
+            return original(*args, **kwargs)
+
+        def read():
+            close_old_connections()
+            try:
+                return reader.get(f'{self.url}{package_id}/')
+            finally:
+                close_old_connections()
+
+        with (
+            patch('task_packages.api.current_read_policy', side_effect=pause_after_materialization),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            future = pool.submit(read)
+            try:
+                assert entered.wait(10)
+                change()
+            finally:
+                release.set()
+            response = future.result(timeout=30)
+        assert response.status_code == 403, response.content
+        assert response.json()['display_context']['reason'] == 'PACKAGE_ACCESS_CHANGED'
+        assert not {'results', 'counts', 'package'} & response.json().keys()
+
+    def test_partial_cancellation_and_reassignment_commit_before_detail_response(self):
+        package_id = self.create().json()['id']
+        cancelled = self.assignment()
+        retained = self.assignment(task=self.tasks[1])
+        writer = self.client_for(self.manager)
+
+        def reassign():
+            response = writer.delete(f'/api/task-assignments/{cancelled.pk}/')
+            assert response.status_code == 204, response.content
+            response = writer.post(
+                '/api/task-assignments/', {'task': cancelled.task_id, 'assignee': self.other.pk}, format='json'
+            )
+            assert response.status_code == 201, response.content
+
+        self.read_after_committed_row_change(self.annotator, package_id, reassign)
+        self.client.force_authenticate(self.annotator)
+        response = self.detail(package_id)
+        assert response.status_code == 200, response.content
+        assert [row['assignment_id'] for row in response.json()['results']] == [retained.pk]
+        assert response.json()['counts']['assignments'] == 1
+
+    def test_partial_review_departure_commits_before_detail_response(self):
+        package_id = self.create().json()['id']
+        departed = self.submission(self.assignment())
+        retained = self.submission(self.assignment(task=self.tasks[1]))
+        writer = self.client_for(self.reviewer)
+
+        def approve():
+            response = writer.post(f'/api/submissions/{departed.pk}/review/', {'decision': 'approved'}, format='json')
+            assert response.status_code == 200, response.content
+
+        self.read_after_committed_row_change(self.reviewer, package_id, approve)
+        self.client.force_authenticate(self.reviewer)
+        response = self.detail(package_id)
+        assert response.status_code == 200, response.content
+        assert [row['submission_id'] for row in response.json()['results']] == [retained.pk]
+        assert response.json()['counts']['pending_review'] == 1

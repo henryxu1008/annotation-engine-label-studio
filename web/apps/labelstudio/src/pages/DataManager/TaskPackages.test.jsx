@@ -113,18 +113,25 @@ describe("fixed task packages", () => {
   });
 
   it.each(["en-US", "zh-CN"])("clears stale personal rows and links after revocation in %s", async (locale) => {
+    const remaining = { assignment_id: 4, task_id: 10, state: "assigned", editor_url: "/projects/4/data?task=10" };
     mockCallApi
       .mockResolvedValueOnce({ ...list, role: "annotator", can_create: false })
-      .mockResolvedValueOnce(own)
-      .mockResolvedValueOnce({ error: true, status: 403 });
+      .mockResolvedValueOnce({ ...own, results: [...own.results, remaining] })
+      .mockResolvedValueOnce({ error: true, status: 403, response: { display_context: { reason: "PACKAGE_ACCESS_CHANGED" } } })
+      .mockResolvedValueOnce({ ...own, results: [remaining] });
     const { runtime, unmount } = mount(locale);
     fireEvent.click(await screen.findByRole("button", { name: "Trial 试用" }));
-    await screen.findByRole("link");
+    expect(await screen.findAllByRole("link")).toHaveLength(2);
     expect(screen.queryByLabelText(locale === "zh-CN" ? "任务包名称" : "Package name")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "刷新进度" : "Refresh progress" }));
     expect(screen.queryByRole("link")).toBeNull();
-    await screen.findByRole("alert");
+    expect((await screen.findByRole("alert")).textContent).toBe(locale === "zh-CN"
+      ? "无法加载当前工作，权限可能已变化。旧记录已清除，请刷新重试。"
+      : "Unable to load current work. Access may have changed. Refresh to retry; old rows have been cleared.");
     expect(screen.queryByRole("table")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "刷新进度" : "Refresh progress" }));
+    expect((await screen.findByRole("link")).getAttribute("href")).toBe(remaining.editor_url);
+    expect(screen.getAllByRole("link")).toHaveLength(1);
     unmount();
     runtime.destroy();
   });

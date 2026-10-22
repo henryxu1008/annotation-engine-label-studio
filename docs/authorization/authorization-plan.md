@@ -871,3 +871,13 @@ shared tasks. Real PostgreSQL command/API interleavings cover command-first
 submission followed by revocation and revocation/cancellation/reassignment-first
 refusal without modifying the old Annotation. Seed commands only submit resources
 created in their own uncommitted transaction; API callers already use the fence.
+
+Fixed task-package detail reads revalidate each returned assignment ID/version
+or pending submission ID/revision through the existing actor/project/live-task
+querysets after the final project/package policy check. Partial cancellation,
+reassignment or review departure rejects the materialized page with
+PACKAGE_ACCESS_CHANGED even if another row keeps the package visible. This is
+a bounded scope check without Project write locks; ordinary progress values
+remain a live projection. PostgreSQL regressions interleave real cancellation,
+reassignment and review APIs with a paused detail read. Existing Editor/submit
+and review write fences remain authoritative independently of these links.
