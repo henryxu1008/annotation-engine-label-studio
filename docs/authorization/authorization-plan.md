@@ -9,6 +9,11 @@ enforces source namespace + Submission ID globally across connections; connectio
 replacement cannot bypass a frozen source conflict. Core-only-review, #76 and
 #307 environments/credentials remain outside this trial's write set. No deployment,
 Core review, Gold/certification, publication, delivery or deletion is authorized.
+Synthetic control files are not an authority: validate their marker, canonical
+namespace against operator policy, and exact organization/project/active-user
+membership graph before changing a role or Token policy. Lock that graph and
+require exactly one membership update. Create credential files exclusively as
+0600 before writing any bytes; never rely on a later chmod or overwrite a file.
 
 Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'

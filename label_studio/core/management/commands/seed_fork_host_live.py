@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from organizations.models import Organization, OrganizationMember
@@ -14,6 +15,42 @@ from rest_framework.authtoken.models import Token
 from tasks.models import Annotation, Task, TaskAssignment
 from tasks.submissions import create_submission, review_submission
 from users.models import User
+
+
+def write_private_json(path, value):
+    # Exclusive creation prevents clobbering an existing file/symlink. Mode is
+    # private before the first credential byte; a failed write stays private.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        json.dump(value, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def fixture_scope(output):
+    """Bind mutable controls to the operator policy and exact synthetic cohort."""
+    try:
+        fixture = json.loads(output.read_text(encoding='utf-8'))
+        namespace = str(uuid.UUID(fixture['namespace']))
+        if fixture['synthetic'] is not True or namespace != fixture['namespace']:
+            raise ValueError()
+        policy = settings.APPROVED_EXPORT_POLICY
+        if policy['source_namespace'] != namespace or policy['projects'][f"{fixture['organization']}:{fixture['project']}"] != {'mode': 'fork_approved', 'version': 'fork-host-live/v1'}:
+            raise ValueError()
+        org = Organization.objects.select_for_update().get(pk=fixture['organization'], title='Synthetic Fork Host RAW')
+        User.objects.select_for_update().get(pk=org.created_by_id, email='owner@hfraw.example.test', username='hfraw-owner', is_active=True, active_organization=org)
+        project = Project.objects.select_for_update().get(pk=fixture['project'], organization=org, created_by_id=org.created_by_id, title='Synthetic Fork Host text only', deleted_at__isnull=True)
+        roles = ('manager', 'snapshot', 'fetch', 'annotator', 'reviewer')
+        if set(fixture['users']) != set(roles):
+            raise ValueError()
+        members = {}
+        for role in roles:
+            user = User.objects.select_for_update().get(pk=fixture['users'][role]['id'], email=f'{role}@hfraw.example.test', username=f'hfraw-{role}', is_active=True, active_organization=org)
+            OrganizationMember.objects.select_for_update().get(user=user, organization=org, deleted_at__isnull=True)
+            members[role] = ProjectMember.objects.select_for_update().get(project=project, user=user, enabled=True)
+        return org, members
+    except (OSError, KeyError, TypeError, ValueError, AttributeError, ObjectDoesNotExist, MultipleObjectsReturned):
+        raise CommandError('Synthetic fixture identity, policy or membership mismatch') from None
 
 
 class Command(BaseCommand):
@@ -30,16 +67,18 @@ class Command(BaseCommand):
         if os.getenv('FORK_HOST_LIVE_SYNTHETIC') != '1' or db['ENGINE'] != 'django.db.backends.postgresql' or not db['NAME'].startswith('hfraw_'):
             raise CommandError('Dedicated hfraw_ PostgreSQL database and explicit synthetic gate required')
         output = Path(options['output'])
+        if options['action'] not in ('seed', 'revoke', 'restore', 'token-off', 'token-on') or options['role'] not in ('manager', 'snapshot', 'fetch'):
+            raise CommandError('Unsupported synthetic control action or role')
         if options['action'] != 'seed':
-            fixture = json.loads(output.read_text())
+            org, members = fixture_scope(output)
             if options['action'] in ('token-off', 'token-on'):
-                org = Organization.objects.get(pk=fixture['organization'])
                 org.jwt.legacy_api_tokens_enabled = options['action'] == 'token-on'
                 org.jwt.save()
             else:
-                user = User.objects.get(pk=fixture['users'][options['role']]['id'])
-                ProjectMember.objects.filter(project_id=fixture['project'], user=user).update(
+                changed = ProjectMember.objects.filter(pk=members[options['role']].pk).update(
                     role='annotator' if options['action'] == 'revoke' else 'manager')
+                if changed != 1:
+                    raise CommandError('Synthetic membership update did not affect exactly one row')
             self.stdout.write('Synthetic fixture policy updated')
             return
         if output.exists() or User.objects.filter(email__endswith='@hfraw.example.test').exists():
@@ -71,9 +110,8 @@ class Command(BaseCommand):
             sources.append({'submission_id': source.pk, 'revision': source.revision, 'result_hash': source.result_hash})
         namespace = str(uuid.uuid4())
         fixture = {'synthetic': True, 'namespace': namespace, 'organization': str(org.pk), 'project': str(project.pk), 'approved': sources[:3], 'budget': sources[3:], 'users': {name: {'id': u.pk, 'token': Token.objects.get_or_create(user=u)[0].key} for name, u in users.items()}}
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(fixture), encoding='utf-8')
-        output.chmod(0o600)
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        write_private_json(output, fixture)
         policy = {'source_namespace': namespace, 'projects': {f'{org.pk}:{project.pk}': {'mode': 'fork_approved', 'version': 'fork-host-live/v1'}}}
         output.with_name('fork-policy.json').write_text(json.dumps(policy), encoding='utf-8')
         self.stdout.write('New synthetic fixture ready; credentials kept in private output only')
