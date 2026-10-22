@@ -141,9 +141,14 @@ class TestReleaseSnapshots(APITestCase):
 
     def test_native_artifact_corruption_prevents_manifest_and_download(self):
         snapshot = self.capture()
+        other = self.capture(snapshot.release, "same-source-dependent")
         asset = next(iter(service.assets(snapshot, service.verify(snapshot)).values()))
         asset["path"].write_bytes(b"corrupt native records")
         assert self.read(snapshot, "manifest/").status_code == 409
+        other.refresh_from_db()
+        assert other.state == "quarantined"
+        snapshot.release.refresh_from_db()
+        assert snapshot.release.state == "failed_final"
 
     def test_frozen_authorization_receipt_loss_blocks_content(self):
         from data_export.approved_models import ApprovedDatasetReleaseAccessEvent
@@ -368,6 +373,7 @@ class TestReleaseSnapshots(APITestCase):
             {"token": uuid.uuid4()},
             {"state": "queued"},
             {"release_id": uuid.uuid4()},
+            {"queued_at": service.timezone.now()},
         ):
             with self.assertRaises(DatabaseError), transaction.atomic():
                 Snapshot.objects.filter(pk=snapshot.pk).update(**update)
@@ -621,3 +627,89 @@ class TestReleaseSnapshots(APITestCase):
         snapshot.refresh_from_db()
         assert snapshot.state == "quarantined" and snapshot.error_code == "SNAPSHOT_INTEGRITY_FAILED"
         assert self.read(snapshot, f"diff/?against={snapshot.pk}").status_code == 409
+
+    def test_history_integrity_failure_quarantines_all_ready_dependents(self):
+        from data_export.approved_models import ApprovedDatasetRelease
+
+        first = self.capture()
+        second = self.capture(first.release, "another-dependent")
+        ApprovedDatasetRelease.objects.filter(pk=first.release_id).update(manifest=b"{}")
+        assert self.client.get(self.snapshot_url(first.release)).status_code == 409
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert first.state == second.state == "quarantined"
+        first.release.refresh_from_db()
+        assert first.release.state == "failed_final"
+
+    def test_queue_outage_age_does_not_expire_a_newly_enqueued_claim(self):
+        from datetime import timedelta
+
+        release = self.frozen()
+        self.generate(release)
+        response = self.client.post(self.snapshot_url(release), {}, format="json", HTTP_IDEMPOTENCY_KEY="outage-age")
+        snapshot = Snapshot.objects.get(pk=response.json()["snapshot_id"])
+        # The request was created during an outage, before any job was enqueued.
+        created = snapshot.created_at
+        with patch.object(service.timezone, "now", return_value=created + timedelta(minutes=40)), patch.object(base, "api_queue"):
+            service.dispatch(snapshot.pk)
+            snapshot.refresh_from_db()
+            assert snapshot.state == "queued"
+            assert self.read(snapshot).json()["retryable"] is False
+            token = snapshot.token
+            assert self.client.post(self.snapshot_url(release, snapshot, "retry/"), {}, format="json").status_code == 409
+            snapshot.refresh_from_db()
+            assert snapshot.token == token
+        with patch.object(service.timezone, "now", return_value=created + timedelta(minutes=71)), patch.object(base, "api_queue"):
+            assert self.read(snapshot).json()["retryable"] is True
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(self.snapshot_url(release, snapshot, "retry/"), {}, format="json")
+            assert response.status_code == 202
+            snapshot.refresh_from_db()
+            assert snapshot.token != token
+            assert snapshot.queued_at == created + timedelta(minutes=71)
+            assert self.read(snapshot).json()["retryable"] is False
+
+    def test_source_quarantined_by_legacy_export_invalidates_snapshot_history(self):
+        from data_export.approved_models import ApprovedDatasetRelease
+
+        snapshot = self.capture()
+        ApprovedDatasetRelease.objects.filter(pk=snapshot.release_id).update(
+            state="failed_final", error_code="ARTIFACT_INTEGRITY_FAILED"
+        )
+        assert self.client.get(self.snapshot_url(snapshot.release)).status_code == 409
+        snapshot.refresh_from_db()
+        assert snapshot.state == "quarantined"
+
+    def test_queue_timestamp_migration_preserves_frozen_bytes_and_fences_reverse(self):
+        from importlib import import_module
+
+        from django.db import connection
+
+        migration = import_module("data_export.migrations.0014_snapshot_queued_at")
+        ready = self.capture()
+        original = bytes(ready.manifest)
+        response = self.client.post(self.snapshot_url(ready.release), {}, format="json", HTTP_IDEMPOTENCY_KEY="legacy-queue")
+        queued = Snapshot.objects.get(pk=response.json()["snapshot_id"])
+        Snapshot.objects.filter(pk=queued.pk).update(state="queued", queued_at=None)
+        with connection.schema_editor() as editor:
+            migration.install(None, editor)
+        queued.refresh_from_db()
+        assert queued.queued_at is not None
+        ready.refresh_from_db()
+        assert bytes(ready.manifest) == original and ready.queued_at is None
+        with self.assertRaisesRegex(RuntimeError, "forbid destructive rollback"):
+            with connection.schema_editor() as editor:
+                migration.uninstall(None, editor)
+        assert self.read(ready, "manifest/").content == original
+
+    def test_empty_queue_timestamp_guard_can_reverse_and_reinstall(self):
+        from importlib import import_module
+
+        from django.db import connection
+
+        migration = import_module("data_export.migrations.0014_snapshot_queued_at")
+        assert Snapshot.objects.count() == 0
+        with connection.schema_editor() as editor:
+            migration.uninstall(None, editor)
+            migration.install(None, editor)
+        assert self.capture().state == "ready"

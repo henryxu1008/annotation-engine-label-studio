@@ -25,7 +25,7 @@ class ReleaseSnapshotAPI(ApprovedExportAPI):
     def gate(self, snapshot, *, content=True):
         service.identity(snapshot, self.project)
         try:
-            service.receipt_gate(snapshot.release)
+            service.receipt_gate(snapshot.release, check_files=True)
             if content:
                 manifest = service.verify(snapshot)
                 # All immutable payloads, including media, must still be available.
@@ -58,7 +58,10 @@ class ReleaseSnapshotAPI(ApprovedExportAPI):
             "retryable": self.actor.pk == snapshot.actor_id
             and (
                 snapshot.state == "dispatch_pending"
-                or (snapshot.state == "queued" and snapshot.created_at < timezone.now() - timedelta(minutes=30))
+                or (
+                    snapshot.state == "queued" and snapshot.queued_at
+                    and snapshot.queued_at < timezone.now() - timedelta(minutes=30)
+                )
                 or (
                     snapshot.state == "running"
                     and snapshot.started_at
@@ -72,7 +75,7 @@ class ReleaseSnapshotAPI(ApprovedExportAPI):
         if action == "list":
             release = self.receipt()
             base.creator(release, self.project)
-            service.receipt_gate(release)
+            service.receipt_gate(release, check_files=True)
             rows = Snapshot.objects.filter(release=release).order_by("-created_at", "-id")
             # History is intentionally bounded and exposes an explicit continuation.
             cursor = request.query_params.get("cursor")

@@ -17,6 +17,7 @@ class ReleaseSnapshot(models.Model):
     policy = models.JSONField()
     state = models.CharField(max_length=32, default="dispatch_pending")
     token = models.UUIDField(default=uuid.uuid4)
+    queued_at = models.DateTimeField(null=True)
     started_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     error_code = models.CharField(max_length=64, blank=True)

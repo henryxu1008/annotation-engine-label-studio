@@ -90,3 +90,16 @@ it.each(["en-US", "zh-CN"])("stops polling after authority denial in %s", async 
     expect(screen.queryByTestId("snapshot-manifest")).toBeNull();
   } finally { unmount(); runtime.destroy(); }
 }, 10000);
+
+it.each(["ARTIFACT_INTEGRITY_FAILED", "SNAPSHOT_INTEGRITY_FAILED"])("removes READY controls after %s", async (reason) => {
+  mockCallApi.mockImplementation((name) => name === "releaseSnapshotManifestRaw"
+    ? Promise.resolve(raw({ display_context: { reason } }, 409)) : defaults(name));
+  const { unmount, runtime } = mount();
+  try {
+    fireEvent.click(await screen.findByTestId("snapshot-create"));
+    fireEvent.click(await screen.findByTestId("snapshot-manifest"));
+    await waitFor(() => expect(screen.queryByTestId("snapshot-manifest")).toBeNull());
+    expect(screen.queryByTestId("snapshot-status")).toBeNull();
+    expect(downloadFile).not.toHaveBeenCalled();
+  } finally { unmount(); runtime.destroy(); }
+});

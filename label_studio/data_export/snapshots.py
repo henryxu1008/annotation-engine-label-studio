@@ -31,6 +31,10 @@ SCHEMA = "ReleaseManifest/v1"
 MEDIA_LIMIT = 64 * 1024**2
 TOTAL_MEDIA_LIMIT = 256 * 1024**2
 ACTIVE = ("dispatch_pending", "queued", "running")
+SOURCE_INTEGRITY_ERRORS = frozenset({
+    "ARTIFACT_INTEGRITY_FAILED", "SNAPSHOT_HASH_MISMATCH", "SOURCE_UNAVAILABLE",
+    "REVIEW_EVIDENCE_INVALID", "APPROVAL_REQUIRED", "SNAPSHOT_INVALID", "SNAPSHOT_INTEGRITY_FAILED",
+})
 
 
 def canonical(value):
@@ -55,11 +59,33 @@ def identity(snapshot, project):
     return principal, actor
 
 
-def receipt_gate(release):
-    base.integrity(release)
-    if release.state != "ready":
-        base.fail("SOURCE_NOT_READY")
-    return base.sealed_artifacts(release)
+def receipt_gate(release, *, check_files=False):
+    try:
+        base.integrity(release)
+        if release.state != "ready":
+            base.fail("SOURCE_NOT_READY")
+        artifacts = base.sealed_artifacts(release)
+        if check_files:
+            for artifact in artifacts.values():
+                with checked_file(base.artifact_path(artifact.storage_key), artifact.sha256, artifact.size_bytes):
+                    pass
+        return artifacts
+    except APIException as exc:
+        invalid = str(exc.detail) in SOURCE_INTEGRITY_ERRORS
+        withdrawn = str(exc.detail) == "SOURCE_NOT_READY" and base.Release.objects.filter(
+            pk=release.pk, state="failed_final"
+        ).exists()
+        if invalid or withdrawn:
+            # A source failure affects every frozen dependent, including history reads.
+            with transaction.atomic():
+                if invalid:
+                    base.Release.objects.filter(pk=release.pk, state="ready").update(
+                        state="failed_final", error_code="ARTIFACT_INTEGRITY_FAILED"
+                    )
+                Snapshot.objects.filter(release_id=release.pk, state="ready").update(
+                    state="quarantined", error_code="SNAPSHOT_INTEGRITY_FAILED"
+                )
+        raise
 
 
 @contextmanager
@@ -299,8 +325,8 @@ def dispatch(snapshot_id):
             identity(snapshot, snapshot.release.project)
             token = str(snapshot.token)
             api_queue().enqueue(generate, str(snapshot.pk), token, job_timeout=1800, result_ttl=0)
-            snapshot.state = "queued"
-            snapshot.save(update_fields=["state"])
+            snapshot.state, snapshot.queued_at = "queued", timezone.now()
+            snapshot.save(update_fields=["state", "queued_at"])
     except Exception:
         # DB-first: retrying dispatch never reselects source content.
         base.logger.exception("Snapshot dispatch pending: %s", snapshot_id)
@@ -314,9 +340,10 @@ def retry(snapshot, actor):
             base.fail("RELEASE_FORBIDDEN", 403)
         if current.state == "dispatch_pending":
             transaction.on_commit(lambda: dispatch(current.pk))
-        elif current.state == "queued" and current.created_at < timezone.now() - timedelta(minutes=30):
+        elif current.state == "queued" and current.queued_at and current.queued_at < timezone.now() - timedelta(minutes=30):
             current.state, current.token = "dispatch_pending", uuid.uuid4()
-            current.save(update_fields=["state", "token"])
+            current.queued_at = None
+            current.save(update_fields=["state", "token", "queued_at"])
             transaction.on_commit(lambda: dispatch(current.pk))
         elif current.state == "running" and current.started_at < timezone.now() - timedelta(minutes=31):
             # Fence a crashed/timed-out worker without recapturing changed media.
@@ -336,11 +363,7 @@ def generate(snapshot_id, token):
         current.save(update_fields=["state", "started_at"])
     try:
         principal, actor = identity(current, current.release.project)
-        artifacts = receipt_gate(current.release)
-        # Validate actual native/converter bytes before certifying the captured inventory.
-        for artifact in artifacts.values():
-            with checked_file(base.artifact_path(artifact.storage_key), artifact.sha256, artifact.size_bytes):
-                pass
+        artifacts = receipt_gate(current.release, check_files=True)
         records = [item.record for item in current.release.items.order_by("ordinal")]
         target = directory(current)
         target.mkdir(parents=True, exist_ok=False, mode=0o700)

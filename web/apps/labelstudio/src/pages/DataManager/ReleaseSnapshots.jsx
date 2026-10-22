@@ -4,6 +4,12 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { downloadFile } from "../../utils/download";
 
+const invalidEvidence = new Set([
+  "SNAPSHOT_INTEGRITY_FAILED", "ARTIFACT_INTEGRITY_FAILED", "MANIFEST_INVALID", "SNAPSHOT_NOT_READY",
+  "SOURCE_NOT_READY", "SOURCE_UNAVAILABLE", "SNAPSHOT_HASH_MISMATCH", "SNAPSHOT_INVALID",
+  "REVIEW_EVIDENCE_INVALID", "APPROVAL_REQUIRED",
+]);
+
 export const ReleaseSnapshots = ({ projectId, releaseId }) => {
   const { t } = useLocaleTranslation("collaboration");
   const api = useAPI();
@@ -33,10 +39,12 @@ export const ReleaseSnapshots = ({ projectId, releaseId }) => {
       let result;
       try { result = await response?.json(); } catch { /* localized fallback */ }
       if (start !== epoch.current) return null;
-      setError([401, 403, 404].includes(response?.status) ? "SNAPSHOT_ACCESS_DENIED" : result?.display_context?.reason ?? "SNAPSHOT_GENERATION_FAILED");
-      if ([401, 403, 404].includes(response?.status)) {
+      const denied = [401, 403, 404].includes(response?.status);
+      const reason = result?.display_context?.reason;
+      setError(denied ? "SNAPSHOT_ACCESS_DENIED" : reason ?? "SNAPSHOT_GENERATION_FAILED");
+      if (denied || ([409, 422].includes(response?.status) && invalidEvidence.has(reason))) {
         epoch.current += 1; selected.current = null;
-        setSnapshot(null); setDiff(null); setHistory([]);
+        setSnapshot(null); setDiff(null); setHistory([]); setCursor(null);
       }
       return null;
     }

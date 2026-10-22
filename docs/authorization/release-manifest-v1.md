@@ -101,7 +101,12 @@ Manifest/content/artifacts/media to saved identities and the #79 source graph.
 
 Duplicate RQ delivery cannot claim the same running/READY token twice. Queue loss
 leaves `dispatch_pending`; retry does not reselect source input. An unstarted
-queued request older than 30 minutes may receive a fresh token. A running request
+queued request older than 30 minutes **since its most recent successful enqueue**
+may receive a fresh token. Request creation time is not queue age: an outage must
+not make a newly dispatched claim immediately reclaimable. Migration 0014 adds
+`queued_at`, initializes old queued claims conservatively at migration time, and
+preserves all existing READY bytes/hashes. The timestamp is immutable after READY;
+retained snapshots also prohibit reversing this migration. A running request
 older than 31 minutes can be explicitly fenced as `failed/CAPTURE_INTERRUPTED`.
 A late worker then cannot publish. Capturing failures and interrupted captures
 require a new key/snapshot, not recapture under an old identity. Incomplete files
@@ -169,9 +174,17 @@ HEAD/Range/If-Range never skip current authorization or integrity checks. Privat
 bytes remain no-store attachments, never static, signed public URLs or UI embeds.
 Source receipt/hash/inventory failure also quarantines a previously READY
 snapshot; it must not continue advertising READY after its evidence chain fails.
+The shared source gate verifies native/standard bytes for history and object
+reads; source corruption terminally quarantines the #79 receipt and every READY
+dependent snapshot, including when discovered through history. Pinned-media
+corruption remains scoped to its snapshot. Already quarantined #79 sources also
+invalidate dependent READY dispositions. No source or Manifest is regenerated.
 Current authority denial remains distinct and does not mark sound bytes corrupt.
 UI polling survives transient network/server/body failures, but stops on authority
 denial, selection changes or unmount; stale responses cannot restore controls.
+Integrity/quarantine responses clear stale READY download/comparison controls
+and continuations as well; comparability or request-input errors do not revoke
+access to otherwise valid content.
 
 ## Difference semantics
 
