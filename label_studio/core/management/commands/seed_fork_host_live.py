@@ -8,7 +8,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
 from organizations.models import Organization, OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework.authtoken.models import Token
@@ -53,6 +53,19 @@ def fixture_scope(output):
         raise CommandError('Synthetic fixture identity, policy or membership mismatch') from None
 
 
+def require_unused_database():
+    # Serialize seeders and ordinary domain writers before observing emptiness.
+    # Migrated system tables may contain metadata; business roots must be empty.
+    managers = [User.objects, Organization.objects, Project.all_objects,
+                Task.objects, Annotation.objects, TaskAssignment.objects]
+    tables = [manager.model._meta.db_table for manager in managers]
+    with connection.cursor() as cursor:
+        cursor.execute('LOCK TABLE ' + ', '.join(connection.ops.quote_name(table) for table in tables)
+                       + ' IN SHARE ROW EXCLUSIVE MODE')
+    if any(manager.exists() for manager in managers):
+        raise CommandError('Refusing to seed a database containing retained domain rows')
+
+
 class Command(BaseCommand):
     help = "Provision synthetic Fork→Host fixtures in a NEW hfraw_ PostgreSQL database only."
 
@@ -81,8 +94,10 @@ class Command(BaseCommand):
                     raise CommandError('Synthetic membership update did not affect exactly one row')
             self.stdout.write('Synthetic fixture policy updated')
             return
-        if output.exists() or User.objects.filter(email__endswith='@hfraw.example.test').exists():
+        policy_output = output.with_name('fork-policy.json')
+        if os.path.lexists(output) or os.path.lexists(policy_output):
             raise CommandError('Refusing to reseed/adopt an existing fixture')
+        require_unused_database()
         users = {}
         owner = User.objects.create_user(email='owner@hfraw.example.test', username='hfraw-owner', password=secrets.token_urlsafe(32))
         org = Organization.create_organization(created_by=owner, title='Synthetic Fork Host RAW')
@@ -113,5 +128,5 @@ class Command(BaseCommand):
         output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_private_json(output, fixture)
         policy = {'source_namespace': namespace, 'projects': {f'{org.pk}:{project.pk}': {'mode': 'fork_approved', 'version': 'fork-host-live/v1'}}}
-        output.with_name('fork-policy.json').write_text(json.dumps(policy), encoding='utf-8')
+        write_private_json(policy_output, policy)
         self.stdout.write('New synthetic fixture ready; credentials kept in private output only')

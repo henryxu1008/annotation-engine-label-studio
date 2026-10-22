@@ -5,16 +5,20 @@ import os
 import stat
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.management.commands import seed_fork_host_live as command
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.db import close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase
 from organizations.models import Organization, OrganizationMember
 from projects.models import Project, ProjectMember
+from tasks.models import Annotation, Task
 from users.models import User
 
 
@@ -192,3 +196,108 @@ class TestFixtureCredentialCreation(TestCase):
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
             finally:
                 os.umask(old_umask)
+
+
+class TestFixtureSeedIsolation(TestCase):
+    def invoke(self, output):
+        with patch.object(command, 'settings', guarded_settings()), patch.dict(os.environ, FORK_HOST_LIVE_SYNTHETIC='1'):
+            call_command('seed_fork_host_live', output=str(output), action='seed', role='fetch')
+
+    def test_retained_business_roots_are_not_adopted(self):
+        from django.utils import timezone
+
+        def deleted_project():
+            project = Project.objects.create(title='Retained deleted project')
+            Project.all_objects.filter(pk=project.pk).update(deleted_at=timezone.now())
+
+        roots = (
+            lambda: User.objects.create_user(email='retained@example.test', username='retained'),
+            lambda: Organization.objects.create(title='Retained organization'),
+            lambda: Project.objects.create(title='Retained project'),
+            deleted_project,
+            lambda: Task.objects.bulk_create([Task(data={'text': 'retained'})]),
+            lambda: Annotation.objects.bulk_create([Annotation(result=[])]),
+        )
+        for index, create in enumerate(roots):
+            with self.subTest(root=index), tempfile.TemporaryDirectory() as directory, transaction.atomic():
+                create()
+                before = (User.objects.count(), Organization.objects.count(), Project.all_objects.count(),
+                          Task.objects.count(), Annotation.objects.count())
+                output = Path(directory) / 'fixture.json'
+                with self.assertRaises(CommandError):
+                    self.invoke(output)
+                self.assertEqual(before, (User.objects.count(), Organization.objects.count(), Project.all_objects.count(),
+                                         Task.objects.count(), Annotation.objects.count()))
+                self.assertFalse(output.exists())
+                self.assertFalse(output.with_name('fork-policy.json').exists())
+                transaction.set_rollback(True)
+
+    def test_retained_policy_files_and_links_are_preserved(self):
+        for kind in ('file', 'link', 'dangling-link'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory, transaction.atomic():
+                output = Path(directory) / 'fixture.json'
+                policy = output.with_name('fork-policy.json')
+                retained = Path(directory) / 'retained-config'
+                if kind != 'dangling-link':
+                    retained.write_text('retained synthetic configuration')
+                if kind == 'file':
+                    policy.write_text('retained synthetic configuration')
+                else:
+                    policy.symlink_to(retained)
+                before = User.objects.count()
+                with self.assertRaises(CommandError):
+                    self.invoke(output)
+                self.assertEqual(User.objects.count(), before)
+                self.assertFalse(output.exists())
+                if kind == 'dangling-link':
+                    self.assertFalse(retained.exists())
+                else:
+                    self.assertEqual(retained.read_text(), 'retained synthetic configuration')
+                self.assertEqual(policy.is_symlink(), kind != 'file')
+                transaction.set_rollback(True)
+
+
+class TestFixtureSeedConcurrency(TransactionTestCase):
+    def setUp(self):
+        from django.urls import get_resolver
+
+        # Match application startup before TransactionTestCase flushes lazy
+        # storage models, including when this regression is selected alone.
+        get_resolver().url_patterns
+
+    def test_uncommitted_ordinary_writer_is_seen_before_any_seed_write(self):
+        entered, release = Event(), Event()
+
+        def isolated(fn):
+            close_old_connections()
+            try:
+                return fn()
+            finally:
+                close_old_connections()
+
+        def retained_writer():
+            with transaction.atomic():
+                User.objects.create_user(email='retained@example.test', username='retained')
+                entered.set()
+                if not release.wait(10):
+                    raise RuntimeError('retained writer release timed out')
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'fixture.json'
+            with patch.object(command, 'settings', guarded_settings()), patch.dict(os.environ, FORK_HOST_LIVE_SYNTHETIC='1'), ThreadPoolExecutor(max_workers=2) as workers:
+                writer = workers.submit(isolated, retained_writer)
+                try:
+                    self.assertTrue(entered.wait(10))
+                    seed = workers.submit(isolated, lambda: call_command('seed_fork_host_live', output=str(output)))
+                    with self.assertRaises(TimeoutError):
+                        seed.result(timeout=0.25)
+                finally:
+                    release.set()
+                writer.result(timeout=20)
+                with self.assertRaises(CommandError):
+                    seed.result(timeout=30)
+            self.assertEqual(User.objects.count(), 1)
+            self.assertEqual(Organization.objects.count(), 0)
+            self.assertEqual(Project.all_objects.count(), 0)
+            self.assertFalse(output.exists())
+            self.assertFalse(output.with_name('fork-policy.json').exists())

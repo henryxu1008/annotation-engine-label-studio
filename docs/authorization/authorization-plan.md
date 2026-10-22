@@ -14,6 +14,11 @@ namespace against operator policy, and exact organization/project/active-user
 membership graph before changing a role or Token policy. Lock that graph and
 require exactly one membership update. Create credential files exclusively as
 0600 before writing any bytes; never rely on a later chmod or overwrite a file.
+The initial seed also requires empty user/organization/project/task/annotation/
+assignment tables, including soft-deleted projects and unscoped retained rows.
+Hold PostgreSQL table fences through seeding so an uncommitted ordinary writer
+cannot cross that emptiness check. Both fixture and policy files use exclusive
+creation; existing files and symlinks are refused before database writes.
 
 Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
