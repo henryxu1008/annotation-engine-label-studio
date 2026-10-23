@@ -69,6 +69,24 @@ it("recovers a thrown review transport failure by reading without replaying the 
   unmount(); runtime.destroy();
 });
 
+it.each([
+  ["proxy fetch-failure Response", { status: 500 }],
+  ["wrong submission acknowledgement", { id: 999, status: "approved", $meta: { ok: true, status: 200 } }],
+  ["wrong decision acknowledgement", { id: 11, status: "rejected", $meta: { ok: true, status: 200 } }],
+])("does not claim a saved decision for a %s", async (_, result) => {
+  const { unmount, runtime } = await mount();
+  await openQueue();
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "reviewSubmission" ? Promise.resolve(result) : original(method, args));
+  fireEvent.click(screen.getByTestId("review-approve"));
+  expect(await screen.findByTestId("review-error")).toHaveProperty("textContent",
+    "The review result could not be confirmed. Check the refreshed state before making another decision.");
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(count("Selected · approved")).toBe("0");
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);
+  unmount(); runtime.destroy();
+});
+
 it.each(["en-US", "zh-CN"])("refreshes counts after a committed decision loses its response without claiming confirmation in %s", async (locale) => {
   const { unmount, runtime } = await mount(locale);
   await openQueue(locale === "zh-CN");
@@ -81,8 +99,8 @@ it.each(["en-US", "zh-CN"])("refreshes counts after a committed decision loses i
   fireEvent.click(screen.getByTestId("review-approve"));
   await waitFor(() => expect(count(locale === "zh-CN" ? "抽中 · 已批准" : "Selected · approved")).toBe("1"));
   expect(await screen.findByTestId("review-error")).toHaveProperty("textContent", locale === "zh-CN"
-    ? "审核响应丢失，请核对刷新后的状态再做决定。"
-    : "The review response was lost. Check the refreshed state before making another decision.");
+    ? "无法确认审核结果，请核对刷新后的状态再做决定。"
+    : "The review result could not be confirmed. Check the refreshed state before making another decision.");
   expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByTestId("review-submission-11")).toBeNull();
   expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);

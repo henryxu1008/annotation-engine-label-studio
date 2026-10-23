@@ -175,7 +175,11 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
     }
     if (generation !== generationRef.current) return;
 
-    if (!result || result?.error || result?.$meta?.ok === false) {
+    if (!result || result?.error || result?.$meta?.ok === false || result.id !== selected.id || result.status !== decision) {
+      // The shared proxy can return a native Response on a fetch failure. Only an
+      // acknowledgement for this exact submission and decision confirms a save.
+      const responseStatus = result?.$meta?.status ?? (typeof result?.status === "number" ? result.status : null);
+      outcomeUnknown ||= !responseStatus || responseStatus >= 500 || result?.$meta?.ok === true;
       await Promise.all([refresh(pendingPage, historyPage), onReviewSettled?.(false)]);
       setError(outcomeUnknown ? "reviewOutcomeUnknown" : collaborationErrorCode(result, "reviewSaveFailed"));
       setProcessing(null);

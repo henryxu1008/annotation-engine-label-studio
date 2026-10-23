@@ -86,14 +86,14 @@ export const ReviewBatches = ({ projectId }) => {
   }, [projectId]);
 
   // Refresh only the detail: keep the reviewer queue, selection and batch context mounted.
-  const refreshProgress = async (id, reviewSaved = false, context = selection.current) => {
+  const refreshProgress = async (id, reviewSaved = null, context = selection.current) => {
     if (!context || context !== selection.current) return;
     const current = generation.current;
     const request = ++progressGeneration.current;
     const isCurrent = () => current === generation.current && request === progressGeneration.current;
     successorGeneration.current += 1;
     setProgressBusy(true); setError(""); setSuccessor(null);
-    if (reviewSaved) setSavedReview(true);
+    if (reviewSaved !== null) setSavedReview(reviewSaved);
     try {
       const [result, capability] = await Promise.all([
         call.current("reviewBatchDetail", { params: { pk: projectId, batch: id }, errorFilter: () => true }),
