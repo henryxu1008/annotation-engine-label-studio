@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from django.test import override_settings
 from rest_framework.test import APITestCase
+from review_batches.models import ReviewBatch
 from review_batches.tests import test_batches as fixtures
 from tasks.models import Submission
 from tasks.serializers import SubmissionSerializer
@@ -136,6 +137,21 @@ class TestReworkComparison(APITestCase):
 
         with patch.object(SubmissionSerializer, 'to_representation', tamper):
             assert self.client.get(self.url).status_code == 409
+
+    def test_response_time_batch_deletion_discards_materialized_answers(self):
+        self.prepare()
+        original = SubmissionSerializer.to_representation
+
+        def remove_batch(serializer, instance):
+            data = original(serializer, instance)
+            if instance.pk == self.newer.pk:
+                ReviewBatch.objects.filter(pk=self.batch).delete()
+            return data
+
+        with patch.object(SubmissionSerializer, 'to_representation', remove_batch):
+            response = self.client.get(self.url)
+        assert response.status_code == 404
+        assert 'results' not in response.data
 
     def test_read_without_review_permission_and_core_mode_boundary(self):
         self.prepare()

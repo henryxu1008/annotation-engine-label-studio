@@ -190,7 +190,10 @@ class ReworkAPI(BatchAPI):
         data = SubmissionSerializer(page, many=True, context={'request': request}).data
         # Re-read after serialization: revoked access, changed status or evidence
         # must not expose a stale comparison assembled from separate reads.
-        current = service.rework_source(batch, source_id, actor, role)
+        current_batch = service.checked_batch(project, batch_id)
+        if current_batch.plan_hash != batch.plan_hash:
+            service.fail('REVIEW_BATCH_PLAN_INVALID')
+        current = service.rework_source(current_batch, source_id, actor, role)
         service.check_representation(source_data, current)
         current_rows = {
             row.pk: row for row in rows.filter(pk__in=[item['id'] for item in data])

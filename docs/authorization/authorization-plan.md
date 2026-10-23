@@ -968,5 +968,7 @@ rejected source and paginated later revisions of the same assignment/task/actor.
 Reuse current READ_WORK, role, mode and source/representation validation; do not
 replace it with unscoped Submission reads or infer REVIEW/release authority.
 Revalidate after serialization and clear stale UI evidence on failed reads.
+Reload the batch too: a deleted batch or changed frozen plan must not authorize
+an already materialized comparison, even if a replacement plan hash is valid.
 Core-only-review denies this new route. See review-sampling-v1.md for the bounded
 JSON comparison and unchanged #81 conflict/arbitration ownership.

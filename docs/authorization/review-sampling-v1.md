@@ -210,6 +210,10 @@ task and submitter and pass snapshot hash, project/task and decision validation.
 Both original and page representations are checked against fresh sources after
 serialization, followed by a current role/policy check. Source corruption,
 missing original, source changes during serialization and revocation fail closed.
+The batch is also reloaded after serialization: deletion or a changed frozen
+plan (even with a matching replacement hash) discards the assembled comparison.
+Independent PostgreSQL connections cover these response-time changes, membership
+revocation, original deletion and a newly committed successor decision.
 Responses are private/no-store. No REVIEW permission is added merely to read.
 
 The UI clears snapshot evidence before each read, on failed reads and tab blur;

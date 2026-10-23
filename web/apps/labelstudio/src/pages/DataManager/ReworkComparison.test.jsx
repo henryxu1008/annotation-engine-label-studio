@@ -89,3 +89,19 @@ it("ignores object key order without ignoring array order or changed values", ()
   expect(snapshotDiff({ a: 1, b: 2 }, { b: 2, a: 1 }).some((p) => p.added || p.removed)).toBe(false);
   expect(snapshotDiff([1, 2], [2, 1]).some((p) => p.added || p.removed)).toBe(true);
 });
+
+it.each(["en-US", "zh-CN"])("a pre-blur response cannot replace a later refresh in %s", async (locale) => {
+  let resolveOld;
+  let resolveNew;
+  mockCallApi.mockImplementationOnce(() => new Promise((done) => { resolveOld = done; }))
+    .mockImplementationOnce(() => new Promise((done) => { resolveNew = done; }));
+  const { unmount, runtime } = mount(locale);
+  fireEvent(window, new Event("blur"));
+  fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "刷新对照" : "Refresh comparison" }));
+  await act(async () => resolveNew(response()));
+  await screen.findByTestId("rework-original");
+  await act(async () => resolveOld({ error: true, $meta: { status: 403 } }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByTestId("rework-selected").textContent).toContain("hash-3");
+  unmount(); runtime.destroy();
+});
