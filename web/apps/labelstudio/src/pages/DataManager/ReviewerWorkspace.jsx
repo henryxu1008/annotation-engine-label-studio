@@ -143,7 +143,6 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
 
   useEffect(() => {
     setRejectReason("");
-    if (selectedId !== null) setError("");
   }, [selectedId]);
 
   const decide = async (decision) => {
@@ -227,7 +226,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
                 key={submission.id}
                 type="button"
                 className={cn("reviewer-workspace").elem("queue-item").mod({ active: submission.id === selectedId }).toClassName()}
-                onClick={() => setSelectedId(submission.id)}
+                onClick={() => { setSelectedId(submission.id); setError(""); }}
                 data-testid={`review-submission-${submission.id}`}
               >
                 <strong>{t("revisionNumber", { revision: submission.revision })}</strong>
@@ -272,7 +271,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
                 key={submission.id}
                 type="button"
                 className={cn("reviewer-workspace").elem("queue-item").mod({ active: submission.id === selectedId }).toClassName()}
-                onClick={() => setSelectedId(submission.id)}
+                onClick={() => { setSelectedId(submission.id); setError(""); }}
                 data-testid={`review-history-${submission.id}`}
               >
                 <strong>{t("revisionNumber", { revision: submission.revision })}</strong>
