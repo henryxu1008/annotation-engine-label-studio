@@ -947,3 +947,14 @@ sufficient for a revoked actor. This migration is limited to explicit package
 context; shared legacy project helpers, global permissions and mutation actions
 retain their existing behavior. API regressions cover both directions and the
 unchanged unscoped denials.
+
+Review sampling (#84) scopes the existing review command with READ_WORK plus
+REVIEW and retains its Project-first write transaction through serialization.
+Before returning a batch-context decision, recheck current actor/mode/operation
+authority and the emitted frozen source/decision facts. Invalid evidence or
+lost authority rolls the decision back. Queue responses reuse this representation
+check; previews recheck ORGANIZE_REVIEW after planning. Keep this boundary when
+upgrading the shared review API; ordinary unscoped review/source-read behavior
+and Core-only-review internal acquisition are unchanged. PostgreSQL NOWAIT,
+revocation, serialization corruption, original-key recovery and conflicting-key
+regressions protect the boundary.

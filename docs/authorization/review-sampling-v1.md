@@ -37,6 +37,16 @@ membership/source integrity inside Project -> Task -> Assignment -> Submission
 locks. It still permits one decision per pending exact revision, rejects self
 review, and derives the reviewer from the trusted actor.
 
+Batch-context decisions require both READ_WORK and REVIEW. The API retains
+the project-first transaction through response serialization, then repeats
+current actor/mode/operation checks and compares the emitted snapshot, source
+identity, status and decision facts with the frozen source. A revoked scope or
+invalid representation rolls the decision back instead of committing a write
+behind a failed response. Queue serialization uses the same evidence check.
+Preview also repeats ORGANIZE_REVIEW after materializing its plan. These checks
+apply to explicit batch context; ordinary source reads/reviews keep their
+existing contracts, including Core-only-review internal reads.
+
 Reject with a reason, then use existing My Work and Editor to return work to the
 original active assignment. Cancellation/reassignment does not revive that
 assignment or grant a new one. Editor Update creates a new immutable Submission;
@@ -122,6 +132,12 @@ original-key replay/conflicts, frozen DB guards, source corruption and deletion,
 trusted mapped actors, revocation, invalid contexts and release/download negatives.
 Independent PostgreSQL connections exercise same-key creation, two reviewers,
 revocation-first creation/decisions and supersede-first decisions.
+They also reject concurrent different requests for one key and prove with a
+separate NOWAIT connection that the project write fence survives through
+decision-response serialization. Negative cases cover response-time revocation,
+tampered serialized evidence with full rollback and original-key recovery,
+independent read/review/planning policy withdrawal, other actor/principal key
+replay, every frozen update field, and all new batch routes/retries in Core mode.
 
 ReviewBatches component tests and en-US/zh-CN browser journeys cover preview,
 creation, sample-only review, rejection, Editor rework/new revision, separate

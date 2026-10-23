@@ -5,7 +5,7 @@ import json
 from uuid import UUID
 
 from access_control.authorization import authorization
-from access_control.project_operations import READ_WORK, require_project_operation
+from access_control.project_operations import READ_WORK, REVIEW, require_project_operation
 from django.conf import settings
 from django.db import connection
 from django.db.models import OuterRef, Subquery
@@ -197,14 +197,41 @@ def checked_sources(batch):
     return rows
 
 
-def require_selected(project, batch_id, submission, actor):
-    enabled(project)
+def require_selected(project, batch_id, submission, actor, *, principal):
+    project, role, _ = guard(project.pk, principal, actor)
+    if role != 'reviewer':
+        raise PermissionDenied()
+    require_project_operation(project, REVIEW)
     batch = checked_batch(project, batch_id)
     rows = checked_sources(batch)
     selected = any(item["selected"] and item["submission_id"] == submission.pk for item in batch.plan["candidates"])
     if not selected or submission.pk not in rows or submission.submitted_by_id == actor.pk:
         raise PermissionDenied()
-    return batch
+    return rows[submission.pk]
+
+
+def check_representation(data, source):
+    """Check the emitted evidence as well as the row used to construct it."""
+    if (
+        source is None or not isinstance(data, dict)
+        or data.get('id') != source.pk
+        or data.get('result_hash') != source.result_hash
+        or _snapshot_hash(data.get('result_snapshot')) != source.result_hash
+        or data.get('assignment') != source.assignment_id
+        or data.get('annotation') != source.annotation_id
+        or data.get('revision') != source.revision
+        or data.get('status') != source.status
+        or (data.get('submitted_by') or {}).get('id') != source.submitted_by_id
+    ):
+        fail('REVIEW_BATCH_SOURCE_INVALID')
+    review = getattr(source, 'review', None)
+    emitted = data.get('review')
+    if (review is None and emitted is not None) or (review is not None and (
+        not isinstance(emitted, dict) or emitted.get('id') != review.pk
+        or emitted.get('decision') != review.decision or emitted.get('reason') != review.reason
+        or (emitted.get('reviewer') or {}).get('id') != review.reviewer_id
+    )):
+        fail('REVIEW_BATCH_SOURCE_INVALID')
 
 
 def metadata(batch):

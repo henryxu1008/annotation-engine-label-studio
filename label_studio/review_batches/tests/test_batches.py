@@ -5,6 +5,7 @@ from uuid import uuid4
 from access_control.identity import LocalIdentityProvider, Principal, get_identity_provider
 from django.db import DatabaseError, transaction
 from django.test import override_settings
+from django.utils import timezone
 from organizations.tests.factories import OrganizationFactory
 from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
@@ -17,6 +18,13 @@ class ReadOnlyPolicy:
     def evaluate(self, project):
         from access_control.project_operations import READ_WORK, ProjectOperationPolicy
         return ProjectOperationPolicy('test-read-only/v1', 'paused', frozenset({READ_WORK}))
+
+
+class ReviewWithoutReadPolicy:
+    def evaluate(self, project):
+        from access_control.project_operations import REVIEW, ProjectOperationPolicy
+        return ProjectOperationPolicy('test-review-without-read/v1', 'active', frozenset({REVIEW}))
+
 from tasks.models import Annotation, ReviewDecision, Submission, TaskAssignment
 from tasks.submissions import _canonical_snapshot, _snapshot_hash
 from tasks.tests.factories import TaskFactory
@@ -167,6 +175,25 @@ class TestReviewBatches(APITestCase):
         assert conflict.status_code == 409
         assert ReviewBatch.objects.count() == 1
 
+    def test_original_key_cannot_be_replayed_by_another_actor_or_principal(self):
+        expected = self.preview().data['plan_hash']
+        key = uuid4()
+        assert self.create(key=key, expected=expected).status_code == 201
+        other = UserFactory(active_organization=self.org)
+        ProjectMember.objects.create(project=self.project, user=other, role='manager')
+        self.client.force_authenticate(other)
+        assert self.create(key=key, expected=expected).status_code == 409
+        self.client.force_authenticate(self.manager)
+        with override_settings(ANNOTATION_IDENTITY_PROVIDER=f'{__name__}.MappedIdentity'):
+            get_identity_provider.cache_clear()
+            try:
+                MappedIdentity.actor = self.manager
+                assert self.create(key=key, expected=expected).status_code == 409
+            finally:
+                MappedIdentity.actor = None
+                get_identity_provider.cache_clear()
+        assert ReviewBatch.objects.count() == 1
+
     def test_changed_candidates_require_new_preview(self):
         expected = self.preview().data["plan_hash"]
         self.make_source()
@@ -222,6 +249,106 @@ class TestReviewBatches(APITestCase):
             assert not detail.data["items"][0]["can_review"]
             assert self.client.get(f"{self.base}{batch}/queue/").status_code == 403
             assert self.review(self.source, batch).status_code == 403
+
+    def test_batch_decision_requires_read_authority_as_well_as_review(self):
+        batch = self.create().data['id']
+        with override_settings(ANNOTATION_PROJECT_OPERATION_PROVIDER=f'{__name__}.ReviewWithoutReadPolicy'):
+            assert self.review(self.source, batch).status_code == 403
+        self.source.refresh_from_db()
+        assert self.source.status == 'pending'
+        assert not ReviewDecision.objects.exists()
+
+    def test_preview_rechecks_planning_policy_after_materialization(self):
+        from django.conf import settings
+
+        original = service.build_plan
+
+        def revoke(project, args):
+            plan = original(project, args)
+            settings.ANNOTATION_PROJECT_OPERATION_PROVIDER = f'{__name__}.ReadOnlyPolicy'
+            return plan
+
+        with override_settings(ANNOTATION_PROJECT_OPERATION_PROVIDER='access_control.project_operations.LegacyProjectOperationProvider'):
+            with patch.object(service, 'build_plan', side_effect=revoke):
+                assert self.preview().status_code == 403
+
+    def test_batch_review_response_revalidates_frozen_source_and_rolls_back(self):
+        from tasks.serializers import SubmissionSerializer
+
+        key = uuid4()
+        expected = self.preview().data['plan_hash']
+        batch = self.create(key=key, expected=expected).data['id']
+        original = SubmissionSerializer.to_representation
+
+        for field in ('result_snapshot', 'revision', 'status', 'reviewer', 'reason'):
+            def corrupt(serializer, instance):
+                data = original(serializer, instance)
+                if field == 'reviewer':
+                    data['review']['reviewer']['id'] = self.manager.pk
+                elif field == 'reason':
+                    data['review']['reason'] = 'tampered'
+                else:
+                    data[field] = {'tampered': True} if field == 'result_snapshot' else 'tampered'
+                return data
+
+            with patch.object(SubmissionSerializer, 'to_representation', corrupt):
+                assert self.review(self.source, batch).status_code == 409, field
+            self.source.refresh_from_db()
+            assert self.source.status == 'pending'
+            assert not ReviewDecision.objects.exists()
+        self.client.force_authenticate(self.manager)
+        replay = self.create(key=key, expected=expected)
+        assert replay.status_code == 200
+        assert replay.data['id'] == batch
+        assert ReviewBatch.objects.count() == 1
+
+    def test_batch_review_rechecks_access_before_exposing_response(self):
+        from tasks.serializers import SubmissionSerializer
+
+        batch = self.create().data['id']
+        original = SubmissionSerializer.to_representation
+
+        def revoke(serializer, instance):
+            data = original(serializer, instance)
+            ProjectMember.objects.filter(pk=self.review_member.pk).update(enabled=False)
+            return data
+
+        with patch.object(SubmissionSerializer, 'to_representation', revoke):
+            assert self.review(self.source, batch).status_code in (403, 404)
+        self.source.refresh_from_db()
+        assert self.source.status == 'pending'
+        assert not ReviewDecision.objects.exists()
+
+    def test_batch_review_rechecks_reviewer_role_before_exposing_response(self):
+        from tasks.serializers import SubmissionSerializer
+
+        batch = self.create().data['id']
+        original = SubmissionSerializer.to_representation
+
+        def change_role(serializer, instance):
+            data = original(serializer, instance)
+            ProjectMember.objects.filter(pk=self.review_member.pk).update(role='manager')
+            return data
+
+        with patch.object(SubmissionSerializer, 'to_representation', change_role):
+            assert self.review(self.source, batch).status_code == 403
+        self.source.refresh_from_db()
+        assert self.source.status == 'pending'
+        assert not ReviewDecision.objects.exists()
+
+    def test_batch_service_rejects_a_deleted_project(self):
+        from django.http import Http404
+        from projects.models import Project
+        from tasks.submissions import review_submission
+
+        batch = self.create().data['id']
+        Project.objects.filter(pk=self.project.pk).update(deleted_at=timezone.now())
+        with self.assertRaises(Http404):
+            review_submission(submission=self.source, reviewer=self.reviewer,
+                decision='approved', review_batch_id=batch)
+        self.source.refresh_from_db()
+        assert self.source.status == 'pending'
+        assert not ReviewDecision.objects.exists()
 
     def test_annotator_cannot_read_or_create_batches(self):
         batch = self.create().data["id"]
@@ -311,7 +438,12 @@ class TestReviewBatches(APITestCase):
 
     def test_frozen_plan_database_guard(self):
         batch = self.create().data["id"]
-        for field, value in (("plan", {}), ("name", "changed"), ("plan_hash", "0" * 64)):
+        for field, value in (
+            ("plan", {}), ("name", "changed"), ("plan_hash", "0" * 64),
+            ("project_id", self.other.pk), ("actor_id_frozen", self.manager.pk + 100),
+            ("creator_principal", "changed"), ("created_at", timezone.now()),
+            ("idempotency_key", uuid4()), ("request_hash", "f" * 64),
+        ):
             with self.assertRaises(DatabaseError), transaction.atomic():
                 ReviewBatch.objects.filter(pk=batch).update(**{field: value})
 
@@ -331,6 +463,24 @@ class TestReviewBatches(APITestCase):
             assert self.client.get(self.base).status_code == 404
         # Ordinary internal source reads retain their original contract.
         assert self.client.get(f"/api/submissions/{self.source.pk}/").status_code == 200
+
+    def test_core_mode_denies_all_batch_reads_and_original_key_replay(self):
+        expected = self.preview().data['plan_hash']
+        key = uuid4()
+        batch = self.create(key=key, expected=expected).data['id']
+        with override_settings(ANNOTATION_REVIEW_BATCH_MODES={f'{self.org.pk}:{self.project.pk}': 'core_only_internal'}):
+            for actor in (self.manager, self.reviewer):
+                self.client.force_authenticate(actor)
+                for url in (self.base, self.base + 'capability/', f'{self.base}{batch}/', f'{self.base}{batch}/queue/'):
+                    assert self.client.get(url).status_code == 403
+            self.client.force_authenticate(self.manager)
+            assert self.create(key=key, expected=expected).status_code == 403
+            assert self.preview().status_code == 403
+            assert self.review(self.source, batch).status_code == 403
+            # Preserve Core's existing ordinary internal source-read contract.
+            assert self.client.get(f'/api/submissions/{self.source.pk}/').status_code == 200
+        assert ReviewBatch.objects.count() == 1
+        assert not ReviewDecision.objects.exists()
 
     def test_revoke_reviewer_clears_collection_detail_queue_and_stale_decision(self):
         batch = self.create().data["id"]

@@ -113,7 +113,7 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
     if review_batch_id is not None:
         from review_batches.service import require_selected
 
-        require_selected(project, review_batch_id, submission, reviewer)
+        require_selected(project, review_batch_id, submission, reviewer, principal=principal)
 
     if task_package_id is not None:
         from rest_framework.generics import get_object_or_404

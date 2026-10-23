@@ -62,6 +62,7 @@ class PreviewAPI(BatchAPI):
         args = service.payload(request)
         plan = service.build_plan(project, args)
         service.guard(pk, principal, actor, manager=True)
+        require_project_operation(project, ORGANIZE_REVIEW)
         return Response({"plan": plan, "plan_hash": service.digest(plan)})
 
 
@@ -150,12 +151,7 @@ class QueueAPI(BatchAPI):
         page = self.paginate_queryset(rows.order_by("pk"))
         data = SubmissionSerializer(page, many=True, context={"request": request}).data
         for item in data:
-            source = sources.get(item['id'])
-            if (source is None or item['result_hash'] != source.result_hash
-                    or service._snapshot_hash(item['result_snapshot']) != source.result_hash
-                    or item['assignment'] != source.assignment_id or item['revision'] != source.revision
-                    or (item['submitted_by'] or {}).get('id') != source.submitted_by_id):
-                service.fail('REVIEW_BATCH_SOURCE_INVALID')
+            service.check_representation(item, sources.get(item['id']))
         # Recheck materialized sources and live actor authority before exposing snapshots.
         service.checked_sources(batch)
         current = (

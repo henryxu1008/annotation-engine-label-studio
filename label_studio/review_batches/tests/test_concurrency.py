@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from uuid import uuid4
 
-from django.db import close_old_connections, connection, transaction
+from django.db import DatabaseError, close_old_connections, connection, transaction
 from django.test import TransactionTestCase, override_settings
 from organizations.tests.factories import OrganizationFactory
 from projects.models import Project, ProjectMember
@@ -121,6 +121,14 @@ class TestBatchConcurrency(TransactionTestCase):
             assert sorted(job.result(20).status_code for job in jobs) == [200, 400]
         assert ReviewDecision.objects.filter(submission=self.source).count() == 1
 
+    def test_concurrent_different_requests_cannot_reuse_one_key(self):
+        key = uuid4()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = [pool.submit(self.run_request, self.manager, self.base,
+                {**self.args, 'name': name}, key=key) for name in ('First', 'Other')]
+            assert sorted(job.result(20).status_code for job in pending) == [201, 409]
+        assert ReviewBatch.objects.count() == 1
+
     def test_revocation_commits_while_decision_waits(self):
         batch = self.batch()
         attempted = threading.Event()
@@ -171,3 +179,30 @@ class TestBatchConcurrency(TransactionTestCase):
         assert self.source.status == "superseded"
         assert newer.revision == 2
         assert not ReviewDecision.objects.exists()
+
+    def test_batch_write_fence_is_held_through_response_serialization(self):
+        from tasks.serializers import SubmissionSerializer
+
+        batch = self.batch()
+        entered, release = threading.Event(), threading.Event()
+        original = SubmissionSerializer.to_representation
+
+        def hold(serializer, instance):
+            data = original(serializer, instance)
+            entered.set()
+            assert release.wait(15)
+            return data
+
+        url = f'/api/submissions/{self.source.pk}/review/?review_batch={batch}'
+        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(SubmissionSerializer, 'to_representation', hold):
+            pending = pool.submit(self.run_request, self.reviewer, url, {'decision': 'approved'})
+            try:
+                assert entered.wait(15)
+                with self.assertRaises(DatabaseError) as blocked, transaction.atomic():
+                    Project.objects.select_for_update(nowait=True).get(pk=self.project.pk)
+                cause = blocked.exception.__cause__
+                assert (getattr(cause, 'pgcode', None) or getattr(cause, 'sqlstate', None)) == '55P03'
+            finally:
+                release.set()
+            assert pending.result(20).status_code == 200
+        assert ReviewDecision.objects.filter(submission=self.source).count() == 1
