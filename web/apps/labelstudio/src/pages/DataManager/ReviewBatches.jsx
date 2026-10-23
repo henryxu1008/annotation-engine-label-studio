@@ -9,7 +9,14 @@ import { ReworkComparison } from "./ReworkComparison";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import "./ReviewBatches.scss";
 
-const failed = (r) => !r || r.error || r.$meta?.ok === false;
+// The shared proxy returns an unparsed native Response when fetch rejects.
+// These endpoints return JSON projections, never a numeric HTTP status field.
+const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
+const failedDetail = (r, id) => failed(r) || r.id !== id || !Array.isArray(r.items)
+  || !r.rule || typeof r.rule.rate !== "number" || typeof r.rule.seed !== "string"
+  || typeof r.algorithm !== "string" || !["manager", "reviewer"].includes(r.role)
+  || r.candidate_count !== r.items.length || r.selected_count !== r.items.filter((item) => item?.selected === true).length
+  || r.items.some((item) => !item || !Number.isSafeInteger(item.submission_id) || !Number.isSafeInteger(item.revision));
 const code = (r) => r?.response?.display_context?.reason ?? r?.display_context?.reason;
 
 export const ReviewBatchTitle = () => {
@@ -77,7 +84,8 @@ export const ReviewBatches = ({ projectId }) => {
         }),
       ]);
       if (current !== generation.current) return;
-      if (failed(list) || failed(capability) || (id !== null && failed(selected))) {
+      if (failed(list) || !Array.isArray(list.results?.batches) || failed(capability) || capability.enabled !== true
+        || (id !== null && failedDetail(selected, id))) {
         setCanCreate(false); setPreview(null); creation.current = null;
         setError("loadFailed"); return;
       }
@@ -103,7 +111,7 @@ export const ReviewBatches = ({ projectId }) => {
         call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }),
       ]);
       if (!isCurrent()) return;
-      if (failed(result) || failed(capability)) throw new Error("detail unavailable");
+      if (failedDetail(result, id) || failed(capability) || capability.enabled !== true) throw new Error("detail unavailable");
       setDetail(result);
       setCanCreate(capability.can_create === true);
     } catch {
