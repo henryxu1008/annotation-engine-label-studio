@@ -1,4 +1,5 @@
 import { destroy, types } from "mobx-state-tree";
+import { History } from "../../utils/history";
 
 jest.mock("../../components/Common/Pagination/Pagination", () => ({
   DEFAULT_PAGE_SIZE: 30,
@@ -14,7 +15,18 @@ const Root = types.model("QueueResponseRoot", {
   SDK: { type: "LS", invoke: jest.fn() },
   API: { getSettingsByMethodName: () => ({}) },
   invokeAction: jest.fn(),
+  apiCall: jest.fn(),
 }));
+
+it("loads history with the same package context as the native next-task queue", async () => {
+  const root = Root.create({ taskStore: {}, viewsStore: { selected: { id: 7 } } });
+  const params = jest.spyOn(History, "getParams").mockReturnValue({ task_package: "4" });
+  root.apiCall.mockResolvedValue([{ taskId: 9, annotationId: null }]);
+  try {
+    await expect(root.taskStore.loadTaskHistory({ projectId: 3 })).resolves.toEqual([{ taskId: 9, annotationId: undefined }]);
+    expect(root.apiCall).toHaveBeenCalledWith("taskHistory", { projectId: 3, task_package: "4" });
+  } finally { params.mockRestore(); destroy(root); }
+});
 
 it.each([
   [404, undefined, false],

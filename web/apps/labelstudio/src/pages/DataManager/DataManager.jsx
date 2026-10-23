@@ -315,6 +315,8 @@ DataManagerPage.pages = {
 };
 DataManagerPage.context = ({ dmRef }) => {
   const { locale, t } = useLocaleTranslation("datamanager");
+  const { t: tp } = useLocaleTranslation("taskPackages");
+  const taskPackage = new URLSearchParams(window.location.search).get("task_package");
   const { t: tc } = useLocaleTranslation("collaboration");
   const localePreference = useLocalePreference();
   const { project } = useProject();
@@ -323,6 +325,7 @@ DataManagerPage.context = ({ dmRef }) => {
   const [mode, setMode] = useState(dmRef?.mode ?? "explorer");
   const [canManageAssignments, setCanManageAssignments] = useState(false);
   const [canReviewSubmissions, setCanReviewSubmissions] = useState(false);
+  const scopedReviewOpened = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -394,15 +397,30 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
-  const openReviews = () => {
+  const showReviews = (packageId = null) => {
     if (!localePreference.ready) return;
     modal({
       title: <CollaborationModalTitle kind="reviews" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <ReviewerWorkspace projectId={project.id} />,
+      body: <ReviewerWorkspace projectId={project.id} packageId={packageId} />,
+      onHidden: packageId !== null ? () => window.location.assign(`/projects/${project.id}/data`) : undefined,
       style: { width: 960 },
     });
   };
+
+  const openReviews = (packageId = null) => {
+    if (typeof packageId === "number") {
+      window.location.assign(`/projects/${project.id}/data?task_package=${packageId}&package_review=1`);
+    } else showReviews();
+  };
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (project?.id && localePreference.ready && query.get("package_review") === "1" && query.has("task_package") && !scopedReviewOpened.current) {
+      scopedReviewOpened.current = true;
+      showReviews(query.get("task_package"));
+    }
+  }, [project?.id, localePreference.ready]);
 
   const openReleases = () => {
     if (!localePreference.ready) return;
@@ -430,7 +448,7 @@ DataManagerPage.context = ({ dmRef }) => {
     const dialog = modal({
       title: <TaskPackageTitle />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <TaskPackages projectId={project.id} initialTaskIds={initialTaskIds} onOpenReviewQueue={() => { dialog.close(); openReviews(); }} />,
+      body: <TaskPackages projectId={project.id} initialTaskIds={initialTaskIds} onOpenReviewQueue={(packageId) => { dialog.close(); openReviews(packageId); }} />,
       style: { width: 960 },
     });
   };
@@ -484,6 +502,7 @@ DataManagerPage.context = ({ dmRef }) => {
 
   return project && project.id ? (
     <Space size="small">
+      {taskPackage !== null && <span data-testid="package-work-scope">{tp("workContext", { id: taskPackage })} <a href={`/projects/${project.id}/data`} data-external>{tp("projectWork")}</a></span>}
       <Button size="small" look="outlined" onClick={openMyWork} disabled={!localePreference.ready} data-testid="open-my-work">
         {tc("myWorkTitle")}
       </Button>

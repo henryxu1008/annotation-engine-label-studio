@@ -236,7 +236,9 @@ class TestPackages(PackageFixture, APITestCase):
         assert [row['task_id'] for row in data['results']] == [own.task_id]
         assert 'fixed_tasks' not in data['counts'] and 'membership_hash' not in data['package']
         assert 'source_note' not in data['package'] and b'PRIVATE' not in self.detail(package_id).content
-        assert data['results'][0]['editor_url'].endswith(f'task={own.task_id}')
+        assert data['results'][0]['editor_url'] == (
+            f'/projects/{self.project.pk}/data?task={own.task_id}&task_package={package_id}'
+        )
         assert self.create().status_code == 403
         TaskAssignment.objects.filter(pk=own.pk).update(status='cancelled')
         assert self.client.get(self.url).json()['count'] == 0

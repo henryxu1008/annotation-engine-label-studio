@@ -468,7 +468,9 @@ export const AppStore = types
       }
 
       if (isDefined(viewId)) {
-        History.forceNavigate({ tab: viewId });
+        // The native Back to task list action explicitly ends package work.
+        // Initial explorer setup (including a scoped review link) does not.
+        History.forceNavigate({ tab: viewId, ...(self.mode !== "explorer" ? { task_package: null, package_review: null } : {}) });
       }
 
       SDK.setMode("explorer");
@@ -819,6 +821,15 @@ export const AppStore = types
       const requestParams = {
         id: actionId,
       };
+      const taskPackage = History.getParams().task_package;
+      if (actionId === "next_task" && taskPackage !== undefined) {
+        requestParams.task_package = taskPackage;
+        // A package continuation starts its full fixed list, independently of
+        // the last project view/filter/selection and local label-stream mode.
+        delete actionParams.filters;
+        delete actionParams.ordering;
+        delete actionParams.selectedItems;
+      }
 
       if (isDefined(view.id) && !view?.virtual) {
         requestParams.tabID = view.id;

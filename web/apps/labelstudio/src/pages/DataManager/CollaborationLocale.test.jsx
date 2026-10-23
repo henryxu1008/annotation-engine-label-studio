@@ -53,6 +53,85 @@ describe("collaboration locale projections", () => {
     downloadFile.mockReset();
   });
 
+  it.each([["en-US", 2], ["zh-CN", 2], ["en-US", 3], ["zh-CN", 3]])("recovers a consumed package review page using the machine code in %s from page %s", async (locale, lastPage) => {
+    let reviewed = false;
+    mockCallApi.mockImplementation((method, options) => {
+      expect(options.params.task_package).toBe(7);
+      if (method === "reviewSubmission") {
+        reviewed = true;
+        return Promise.resolve({ ...submission, id: 20 + lastPage, status: "approved" });
+      }
+      expect(method).toBe("reviewableSubmissions");
+      if (options.params.page > 1) {
+        return Promise.resolve(reviewed ? {
+          error: true, $meta: { ok: false, status: 404 },
+          response: { detail: locale === "zh-CN" ? "无效页面。" : "Invalid page.",
+            display_context: { reason: "SUBMISSION_PAGE_OUT_OF_RANGE" } },
+        } : { results: [{ ...submission, id: 20 + options.params.page }], previous: "previous",
+          next: options.params.page < lastPage ? "next" : null });
+      }
+      return Promise.resolve({ results: [submission], next: reviewed ? null : "page2" });
+    });
+    const { runtime, unmount } = mount(<ReviewerWorkspace projectId={4} packageId={7} />);
+    act(() => runtime.updateLocale(locale));
+    await screen.findByTestId("review-submission-21");
+    for (let page = 2; page <= lastPage; page++) {
+      fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "下一页待复核" : "Next pending" }));
+      await screen.findByTestId(`review-submission-${20 + page}`);
+    }
+    fireEvent.click(screen.getByTestId("review-approve"));
+    await screen.findByTestId("review-submission-21");
+    expect(screen.queryByTestId("review-error")).toBeNull();
+    expect(screen.queryByTestId("review-history-empty")).toBeNull();
+    expect(mockCallApi.mock.calls.some(([method, options]) =>
+      method === "reviewableSubmissions" && options.params.page === 1)).toBe(true);
+    unmount(); runtime.destroy();
+  });
+
+  it.each([403, 404])("does not retry an unavailable package page as pagination (%s)", async (status) => {
+    mockCallApi.mockImplementation((method, options) => {
+      expect(method).toBe("reviewableSubmissions");
+      expect(options.params.task_package).toBe(7);
+      return Promise.resolve(options.params.page === 1 ? { results: [submission], next: "page2" } : {
+        error: true, $meta: { ok: false, status }, response: { detail: "Invalid page." },
+      });
+    });
+    const { runtime, unmount } = mount(<ReviewerWorkspace projectId={4} packageId={7} />);
+    await screen.findByTestId("review-submission-21");
+    const before = mockCallApi.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Next pending" }));
+    await screen.findByTestId("review-error");
+    expect(mockCallApi.mock.calls.slice(before).every(([, options]) => options.params.page === 2)).toBe(true);
+    expect(screen.queryByTestId("review-submission-21")).toBeNull();
+    unmount(); runtime.destroy();
+  });
+
+  it.each(["en-US", "zh-CN"])("keeps the last package decision saved without falling into project history in %s", async (locale) => {
+    let reviewed = false;
+    mockCallApi.mockImplementation((method, options) => {
+      if (method === "reviewableSubmissions") {
+        expect(options.params.task_package).toBe(7);
+        return Promise.resolve(reviewed ? { error: true, $meta: { ok: false, status: 404 } } : { results: [submission] });
+      }
+      if (method === "reviewSubmission") {
+        expect(options.params).toEqual({ submissionPk: 21, task_package: 7 });
+        reviewed = true;
+        return Promise.resolve({ ...submission, status: "approved" });
+      }
+      throw new Error(`must not fall back to ${method}`);
+    });
+    const { runtime, unmount } = mount(<ReviewerWorkspace projectId={4} packageId={7} />);
+    act(() => runtime.updateLocale(locale));
+    await screen.findByTestId("review-result-hash");
+    fireEvent.click(screen.getByTestId("review-approve"));
+    await screen.findByTestId("review-detail-empty");
+    expect(screen.getByRole("status").textContent).toContain("21");
+    expect(screen.getByTestId("package-review-scope").textContent).toContain("#7");
+    expect(screen.queryByTestId("review-history-empty")).toBeNull();
+    expect(mockCallApi.mock.calls.map(([method]) => method)).toEqual(["reviewableSubmissions", "reviewSubmission", "reviewableSubmissions"]);
+    unmount(); runtime.destroy();
+  });
+
   it("changes member labels while preserving role code and member identity", async () => {
     mockCallApi.mockImplementation((method) => {
       if (method === "projectMembers") return Promise.resolve({ results: [{ id: 7, user: { id: 8, email: "member@example.test" }, role: "annotator", enabled: true }] });

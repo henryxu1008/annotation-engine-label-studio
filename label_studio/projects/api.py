@@ -715,16 +715,30 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
     queryset = Project.objects.all()
 
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
+        from access_control.project_operations import EDIT, require_project_operation
+        from task_packages.scope import PackageScope
+
+        scope = PackageScope.from_project_id(request, self.kwargs['pk'])
+        project = scope.project if scope else self.get_object()
         dm_queue = filters_ordering_selected_items_exist(request.data)
         prepared_tasks = get_prepared_queryset(request, project)
-        allowed_task_ids = Task.objects.for_user(request.user).filter(project=project).values_list('id', flat=True)
+        queue_actor = scope.actor if scope else request.user
+        allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
         prepared_tasks = prepared_tasks.filter(id__in=allowed_task_ids)
+        if scope:
+            require_project_operation(scope.project, EDIT)
+            prepared_tasks = scope.tasks(prepared_tasks)
 
-        next_task, queue_info = get_next_task(request.user, prepared_tasks, project, dm_queue)
+        next_task, queue_info = get_next_task(scope.actor if scope else request.user, prepared_tasks, project, dm_queue)
 
+        if scope:
+            scope = PackageScope.from_request(request, project)
+            require_project_operation(scope.project, EDIT)
         if next_task is None:
-            raise NotFound(f'There are no tasks for {request.user}')
+            error = NotFound(f'There are no tasks for {request.user}')
+            if scope:
+                error.display_context = {'reason': 'QUEUE_EXHAUSTED'}
+            raise error
 
         # serialize task
         context = {'request': request, 'project': project, 'resolve_uri': True, 'annotations': False}
@@ -732,7 +746,14 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
         response = serializer.data
 
         response['queue'] = queue_info
-        return Response(response)
+        if scope:
+            scope = PackageScope.from_request(request, project)
+            require_project_operation(scope.project, EDIT)
+            scope.require_task(next_task, response)
+        result = Response(response)
+        if scope:
+            result['Cache-Control'] = 'private, no-store'
+        return result
 
 
 @extend_schema(exclude=True)
@@ -741,11 +762,24 @@ class LabelStreamHistoryAPI(generics.RetrieveAPIView):
     queryset = Project.objects.all()
 
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
+        from task_packages.scope import PackageScope
 
-        history = get_label_stream_history(request.user, project)
+        scope = PackageScope.from_project_id(request, self.kwargs['pk'])
+        project = scope.project if scope else self.get_object()
+        history = get_label_stream_history(scope.actor if scope else request.user, project)
+        if scope:
+            allowed = set(scope.tasks(Task.objects.all()).values_list('pk', flat=True))
+            history = [row for row in history if row['taskId'] in allowed]
+            current = PackageScope.from_request(request, project)
+            expected = {row['taskId'] for row in history}
+            live = set(current.tasks(Task.objects.filter(pk__in=expected)).values_list('pk', flat=True))
+            authorization.require(live == expected, 'Current task history access has changed.')
+            history = current.history(history)
 
-        return Response(history)
+        response = Response(history)
+        if scope:
+            response['Cache-Control'] = 'private, no-store'
+        return response
 
 
 @method_decorator(

@@ -783,9 +783,18 @@ The second #83 slice is documented in [Fixed task packages](fixed-task-packages.
 It adds an opt-in fixed membership list and read-only progress, declares the
 ORGANIZE_WORK operation for the common #86 policy boundary, and reuses the same
 assignment state expression. It does not enable dispatch or a lifecycle engine.
+
+The package navigation slice is documented in [Package-scoped continuous annotation and review](package-scoped-work.md).
 Keep live visibility in every aggregate and recheck the original role and page
 package scope before serializing a read response; use a fresh Project for the
 final READ_WORK policy without adding a project write lock to progress GETs.
+After materializing a scoped Editor/next response, compare its assignment ID
+and version with the current actor's active assignment, including replacement
+assignments to the same actor. Revalidate annotation/draft ownership and narrow
+can_label using the fresh EDIT policy. Scoped history may clear an inaccessible
+annotation reference in its response but must preserve the global history.
+Review pagination recovery uses SUBMISSION_PAGE_OUT_OF_RANGE rather than
+translated error text; revoked or unavailable scope never triggers fallback.
 
 `access_control.project_operations` is the common operation-policy boundary for
 single-assignment creation/cancellation, interactive Annotation/Draft writes,
@@ -917,3 +926,13 @@ a bounded scope check without Project write locks; ordinary progress values
 remain a live projection. PostgreSQL regressions interleave real cancellation,
 reassignment and review APIs with a paused detail read. Existing Editor/submit
 and review write fences remain authoritative independently of these links.
+
+Scoped package navigation resolves its initial Project through the trusted
+actor before legacy transport-user object checks. The toolbar next-task,
+legacy project next-task and label-stream history entrances use the same
+PackageScope authorization as the later task query and response checks.
+Transport membership is neither required for an authorized mapped actor nor
+sufficient for a revoked actor. This migration is limited to explicit package
+context; shared legacy project helpers, global permissions and mutation actions
+retain their existing behavior. API regressions cover both directions and the
+unchanged unscoped denials.

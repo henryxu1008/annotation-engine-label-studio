@@ -1,0 +1,72 @@
+# Package-scoped continuous annotation and review (#83)
+
+Status: isolated local candidate. Base: main 8abaa18f54b296bf7b960a3a1e40c579227806c5. No merge, push, production deployment or batch dispatch is part of this slice.
+
+## User-visible contract
+
+Enter package A from its existing read-only workspace. Continue using the upstream Editor, queue sampler and immutable Submission/review commands. The next task and review list must stay within A even when the same person has work in package B. Refresh keeps the package context. Exhaustion or lost access stops this scoped workflow and offers refresh/back; it must never silently fall back to the project-wide queue. An explicit return to the ordinary project workspace ends the package context.
+
+Use one optional positive package ID, task_package, in generated links and read requests. Context is navigation/filtering, not an entitlement: removing it restores the ordinary authorized project workflow; it never grants assignment, editing or review authority. Existing unscoped callers retain their behavior.
+
+The package's existing single-task links remain single-task Editor links. A separate continuation link enters the existing label stream (`labeling=1`), with the full fixed package as its queue instead of the last project view/filter/selection. The native Back to task list action and explicit project return link end the context after the existing save guard. A review link uses `package_review=1` to reopen the same scoped workspace on refresh. This flag only chooses UI; it grants no authority. Closing that workspace returns to the ordinary project. Scoped task/progress reads use private, no-store responses.
+
+## Authority and reuse
+
+- Resolve the human actor from the authenticated server principal. Require current account, organization, project role and project-operation policy.
+- Resolve the fixed package and its live items using the existing original task ID/creation-time predicates. Intersect with existing authorized candidate tasks or pending, non-self Submissions. A client task list, reviewer ID, stale assignment version, filter or saved view cannot widen this result.
+- Reuse the upstream get_next_task sampler and existing Task/Assignment/draft guards. Both native next-task API entry points and direct task reads must honor an explicit package context. Bad/cross-project/inaccessible context fails closed; it is not interpreted as absent.
+- Reuse ReviewerWorkspace and SubmissionListAPI for a package-only pending queue. Keep the existing project-wide history view separate; do not broaden package visibility to historical content after its last eligible pending row disappears. A successful last decision remains reported as saved; an empty or subsequently unavailable scope stops without selecting another package.
+- Reuse native navigation and unsaved-work protection. Carry the context through existing history/query updates; do not introduce a second task index, assignment, claim endpoint or review ledger.
+
+## Boundaries
+
+#80 owns immutable content/media snapshots, ReleaseManifest and release semantics. Package membership freezes IDs only; this slice creates no DatasetVersion or frozen task body.
+
+#86 owns project states/transitions and the operation matrix. This slice consumes READ_WORK / EDIT / REVIEW and denies missing/unknown policies. It adds no lifecycle state, scheduler, deadline or automatic repair.
+
+Managers retain their existing grouping/read authority. Annotators retain only current own assignments. Reviewers retain only currently eligible pending non-self work, including authorized submissions from cancelled source assignments. Package grouping may overlap; it does not deduplicate or allocate assignments.
+
+## Reproduction before repair
+
+Use two explicit synthetic packages in one project, one actor with assignments in both, and a reviewer with pending submissions from both. Record the actual generated Editor URL, subsequent next-task request/result and selected review item. Exhaust A while B remains eligible. Current package entry + native next/queue UI must reproduce a user-visible escape before changing product code.
+
+Only fix demonstrated scope-propagation/enforcement blockers. Test en-US and zh-CN; preserve save/reload/rework semantics. Negative regressions cover changed package/task/project IDs, direct API calls, disabled feature, revoked/reassigned actor, policy denial, unavailable live item, empty A with eligible B, and unchanged ordinary project navigation. Real PostgreSQL tests check live query/authorization behavior; no new write fence is added for read navigation.
+
+## Reproduced root cause and repair
+
+The baseline package Editor URL omitted work context, both native next-task API entry points ignored explicit package scope, and the package review button opened the project-wide pending/history workspace. Five real API assertions failed before repair; a reviewer entering A selected B's newer submission in both display languages. Ordinary project navigation selecting B after explicitly returning to the project is expected behavior, not a package-escape defect. Package continuation did not previously have its own entry.
+
+The candidate extracts the existing live-item/package-visibility predicates into a shared access module, then intersects native queue/task/review queries with them. It repeats current authority after materialization and validates a scoped decision inside the existing Project → Task → Assignment → Submission write fence. A mapped actor is used for scoped sampler completion state; the session manager's state is never borrowed. Package review only requests current pending work, with no project-history fallback. A saved final decision remains successful even if the subsequent read reports that the package is no longer visible.
+
+Further reproduction found two linked continuation failures: project-wide stream history offered foreign package IDs (the Editor received 404 and redirected to the project), and rejected work was still excluded as completed because it already had an Annotation. The history response now narrows the existing actor history without pruning its global record. Explicit-assignment sampling reuses the existing personal-work classification for returned work and changed drafts with submissions, preserving legacy annotation completion. The native next-task serializer resolves the same actor and selects that actor's current working annotation (including skips), so returned work creates a new immutable revision rather than a second working annotation or an unbound draft. The old Submission/review/hash remain unchanged.
+
+## Local execution
+
+Reuse this chat's clean managed worktree and stopped owned PostgreSQL/test/frontend/browser containers, with a fresh synthetic database and temporary source/assets. Preserve the six retained #76 containers, all data volumes, primary dirty checkout and prior sealed reports. Do not use the other executor's fork-host-raw-live checkout. IAM recovery and Core business integration remain deferred.
+
+## Original candidate acceptance (5ff52f4a2, 2026-10-22)
+
+- PostgreSQL: 197 selected package, assignment authorization, submission/review, project-operation, personal-work and real write-concurrency regressions passed.
+- SQLite: 50 passed; 5 PostgreSQL-specific concurrency cases skipped here and covered on PostgreSQL.
+- Frontend: 57 component/store regressions passed; production frontend build passed.
+- Fresh Edge contexts: six annotation, review and returned-work journeys passed in en-US and zh-CN, each using two synthetic packages. Single-task link/reload, continuous submit, native previous/next, scoped history, exhaustion with B still eligible, direct out-of-package denial, package review refresh, rejection/approval, same-annotation revision 2 with preserved old hash/review, and successful final decision without project-history fallback passed. Zero page exceptions.
+
+This is local candidate evidence, not GitHub CI or retained-pilot/production installation. No migrations, batch assignment, real #86 lifecycle provider, #80 release/content semantics, IAM recovery or Core business integration were exercised or enabled by this slice. #83 remains open.
+
+## Independent review corrections (2026-10-22)
+
+The complete original candidate review requested changes for four reproduced issues. Seven targeted API regressions failed before repair: both next-task entry points filtered with an ordinary transport account before resolving its mapped actor; a cancelled and recreated assignment to the same person still authorized an already-materialized old payload and history annotation reference; a project becoming READ_WORK-only during serialization retained can_label=true; and consuming the last row of review page 2 returned translated invalid-page text without a stable recovery code.
+
+Scoped candidate filtering now starts with the trusted actor. Final task reads compare the serialized assignment ID/version with the current active assignment, recheck child annotation/draft access, and narrow edit capability with a fresh project policy. A retained task ID alone cannot authorize an old working answer. The response-only history projection clears inaccessible annotation IDs without rewriting the global history. Submission pagination exposes SUBMISSION_PAGE_OUT_OF_RANGE; the existing reviewer workspace retries page 1 only for that code, retaining the package context and stopping on ordinary 403/404 responses.
+
+These guards reuse existing assignment and project-operation authority. No new write locks, assignment commands, state transitions, review ledger, DatasetVersion or release path are added. Serializer-seam regressions deterministically execute real manager cancellation/reassignment after materialization; they are not claimed as two-connection PostgreSQL concurrency tests.
+
+Repair verification: PostgreSQL 209 passed (including existing real write-concurrency cases); SQLite 55 passed and 5 PostgreSQL-only cases skipped; frontend 72 component/store regressions passed; production build passed. Fresh Edge contexts passed the six annotation/review/returned-work journeys again, plus two 51-row review-page recovery journeys in en-US/zh-CN, with no page exceptions. The consumed last page returned the machine code, recovered page 1 within the same package, and retained context after reload. Source hashes matched the isolated worktree for 13 tested backend Python files, 10 browser backend files and 13 frontend files (UTF-8/LF normalization). This remains local evidence; remote CI and publication were not run.
+
+## PR #103 complete-diff review: scoped project entrance
+
+The Ready-stage independent review found one remaining trusted-identity mismatch: when transport user B is not a project member but maps to authorized actor A, package and Task reads already use A, while the toolbar, legacy next-task and label-stream history entrances still checked B's project membership first. Three new API regressions reproduced 404/403/403 before repair.
+
+Only explicit `task_package` entrances now resolve the project through the existing actor-aware project query and then the full current `PackageScope` authority. The shared legacy project helper, global DRF permission classes, unscoped paths and mutation actions remain unchanged. New positive and negative regressions cover entry without transport membership, package/Task consistency, actor project/organization revocation despite a transport manager, and preserved unscoped denials. This is a server-side identity-enforcement repair; no IAM recovery, lifecycle provider or Core integration is enabled.
+
+Fresh repair verification (2026-10-23): PostgreSQL 216 passed, including existing write-concurrency tests; SQLite 62 passed and 5 PostgreSQL-only cases skipped. The 13 changed backend/test source hashes matched the tested container after UTF-8/LF normalization. Frontend code is unchanged from the prior d88 candidate; its older browser evidence is separate from automatic CI on the repaired PR head.

@@ -745,9 +745,12 @@ class ProjectActionsAPI(APIView):
         return Response(get_all_actions(request.user, project))
 
     def post(self, request):
+        from task_packages.scope import PackageScope
+
         pk = int_from_request(request.GET, 'project', 0)
-        project = get_visible_project_or_404(request, pk)
         action_id = request.GET.get('id', None)
+        scope = PackageScope.from_project_id(request, pk) if action_id == 'next_task' else None
+        project = scope.project if scope else get_visible_project_or_404(request, pk)
         # The labeling toolbar reads its queue through this action endpoint.
         # Keep mutation actions manager-only; next_task uses the existing
         # labeling role and server-side assignment scope instead.
@@ -771,7 +774,8 @@ class ProjectActionsAPI(APIView):
             queryset = queryset.order_by()
 
         if action_id == 'next_task':
-            allowed_task_ids = Task.objects.for_user(request.user).filter(project=project).values_list('id', flat=True)
+            queue_actor = scope.actor if scope else request.user
+            allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
             queryset = queryset.filter(id__in=allowed_task_ids)
 
         # wrong action id

@@ -2,6 +2,7 @@ import { flow, getRoot, getSnapshot, types } from "mobx-state-tree";
 import { DataStore, DataStoreItem } from "../../mixins/DataStore";
 import { getAnnotationSnapshot } from "../../sdk/lsf-utils";
 import { isDefined } from "../../utils/utils";
+import { History } from "../../utils/history";
 import { Assignee } from "../Assignee";
 import { DynamicModel, registerModel } from "../DynamicModel";
 import { CustomJSON } from "../types";
@@ -140,7 +141,11 @@ export const create = (columns) => {
   })
     .actions((self) => ({
       loadTaskHistory: flow(function* (props) {
-        const taskHistory = yield self.root.apiCall("taskHistory", props);
+        const taskPackage = History.getParams().task_package;
+        const taskHistory = yield self.root.apiCall("taskHistory", {
+          ...props,
+          ...(taskPackage !== undefined ? { task_package: taskPackage } : {}),
+        });
 
         if (!Array.isArray(taskHistory)) {
           return [];
@@ -162,6 +167,8 @@ export const create = (columns) => {
         // Pass label stream mode context to the backend API call
         const isLabelStream = getRoot(self).SDK?.mode === "labelstream";
         const taskParams = { taskID };
+        const taskPackage = History.getParams().task_package;
+        if (taskPackage !== undefined) taskParams.task_package = taskPackage;
         if (isLabelStream) {
           taskParams.interaction = "labelstream";
         }

@@ -4,11 +4,13 @@ import logging
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_principal
+from access_control.project_operations import EDIT, require_project_operation
 from core.permissions import all_permissions
 from data_manager.actions import DataManagerAction
 from data_manager.functions import filters_ordering_selected_items_exist
 from projects.functions.next_task import get_next_task
 from rest_framework.exceptions import NotFound
+from task_packages.scope import PackageScope
 from tasks.serializers import NextTaskSerializer
 
 logger = logging.getLogger(__name__)
@@ -23,8 +25,16 @@ def next_task(project, queryset, **kwargs):
     """
 
     request = kwargs['request']
+    scope = PackageScope.from_request(request, project)
+    if scope:
+        require_project_operation(scope.project, EDIT)
+        queryset = scope.tasks(queryset)
     dm_queue = filters_ordering_selected_items_exist(request.data)
-    next_task, queue_info = get_next_task(request.user, queryset, project, dm_queue)
+    next_task, queue_info = get_next_task(scope.actor if scope else request.user, queryset, project, dm_queue)
+
+    if scope:
+        scope = PackageScope.from_request(request, project)
+        require_project_operation(scope.project, EDIT)
 
     if next_task is None:
         error = NotFound('No tasks are currently available in this queue.')
@@ -40,6 +50,10 @@ def next_task(project, queryset, **kwargs):
     context = {'request': request, 'project': project, 'resolve_uri': True, 'annotations': False}
     serializer = NextTaskSerializer(next_task, context=context)
     response = serializer.data
+    if scope:
+        scope = PackageScope.from_request(request, project)
+        require_project_operation(scope.project, EDIT)
+        scope.require_task(next_task, response)
     response['queue'] = queue_info
     return response
 

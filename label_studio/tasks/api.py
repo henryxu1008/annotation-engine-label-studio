@@ -27,7 +27,7 @@ from organizations.models import OrganizationMember
 from projects.functions.stream_history import fill_history_annotation
 from projects.models import Project, ProjectMember
 from rest_framework import generics, viewsets
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -409,6 +409,11 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         }
 
     def get(self, request, pk):
+        from task_packages.scope import PackageScope
+
+        scope = PackageScope.from_request(request, self.task.project)
+        if scope:
+            scope.require_task(self.task)
         context = self.get_retrieve_serializer_context(request)
         context['project'] = project = self.task.project
 
@@ -432,7 +437,12 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         )
         serializer = self.get_serializer_class()(self.task, many=False, context=context, expand=expand)
         data = serializer.data
-        return Response(data)
+        if scope:
+            PackageScope.from_request(request, project).require_task(self.task, data)
+        response = Response(data)
+        if scope:
+            response['Cache-Control'] = 'private, no-store'
+        return response
 
     def get_excluded_fields_for_evaluation(self):
         return ['annotations_results', 'predictions_results']
@@ -477,6 +487,13 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         )
         authorization.require(authorization.can_view_task(principal, lean_task))
         self.check_object_permissions(self.request, lean_task)
+
+        if self.request.method == 'GET':
+            from task_packages.scope import PackageScope
+
+            scope = PackageScope.from_request(self.request, lean_task.project)
+            if scope:
+                scope.require_task(lean_task)
 
         # Now fetch full task with heavy queryset (prefetches, annotations, etc.)
         queryset = self.filter_queryset(self.get_queryset())
@@ -1144,6 +1161,13 @@ class SubmissionPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
+    def paginate_queryset(self, queryset, request, view=None):
+        try:
+            return super().paginate_queryset(queryset, request, view)
+        except NotFound as error:
+            error.display_context = {'reason': 'SUBMISSION_PAGE_OUT_OF_RANGE'}
+            raise
+
 
 def submissions_for_actor(actor):
     """Share collection/object scope without borrowing the session user's role.
@@ -1168,6 +1192,19 @@ class SubmissionListAPI(generics.ListAPIView):
     permission_required = all_permissions.annotations_view
     pagination_class = SubmissionPagination
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        if request.query_params.getlist('task_package'):
+            # Serialization may race revocation or another review. Reuse the
+            # live query, including exact returned row identities, before return.
+            rows = response.data['results']
+            expected = {(row['id'], row['revision']) for row in rows}
+            current = set(self.get_queryset().filter(pk__in=[row['id'] for row in rows]).values_list('pk', 'revision'))
+            if expected != current:
+                raise PermissionDenied('Current pending review access has changed.')
+            response['Cache-Control'] = 'private, no-store'
+        return response
+
     def paginate_queryset(self, queryset):
         if not (
             bool_from_request(self.request.GET, 'reviewable', False)
@@ -1187,6 +1224,15 @@ class SubmissionListAPI(generics.ListAPIView):
         reviewable = bool_from_request(self.request.GET, 'reviewable', False)
         history = bool_from_request(self.request.GET, 'history', False)
 
+        from access_control.project_operations import REVIEW, require_project_operation
+        from task_packages.scope import PackageScope, requested_package
+
+        package_id = requested_package(self.request)
+        if package_id is not None and (not project_id or not reviewable or history):
+            raise ValidationError(
+                {'detail': 'Package review context requires a project and the pending review queue.'}
+            )
+
         if reviewable:
             if not project_id:
                 raise ValidationError({'project': 'Project is required for the review queue.'})
@@ -1199,6 +1245,10 @@ class SubmissionListAPI(generics.ListAPIView):
                 assignment__project=project,
                 status=Submission.Status.PENDING,
             ).exclude(submitted_by=actor)
+            if package_id is not None:
+                scope = PackageScope.from_request(self.request, project)
+                require_project_operation(scope.project, REVIEW)
+                queryset = scope.submissions(queryset)
         else:
             if project_id:
                 queryset = queryset.filter(assignment__project_id=project_id)
@@ -1246,12 +1296,15 @@ class SubmissionReviewAPI(generics.GenericAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        from task_packages.scope import requested_package
+
         review_submission(
             submission=submission,
             reviewer=actor,
             principal=principal,
             decision=serializer.validated_data['decision'],
             reason=serializer.validated_data.get('reason', ''),
+            task_package_id=requested_package(request),
         )
         submission.refresh_from_db()
         return Response(SubmissionSerializer(submission, context={'request': request}).data)
