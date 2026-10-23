@@ -6,6 +6,7 @@ import enEditor from "./catalogs/en-US/editor.json";
 import enCollaboration from "./catalogs/en-US/collaboration.json";
 import enErrors from "./catalogs/en-US/errors.json";
 import enTaskPackages from "./catalogs/en-US/taskPackages.json";
+import enReviewBatches from "./catalogs/en-US/reviewBatches.json";
 import zhCommon from "./catalogs/zh-CN/common.json";
 import zhApp from "./catalogs/zh-CN/app.json";
 import zhProjects from "./catalogs/zh-CN/projects.json";
@@ -14,6 +15,7 @@ import zhEditor from "./catalogs/zh-CN/editor.json";
 import zhCollaboration from "./catalogs/zh-CN/collaboration.json";
 import zhErrors from "./catalogs/zh-CN/errors.json";
 import zhTaskPackages from "./catalogs/zh-CN/taskPackages.json";
+import zhReviewBatches from "./catalogs/zh-CN/reviewBatches.json";
 
 export const namespaces = [
   "common",
@@ -24,6 +26,7 @@ export const namespaces = [
   "collaboration",
   "errors",
   "taskPackages",
+  "reviewBatches",
 ] as const;
 export type LocaleNamespace = (typeof namespaces)[number];
 export const resources = {
@@ -36,6 +39,7 @@ export const resources = {
     collaboration: enCollaboration,
     errors: enErrors,
     taskPackages: enTaskPackages,
+    reviewBatches: enReviewBatches,
   },
   "zh-CN": {
     common: zhCommon,
@@ -46,5 +50,6 @@ export const resources = {
     collaboration: zhCollaboration,
     errors: zhErrors,
     taskPackages: zhTaskPackages,
+    reviewBatches: zhReviewBatches,
   },
 };

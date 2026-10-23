@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const LOCALES = ["en-US", "zh-CN"];
-const NAMESPACES = ["common", "app", "projects", "datamanager", "editor", "collaboration", "errors", "taskPackages"];
+const NAMESPACES = ["common", "app", "projects", "datamanager", "editor", "collaboration", "errors", "taskPackages", "reviewBatches"];
 const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/;
 const INTERPOLATION = /{{\s*([a-zA-Z][\w.]*)\s*}}/g;
 

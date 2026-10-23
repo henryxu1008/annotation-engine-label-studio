@@ -1,5 +1,16 @@
 # Authorization integration plan
 
+## #84 local review sampling (first slice)
+
+[Review sampling v1](review-sampling-v1.md) freezes deterministic bounded work
+plans over exact existing Submissions, reuses the existing ReviewDecision/Editor
+rework chain, and keeps unchecked work outside approved release authority.
+Preserve project-first decision/create fences, serialized-source hash checks,
+frozen plan database guards and current actor/scope checks across upgrades.
+It defaults off and requires explicit per-project Fork-review activation.
+Core-only-review, Host policy/implementation, #81 arbitration, #86 lifecycle and
+retained environment activation are outside this slice.
+
 The isolated real Fork → Host RAW trial uses the Python 3.11 API/RQ image in
 `deploy/fork-host-live/Dockerfile`, one editable source root, dedicated synthetic
 PostgreSQL/Redis/export storage and explicitly enabled organization Token policy.

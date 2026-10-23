@@ -10,7 +10,7 @@ import "./ReviewerWorkspace.scss";
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
 
-export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
+export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();
@@ -35,17 +35,16 @@ export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
 
   const loadPages = useCallback(async (nextPendingPage, nextHistoryPage) => {
     return Promise.all([
-      callApiRef.current("reviewableSubmissions", {
+      callApiRef.current(batchId !== null ? "reviewBatchQueue" : "reviewableSubmissions", {
         params: {
-          project: projectId,
-          reviewable: true,
+          ...(batchId !== null ? { pk: projectId, batch: batchId } : { project: projectId, reviewable: true }),
           page: nextPendingPage,
           page_size: 50,
           ...(packageId !== null ? { task_package: packageId } : {}),
         },
         errorFilter: () => true,
       }),
-      packageId !== null ? Promise.resolve({ results: [] }) : callApiRef.current("projectSubmissions", {
+      packageId !== null || batchId !== null ? Promise.resolve({ results: [] }) : callApiRef.current("projectSubmissions", {
         params: {
           project: projectId,
           history: true,
@@ -55,7 +54,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
         errorFilter: () => true,
       }),
     ]);
-  }, [projectId, packageId]);
+  }, [projectId, packageId, batchId]);
 
   const refresh = useCallback(async (nextPendingPage = pendingPage, nextHistoryPage = historyPage) => {
     const generation = ++generationRef.current;
@@ -150,7 +149,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
     setNotice("");
 
     const result = await callApiRef.current("reviewSubmission", {
-      params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}) },
+      params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}), ...(batchId !== null ? { review_batch: batchId } : {}) },
       body: {
         decision,
         reason: decision === "rejected" ? rejectReason.trim() : "",
@@ -244,7 +243,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null }) => {
             </Button>
           </div>
 
-          {packageId === null && <>
+          {packageId === null && batchId === null && <>
           <Typography variant="headline" size="small">{t("submissionHistory")}</Typography>
           {historySubmissions.length === 0 ? (
             <div data-testid="review-history-empty">{t("noReviewedSubmissions")}</div>

@@ -1,0 +1,134 @@
+# Local review sampling and rework (#84, first slice)
+
+This slice organizes existing Fork reviews. It is not a new decision ledger,
+platform review policy, release rule, dataset version or scheduler. #84 remains
+open for conflict/risk priority, second review and arbitration with #81.
+
+## Product workflow
+
+A current project Manager previews a named batch over the latest pending
+Submission of each assignment. Optional fixed-package and submitter filters
+intersect that project scope. Overlapping packages contribute a Submission
+once. A missing/cross-project package rejects the selection; unavailable fixed
+members contribute no pending Submission. Cancelled source assignments retain
+their existing authorized pending-review semantics.
+
+The percentage is an integer from 1 to 100. SHA-256 ranks canonical
+algorithm/project/seed/source-identity tuples with Submission ID as a tie-break.
+Select ceil(N * percentage / 100), either globally or separately per submitter.
+The UI displays requested and actual rates; per-person rounding can exceed the
+requested global rate. The version is sha256-ranked-v1, not Python random state.
+Both the full candidate list and selected flags are frozen, preserving an exact
+denominator independent of later status, deletion, pagination or new submissions.
+An empty preview rejects; more than 1,000 candidates rejects without truncation.
+
+Creation requires the preview plan hash and a project-scoped UUID
+Idempotency-Key. Under the existing project-first write fence, recalculate the
+plan and reject changed candidates with REVIEW_BATCH_PREVIEW_CHANGED. Same-key,
+same-request, same-principal/actor replay returns the original batch even after
+source decisions; changed request or actor returns 409. No automatic job or
+network service is involved.
+
+Current Reviewers enter a selected-only queue in the existing ReviewerWorkspace.
+Empty queues, lost authority and invalid source evidence stop the scoped flow;
+there is no project-history or unrelated-work fallback. Pagination recovery
+retains the batch context. The existing review command revalidates batch
+membership/source integrity inside Project -> Task -> Assignment -> Submission
+locks. It still permits one decision per pending exact revision, rejects self
+review, and derives the reviewer from the trusted actor.
+
+Reject with a reason, then use existing My Work and Editor to return work to the
+original active assignment. Cancellation/reassignment does not revive that
+assignment or grant a new one. Editor Update creates a new immutable Submission;
+the old rejected result/hash/decision stays unchanged. The batch shows the newest
+successor on the same assignment and provides read-only source inspection.
+Review that new revision separately through the existing project review queue;
+it is never silently appended to the frozen sample or automatically approved.
+Progress includes its read time and explicit refresh.
+
+Unselected, pending and unavailable are not approval. Even if a selected subset
+passes, that supplies no approval for the remainder. Existing ordinary project
+reviews remain available to authorized Reviewers; a batch is not an exclusive
+review reservation. Explicitly reviewing an unselected item through the ordinary
+workflow remains legitimate. Neither sample membership nor batch completion
+authorizes /release/, #79 approved export, #80 frozen Manifest or delivery.
+
+## Routes and authority
+
+All routes below are under /api/projects/{project}/review-batches/:
+
+| Route | Method | Authority |
+| --- | --- | --- |
+| capability/ | GET | Manager or Reviewer; current READ_WORK |
+| preview/ | POST | Manager; ORGANIZE_REVIEW and READ_WORK |
+| collection | GET | Manager or Reviewer; paginated metadata |
+| collection | POST | Manager; ORGANIZE_REVIEW and READ_WORK |
+| {batch}/ | GET | Manager or Reviewer; frozen identities and live progress |
+| {batch}/queue/ | GET | Reviewer; selected, pending, non-self snapshots and REVIEW |
+
+The existing POST /api/submissions/{id}/review/ accepts an optional positive
+review_batch query context. Invalid, foreign or unselected contexts reject.
+Removing that context uses the ordinary pre-existing authorized review command;
+it does not grant a different role or release authority.
+
+No actor/reviewer/result/status fields are accepted by batch creation/preview.
+Manager batch planning does not imply Reviewer permission. Annotators have no
+batch APIs; they retain their own existing work, reason and Editor access.
+Reviewer projections exclude their own sources. All endpoints repeat current
+account/organization/project scope, include private/no-store responses, and
+recheck materialized read authority. Queue responses also verify the actual
+serialized snapshot against frozen source hashes before returning it.
+
+Frozen identity includes Submission, assignment, task, revision, original
+submitter and content hash. Validate the live source graph, snapshot hash and
+matching ReviewDecision for approved/rejected states. Missing sources remain
+unavailable without shrinking the denominator; changed/corrupt sources reject.
+Snapshots/answers are not copied into the batch table.
+
+The additive ReviewBatch table has a unique project/key constraint.
+PostgreSQL and SQLite update triggers protect the plan, hash, name, request,
+creator identity and project binding, including bulk ORM updates. Nullable
+creator-FK cleanup does not rewrite the frozen creator. Project cascade deletion
+remains existing behavior; these local work plans are not a permanent audit log.
+
+## Explicit activation and deferred ownership
+
+Default: ANNOTATION_REVIEW_BATCHES_ENABLED=false. Additionally require the
+operator-controlled ANNOTATION_REVIEW_BATCH_MODES JSON mapping, for example
+{"7:12":"fork_review"} for organization 7/project 12. It is independent of
+APPROVED_EXPORT_POLICY and export credentials. Missing/unknown/core_only_internal
+modes deny every new batch route and batch-context decision. No retained
+environment is activated by this implementation or its tests.
+This first slice enables only PostgreSQL and SQLite, which have the frozen
+plan triggers and regression coverage. Other database backends reject activation.
+
+Core-only-review ordinary internal Submission reads keep their existing
+contract. This patch does not connect Core, translate Core decisions, enable
+delivery, or globally retrofit a different policy onto legacy Fork review APIs.
+The new mode mapping is a narrow local workflow opt-in, not Host IAM or a
+platform policy engine.
+
+The legacy project-operation provider offers ORGANIZE_REVIEW only when this
+feature is enabled. A #86 provider may independently deny planning, REVIEW or
+READ_WORK; read-only progress must remove review actions. No lifecycle state or
+transition is inferred/implemented here. #83 package membership, personal work,
+assignment and navigation mechanisms are reused. No Host files are modified.
+
+## Validation
+
+review_batches/tests covers deterministic/global/per-person rounding, exact
+1,000/1,001 limits, package union, current latest revisions, stale previews,
+original-key replay/conflicts, frozen DB guards, source corruption and deletion,
+trusted mapped actors, revocation, invalid contexts and release/download negatives.
+Independent PostgreSQL connections exercise same-key creation, two reviewers,
+revocation-first creation/decisions and supersede-first decisions.
+
+ReviewBatches component tests and en-US/zh-CN browser journeys cover preview,
+creation, sample-only review, rejection, Editor rework/new revision, separate
+approval and unchanged old evidence. seed_review_batches_e2e creates a separate
+synthetic organization/users/projects once, requires TEST_ENVIRONMENT, refuses
+existing fixture identities/output, and never deletes existing data. The CI
+workflow explicitly opts in only those generated synthetic project IDs.
+
+Feature activation, deployment, merge, real provider acceptance and Core
+integration are separate actions. This first slice does not close #84.

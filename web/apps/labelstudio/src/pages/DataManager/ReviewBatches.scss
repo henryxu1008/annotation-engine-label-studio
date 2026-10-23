@@ -1,0 +1,18 @@
+.review-batches {
+  display: grid;
+  gap: 12px;
+  max-height: 75vh;
+  overflow: auto;
+  min-width: 0;
+  fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+  section { display: grid; gap: 10px; min-width: 0; }
+  label { display: grid; gap: 8px; }
+  label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+  input:not([type="checkbox"]) { border: 1px solid var(--color-neutral-border, #888); padding: 8px; min-width: 0; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: start; padding: 8px; border-bottom: 1px solid var(--color-neutral-border); vertical-align: top; }
+  code { overflow-wrap: anywhere; }
+  pre { overflow: auto; max-height: 280px; }
+  @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } }
+}

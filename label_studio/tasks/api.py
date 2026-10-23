@@ -1296,6 +1296,7 @@ class SubmissionReviewAPI(generics.GenericAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        from review_batches.scope import requested_batch
         from task_packages.scope import requested_package
 
         review_submission(
@@ -1305,6 +1306,7 @@ class SubmissionReviewAPI(generics.GenericAPIView):
             decision=serializer.validated_data['decision'],
             reason=serializer.validated_data.get('reason', ''),
             task_package_id=requested_package(request),
+            review_batch_id=requested_batch(request),
         )
         submission.refresh_from_db()
         return Response(SubmissionSerializer(submission, context={'request': request}).data)

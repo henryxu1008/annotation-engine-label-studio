@@ -98,6 +98,7 @@ jobs:
             tasks/tests/test_task_assignment_authorization.py \
             tasks/tests/test_project_operation_policy.py \
             tasks/tests/test_my_work.py \
+            review_batches/tests/test_batches.py \
             task_packages/tests/test_packages.py task_packages/tests/test_continuity.py task_packages/tests/test_continuity_review.py \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \
@@ -122,6 +123,7 @@ jobs:
             tasks/tests/test_task_assignment_authorization.py
           poetry run pytest -q \
             tasks/tests/test_project_write_concurrency.py \
+            review_batches/tests \
             task_packages/tests/test_packages.py task_packages/tests/test_continuity.py task_packages/tests/test_continuity_review.py \
             tasks/tests/test_project_operation_policy.py tasks/tests/test_my_work.py
 
