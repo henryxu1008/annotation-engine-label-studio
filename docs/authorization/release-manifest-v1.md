@@ -189,8 +189,10 @@ access to otherwise valid content.
 ## Difference semantics
 
 Source identity is namespace/incarnation + kind + Submission ID; a different
-fingerprint under the same source ID is a conflict, not a new version. Host adds
-its workspace-owned connection to that unique key. Project/task/assignment/hash
+fingerprint under the same source ID is a conflict, not a new version. Host enforces
+namespace + Submission ID uniqueness across connections and workspaces (the first
+profile accepts only kind `submission`). A connection is an authorization binding,
+not an extra identity component; replacing it cannot bypass a source conflict. Project/task/assignment/hash
 are assertions, not key components that disguise a source conflict.
 
 For sample comparison only, align by assignment within the same namespace/org/
