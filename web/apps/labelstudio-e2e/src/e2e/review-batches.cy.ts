@@ -91,8 +91,9 @@ describe("deterministic review sampling and rework", () => {
       open();
       cy.contains("button", `Sample ${locale}`).click();
       cy.contains("button", zh ? "返工相关" : "Rework follow-up").click();
-      cy.contains("tr", `#${rejected.id}`).should("contain.text", zh ? "最新修订状态: 待审核" : "Latest revision state: Pending review");
-      cy.contains("tr", `#${rejected.id}`).should("contain.text", "Fix sentiment 修正情感");
+      cy.then(() => cy.contains("tr", `#${rejected.id}`)
+        .should("contain.text", zh ? "最新修订状态: 待审核" : "Latest revision state: Pending review")
+        .and("contain.text", "Fix sentiment 修正情感"));
       visit("reviewer");
       cy.get('[data-testid="open-review-workspace"]').click();
       cy.then(() => cy.get(`[data-testid="review-submission-${newSubmission}"]`).click());
@@ -105,8 +106,9 @@ describe("deterministic review sampling and rework", () => {
       open();
       cy.contains("button", `Sample ${locale}`).click();
       cy.contains("button", zh ? "返工相关" : "Rework follow-up").click();
-      cy.contains("tr", `#${rejected.id}`).should("contain.text", zh ? "最新修订状态: 已批准" : "Latest revision state: Approved");
-      cy.contains("tr", `#${rejected.id}`).should("contain.text", zh ? "已驳回" : "Rejected");
+      cy.then(() => cy.contains("tr", `#${rejected.id}`)
+        .should("contain.text", zh ? "最新修订状态: 已批准" : "Latest revision state: Approved")
+        .and("contain.text", zh ? "已驳回" : "Rejected"));
       cy.get('[data-testid="review-batch-progress"]').within(() => {
         cy.contains("dt", zh ? "抽中 · 已批准" : "Selected · approved").siblings("dd").should("have.text", "1");
         cy.contains("dt", zh ? "抽中 · 已驳回" : "Selected · rejected").siblings("dd").should("have.text", "1");
