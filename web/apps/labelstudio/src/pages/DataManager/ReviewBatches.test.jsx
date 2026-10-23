@@ -12,6 +12,7 @@ jest.mock("./ReviewerWorkspace", () => ({ ReviewerWorkspace: ({ batchId }) => <d
 const detail = {
   id: 7, name: "Sample 样本", role: "reviewer", plan_hash: "a".repeat(64), candidate_count: 2, selected_count: 1,
   algorithm: "sha256-ranked-v1", rule: { rate: 50, seed: "fixed" },
+  as_of: "2026-10-23T10:00:00Z",
   items: [
     { submission_id: 1, revision: 1, selected: true, status: "rejected", review_reason: "Fix 修正",
       can_review: true, successor: { id: 3, revision: 2 } },

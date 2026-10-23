@@ -10,7 +10,7 @@ import "./ReviewerWorkspace.scss";
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
 
-export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null }) => {
+export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null, onReviewSaved, reviewEnabled = true }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();
@@ -60,7 +60,12 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
     const generation = ++generationRef.current;
     setLoading(true);
 
-    let [reviewableResult, historyResult] = await loadPages(nextPendingPage, nextHistoryPage);
+    // Transport failures are read failures too; never leave a saved review spinning.
+    const readPages = async (pending, history) => {
+      try { return await loadPages(pending, history); }
+      catch { return [{ error: true }, { error: true }]; }
+    };
+    let [reviewableResult, historyResult] = await readPages(nextPendingPage, nextHistoryPage);
 
     if (generationRef.current !== generation) return;
 
@@ -69,7 +74,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
       reviewableResult?.response?.display_context?.reason === "SUBMISSION_PAGE_OUT_OF_RANGE"
     ) {
       const fallbackPendingPage = 1;
-      [reviewableResult, historyResult] = await loadPages(fallbackPendingPage, nextHistoryPage);
+      [reviewableResult, historyResult] = await readPages(fallbackPendingPage, nextHistoryPage);
       if (generationRef.current !== generation) return;
       nextPendingPage = fallbackPendingPage;
       setPendingPage(fallbackPendingPage);
@@ -128,17 +133,17 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
       [...pendingSubmissions, ...historySubmissions].find((submission) => submission.id === selectedId) ?? null,
     [historySubmissions, pendingSubmissions, selectedId],
   );
-  const selectedIsReviewable = selected
+  const selectedIsReviewable = selected && reviewEnabled
     ? pendingSubmissions.some((submission) => submission.id === selected.id)
     : false;
 
   useEffect(() => {
     setRejectReason("");
-    setError("");
+    if (selectedId !== null) setError("");
   }, [selectedId]);
 
   const decide = async (decision) => {
-    if (!selected) return;
+    if (!selectedIsReviewable) return;
     if (decision === "rejected" && !rejectReason.trim()) {
       setError("rejectionReasonRequired");
       return;
@@ -147,6 +152,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
     setProcessing(decision);
     setError("");
     setNotice("");
+    const generation = generationRef.current;
 
     const result = await callApiRef.current("reviewSubmission", {
       params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}), ...(batchId !== null ? { review_batch: batchId } : {}) },
@@ -156,6 +162,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
       },
       errorFilter: () => true,
     });
+    if (generation !== generationRef.current) return;
 
     if (!result || result?.error || result?.$meta?.ok === false) {
       setError(collaborationErrorCode(result, "reviewSaveFailed"));
@@ -166,7 +173,7 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null 
 
     setNotice({ id: selected.id, revision: selected.revision, decision });
     setRejectReason("");
-    await refresh(pendingPage, historyPage);
+    await Promise.all([refresh(pendingPage, historyPage), onReviewSaved?.()]);
     setProcessing(null);
   };
 

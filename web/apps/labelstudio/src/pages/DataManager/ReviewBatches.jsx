@@ -5,6 +5,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
+import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import "./ReviewBatches.scss";
 
 const failed = (r) => !r || r.error || r.$meta?.ok === false;
@@ -39,6 +40,9 @@ export const ReviewBatches = ({ projectId }) => {
   call.current = api.callApi;
   const generation = useRef(0);
   const creation = useRef(null);
+  const selection = useRef(null);
+  const progressGeneration = useRef(0);
+  const successorGeneration = useRef(0);
   const [batches, setBatches] = useState([]);
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
@@ -50,9 +54,15 @@ export const ReviewBatches = ({ projectId }) => {
   const [preview, setPreview] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   const [successor, setSuccessor] = useState(null);
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+  const [progressBusy, setProgressBusy] = useState(false);
+  const [savedReview, setSavedReview] = useState(false);
+  const [filter, setFilter] = useState("all");
 
   const load = useCallback(async (id = null, targetPage = 1) => {
     const current = ++generation.current;
+    selection.current = { id, projectId };
+    setSelectedBatchId(id); setFilter("all"); setSavedReview(false); setProgressBusy(false);
     setBusy(true); setError(""); setDetail(null); setReviewing(false); setBatches([]); setSuccessor(null);
     try {
       const [list, capability, selected] = await Promise.all([
@@ -75,9 +85,36 @@ export const ReviewBatches = ({ projectId }) => {
     } finally { if (current === generation.current) setBusy(false); }
   }, [projectId]);
 
+  // Refresh only the detail: keep the reviewer queue, selection and batch context mounted.
+  const refreshProgress = async (id, reviewSaved = false, context = selection.current) => {
+    if (!context || context !== selection.current) return;
+    const current = generation.current;
+    const request = ++progressGeneration.current;
+    const isCurrent = () => current === generation.current && request === progressGeneration.current;
+    successorGeneration.current += 1;
+    setProgressBusy(true); setError(""); setSuccessor(null);
+    if (reviewSaved) setSavedReview(true);
+    try {
+      const [result, capability] = await Promise.all([
+        call.current("reviewBatchDetail", { params: { pk: projectId, batch: id }, errorFilter: () => true }),
+        call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }),
+      ]);
+      if (!isCurrent()) return;
+      if (failed(result) || failed(capability)) throw new Error("detail unavailable");
+      setDetail(result);
+      setCanCreate(capability.can_create === true);
+    } catch {
+      if (!isCurrent()) return;
+      // A failed read cannot establish current authority. Keep only the retry context.
+      setDetail(null); setReviewing(false); setBatches([]);
+      setCanCreate(false); setPreview(null); creation.current = null;
+      setError(reviewSaved ? "savedRefreshFailed" : "progressRefreshFailed");
+    } finally { if (isCurrent()) setProgressBusy(false); }
+  };
+
   useEffect(() => {
     setPreview(null); creation.current = null; load();
-    return () => { generation.current += 1; };
+    return () => { generation.current += 1; selection.current = null; };
   }, [load]);
 
   const change = (key, value) => {
@@ -119,21 +156,29 @@ export const ReviewBatches = ({ projectId }) => {
   };
   const inspectSuccessor = async (id) => {
     const current = ++generation.current;
+    const request = ++successorGeneration.current;
     setBusy(true); setError(""); setSuccessor(null);
     try {
       const result = await call.current("submissionDetail", { params: { submissionPk: id }, errorFilter: () => true });
-      if (current !== generation.current) return;
+      if (current !== generation.current || request !== successorGeneration.current) return;
       if (failed(result)) setError("loadFailed");
       else setSuccessor(result);
-    } catch { if (current === generation.current) setError("loadFailed"); }
+    } catch { if (current === generation.current && request === successorGeneration.current) setError("loadFailed"); }
     finally { if (current === generation.current) setBusy(false); }
   };
 
+  const progress = detail ? batchProgress(detail.items) : null;
+  const visibleItems = detail ? filterBatchItems(detail.items, filter) : [];
+  const controlsBusy = busy || progressBusy;
+  const reviewEnabled = detail?.items.some((i) => i.can_review) ?? false;
+  const detailContext = selection.current;
   return <div className={cn("review-batches").toClassName()} data-testid="review-batches">
     <p>{t("boundary")}</p>
     {error && <p role="alert">{t(error)}</p>}
-    <Button disabled={busy} onClick={() => load(detail?.id ?? null, page)}>{t("refresh")}</Button>
-    {canCreate && <fieldset disabled={busy}>
+    {savedReview && <p role="status">{t("reviewSaved")}</p>}
+    {progressBusy && <p role="status">{t("refreshingProgress")}</p>}
+    <Button disabled={controlsBusy} onClick={() => selectedBatchId === null ? load(null, page) : refreshProgress(selectedBatchId)}>{t("refresh")}</Button>
+    {canCreate && <fieldset disabled={controlsBusy}>
       <legend>{t("newBatch")}</legend>
       <label>{t("name")}<input value={form.name} onChange={(e) => change("name", e.target.value)} /></label>
       <label>{t("rate")}<input type="number" min="1" max="100" value={form.rate} onChange={(e) => change("rate", e.target.value)} /></label>
@@ -149,29 +194,54 @@ export const ReviewBatches = ({ projectId }) => {
       </div>}
     </fieldset>}
     <nav aria-label={t("title")}>
-      {batches.map((b) => <Button key={b.id} disabled={busy} onClick={() => load(b.id, page)}>{b.name}</Button>)}
-      <Button disabled={busy || page <= 1} onClick={() => load(null, page - 1)}>{t("previous")}</Button>
-      <Button disabled={busy || !next} onClick={() => load(null, page + 1)}>{t("next")}</Button>
+      {selectedBatchId !== null && <Button disabled={controlsBusy} onClick={() => load(null, page)}>{t("backToBatches")}</Button>}
+      {selectedBatchId === null && !busy && !error && !batches.length && <p>{t("noBatches")}</p>}
+      {batches.map((b) => <Button key={b.id} disabled={controlsBusy} onClick={() => load(b.id, page)}>{b.name}</Button>)}
+      <Button disabled={controlsBusy || page <= 1} onClick={() => load(null, page - 1)}>{t("previous")}</Button>
+      <Button disabled={controlsBusy || !next} onClick={() => load(null, page + 1)}>{t("next")}</Button>
     </nav>
     {detail && <section>
       <h3>{detail.name}</h3>
+      {detail.role === "reviewer" && <p>{t("visibleScope")}</p>}
       <p>{t("sampleCount", { selected: detail.selected_count, total: detail.candidate_count })}
         {" · "}{t("actualRate", { rate: detail.candidate_count ? (100 * detail.selected_count / detail.candidate_count).toFixed(1) : "—" })}</p>
       <code>{detail.plan_hash}</code>
       <p>{t("asOf", { time: detail.as_of })}</p>
       <p>{t("rule", { rate: detail.rule.rate, seed: detail.rule.seed, algorithm: detail.algorithm })}</p>
-      {detail.role === "reviewer" && detail.items.some((i) => i.can_review) &&
-        <Button onClick={() => setReviewing((value) => !value)}>{t("review")}</Button>}
-      {reviewing && <ReviewerWorkspace projectId={projectId} batchId={detail.id} />}
+      <dl className="review-batches__progress" data-testid="review-batch-progress">
+        <div><dt>{t("selectedTotal")}</dt><dd>{progress.selected}</dd></div>
+        <div><dt>{t("uncheckedTotal")}</dt><dd>{progress.unchecked}</dd></div>
+        <div><dt>{t("selectedPending")}</dt><dd>{progress.pending}</dd></div>
+        <div><dt>{t("selectedApproved")}</dt><dd>{progress.approved}</dd></div>
+        <div><dt>{t("selectedRejected")}</dt><dd>{progress.rejected}</dd></div>
+        <div><dt>{t("selectedSuperseded")}</dt><dd>{progress.superseded}</dd></div>
+        <div><dt>{t("selectedUnavailable")}</dt><dd>{progress.unavailable}</dd></div>
+      </dl>
+      <p>{t("progressBoundary")}</p>
+      {detail.role === "reviewer" && reviewEnabled &&
+        <Button disabled={controlsBusy} onClick={() => setReviewing((value) => !value)}>{t("review")}</Button>}
+      {detail.role === "reviewer" && !reviewEnabled &&
+        <p>{t(progress.pending ? "reviewUnavailable" : "noReviewableItems")}</p>}
+      {reviewing && <ReviewerWorkspace projectId={projectId} batchId={detail.id}
+        reviewEnabled={reviewEnabled} onReviewSaved={() => refreshProgress(detail.id, true, detailContext)} />}
+      <div role="group" aria-label={t("filters")} className="review-batches__filters">
+        <Button disabled={controlsBusy} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{t("allItems")}</Button>
+        <Button disabled={controlsBusy} aria-pressed={filter === "selectedPending"} onClick={() => setFilter("selectedPending")}>{t("selectedPending")}</Button>
+        <Button disabled={controlsBusy} aria-pressed={filter === "selectedReviewed"} onClick={() => setFilter("selectedReviewed")}>{t("selectedReviewed")}</Button>
+        <Button disabled={controlsBusy} aria-pressed={filter === "reworkRelated"} onClick={() => setFilter("reworkRelated")}>{t("reworkRelated")}</Button>
+        <Button disabled={controlsBusy} aria-pressed={filter === "unselected"} onClick={() => setFilter("unselected")}>{t("uncheckedTotal")}</Button>
+      </div>
+      {!visibleItems.length && <p>{t("noMatchingItems")}</p>}
       <table>
         <thead><tr><th>{t("revision")}</th><th>{t("selection")}</th><th>{t("status")}</th><th>{t("rework")}</th></tr></thead>
-        <tbody>{detail.items.map((i) => <tr key={i.submission_id}>
+        <tbody>{visibleItems.map((i) => <tr key={i.submission_id}>
           <td>#{i.submission_id} / {i.revision}</td>
           <td>{t(i.selected ? "selected" : "unchecked")}</td>
           <td>{t(i.status)}{i.review_reason && <p>{i.review_reason}</p>}</td>
           <td>{i.successor ? <><p>{t("successor", { id: i.successor.id, revision: i.successor.revision })}</p>
-            <Button disabled={busy} onClick={() => inspectSuccessor(i.successor.id)}>{t("inspectSuccessor")}</Button>
-          </> : t("noSuccessor")}</td>
+            <p>{t("successorStatus")}: {t(["pending", "approved", "rejected", "superseded"].includes(i.successor.status) ? i.successor.status : "unknownStatus")}</p>
+            <Button disabled={controlsBusy} onClick={() => inspectSuccessor(i.successor.id)}>{t("inspectSuccessor")}</Button>
+          </> : t(i.status === "rejected" ? "noSuccessor" : "notRework")}</td>
         </tr>)}</tbody>
       </table>
       {successor && <section data-testid="review-batch-successor">

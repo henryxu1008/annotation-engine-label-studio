@@ -218,5 +218,8 @@
   "reviewBatches:tooLarge",
   "reviewBatches:previewFailed",
   "reviewBatches:changed",
-  "reviewBatches:createFailed"
+  "reviewBatches:createFailed",
+  "reviewBatches:unknownStatus",
+  "reviewBatches:progressRefreshFailed",
+  "reviewBatches:savedRefreshFailed"
 ]
