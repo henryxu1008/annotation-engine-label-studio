@@ -208,5 +208,15 @@
   "taskPackages:count_rework",
   "taskPackages:count_submitted",
   "taskPackages:count_approved",
-  "taskPackages:count_conflict"
+  "taskPackages:count_conflict",
+  "reviewBatches:pending",
+  "reviewBatches:approved",
+  "reviewBatches:rejected",
+  "reviewBatches:superseded",
+  "reviewBatches:unavailable",
+  "reviewBatches:loadFailed",
+  "reviewBatches:tooLarge",
+  "reviewBatches:previewFailed",
+  "reviewBatches:changed",
+  "reviewBatches:createFailed"
 ]

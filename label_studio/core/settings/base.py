@@ -236,6 +236,7 @@ INSTALLED_APPS = [
     'projects',
     'tasks',
     'task_packages',
+    'review_batches',
     'data_manager',
     'io_storages',
     'ml',
@@ -895,6 +896,9 @@ ANNOTATION_PROJECT_OPERATION_PROVIDER = get_env(
     'access_control.project_operations.LegacyProjectOperationProvider',
 )
 ANNOTATION_FIXED_PACKAGES_ENABLED = get_bool_env('ANNOTATION_FIXED_PACKAGES_ENABLED', False)
+ANNOTATION_REVIEW_BATCHES_ENABLED = get_bool_env('ANNOTATION_REVIEW_BATCHES_ENABLED', False)
+# Explicit project-local opt-in. Never infer Fork review authority from exports.
+ANNOTATION_REVIEW_BATCH_MODES = json.loads(get_env('ANNOTATION_REVIEW_BATCH_MODES', '{}'))
 DEBUG_CONTEXTLOG = get_bool_env('DEBUG_CONTEXTLOG', False)
 
 _REDIS_SSL_CERTS_REQS = get_env('REDIS_SSL_CERTS_REQS', 'required')

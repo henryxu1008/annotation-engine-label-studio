@@ -29,6 +29,9 @@ def workers(tmp_path_factory):
         'DEBUG': 'true',
         'TEST_ENVIRONMENT': '1',
         'DJANGO_DB': 'sqlite',
+        # Independently started workers must share the same synthetic signer;
+        # never inherit a randomly generated/expanded key from the pytest parent.
+        'SECRET_KEY': 'session-workers-synthetic-signing-key-only',
     }
     assert run_worker(env, {'action': 'init'})['initialized']
     return lambda action, **kwargs: run_worker(env, {'action': action, **kwargs})

@@ -17,6 +17,7 @@
   "apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.jsx",
   "apps/labelstudio/src/pages/DataManager/TaskPackages.jsx",
   "apps/labelstudio/src/pages/DataManager/ReviewerWorkspace.jsx",
+  "apps/labelstudio/src/pages/DataManager/ReviewBatches.jsx",
   "apps/labelstudio/src/pages/DataManager/SubmissionReleaseWorkspace.jsx",
   "apps/labelstudio/src/pages/ExportPage/ExportPage.jsx",
   "apps/labelstudio/src/pages/Home/HomePage.tsx",

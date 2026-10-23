@@ -1,5 +1,16 @@
 # Authorization integration plan
 
+## #84 local review sampling (first slice)
+
+[Review sampling v1](review-sampling-v1.md) freezes deterministic bounded work
+plans over exact existing Submissions, reuses the existing ReviewDecision/Editor
+rework chain, and keeps unchecked work outside approved release authority.
+Preserve project-first decision/create fences, serialized-source hash checks,
+frozen plan database guards and current actor/scope checks across upgrades.
+It defaults off and requires explicit per-project Fork-review activation.
+Core-only-review, Host policy/implementation, #81 arbitration, #86 lifecycle and
+retained environment activation are outside this slice.
+
 The isolated real Fork → Host RAW trial uses the Python 3.11 API/RQ image in
 `deploy/fork-host-live/Dockerfile`, one editable source root, dedicated synthetic
 PostgreSQL/Redis/export storage and explicitly enabled organization Token policy.
@@ -936,3 +947,14 @@ sufficient for a revoked actor. This migration is limited to explicit package
 context; shared legacy project helpers, global permissions and mutation actions
 retain their existing behavior. API regressions cover both directions and the
 unchanged unscoped denials.
+
+Review sampling (#84) scopes the existing review command with READ_WORK plus
+REVIEW and retains its Project-first write transaction through serialization.
+Before returning a batch-context decision, recheck current actor/mode/operation
+authority and the emitted frozen source/decision facts. Invalid evidence or
+lost authority rolls the decision back. Queue responses reuse this representation
+check; previews recheck ORGANIZE_REVIEW after planning. Keep this boundary when
+upgrading the shared review API; ordinary unscoped review/source-read behavior
+and Core-only-review internal acquisition are unchanged. PostgreSQL NOWAIT,
+revocation, serialization corruption, original-key recovery and conflicting-key
+regressions protect the boundary.

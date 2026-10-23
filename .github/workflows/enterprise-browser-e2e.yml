@@ -46,7 +46,9 @@ jobs:
   current-ui-validation:
     name: Current enterprise UI validation
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The existing bilingual suite takes about 43 minutes before review sampling.
+    # Keep all journeys and their per-spec limits, with room for the new workflow.
+    timeout-minutes: 60
     services:
       browser-postgres:
         image: postgres:17-alpine
@@ -91,6 +93,7 @@ jobs:
           poetry run python label_studio/manage.py migrate --noinput
           poetry run python label_studio/manage.py collectstatic --noinput
           poetry run python label_studio/manage.py seed_enterprise_e2e
+          TEST_ENVIRONMENT=1 poetry run python label_studio/manage.py seed_review_batches_e2e
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -126,7 +129,9 @@ jobs:
       - name: Start Django
         env:
           ANNOTATION_FIXED_PACKAGES_ENABLED: "true"
+          ANNOTATION_REVIEW_BATCHES_ENABLED: "true"
         run: |
+          export ANNOTATION_REVIEW_BATCH_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.review84-e2e.json"))["modes"]))')"
           nohup poetry run python label_studio/manage.py runserver 0.0.0.0:8080 > /tmp/label-studio-django.log 2>&1 &
           echo $! > /tmp/label-studio-django.pid
 
@@ -147,6 +152,14 @@ jobs:
           echo "Built React assets:"
           ls -la web/dist/apps/labelstudio || true
           exit 1
+
+      - name: Run bilingual review sampling and rework regression
+        run: |
+          (cd web && yarn cypress run \
+            --project apps/labelstudio-e2e \
+            --config-file cypress.config.ts \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/review-batches.cy.ts)
 
       - name: Run existing enterprise UI Cypress specs
         working-directory: web

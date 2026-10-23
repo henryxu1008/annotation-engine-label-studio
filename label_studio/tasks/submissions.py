@@ -101,7 +101,7 @@ def create_submission(*, assignment, annotation, actor):
 
 
 @transaction.atomic
-def review_submission(*, submission, reviewer, decision, reason='', principal=None, task_package_id=None):
+def review_submission(*, submission, reviewer, decision, reason='', principal=None, task_package_id=None, review_batch_id=None):
     principal = principal or local_principal(reviewer)
     project, reviewer = lock_project_operation(submission.assignment.project_id, principal, REVIEW)
     authorization.require(authorization.can_review_project(principal, project), 'Project reviewer role is required.')
@@ -109,6 +109,11 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
     TaskAssignment.objects.select_for_update().get(pk=submission.assignment_id, project=project)
     # submitted_by is nullable; its ID is sufficient for the self-review check.
     submission = Submission.objects.select_for_update().get(pk=submission.pk)
+
+    if review_batch_id is not None:
+        from review_batches.service import require_selected
+
+        require_selected(project, review_batch_id, submission, reviewer, principal=principal)
 
     if task_package_id is not None:
         from rest_framework.generics import get_object_or_404

@@ -1,6 +1,7 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license."""
 
 import logging
+from contextlib import nullcontext
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
@@ -1296,18 +1297,33 @@ class SubmissionReviewAPI(generics.GenericAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        from review_batches.scope import requested_batch
         from task_packages.scope import requested_package
 
-        review_submission(
-            submission=submission,
-            reviewer=actor,
-            principal=principal,
-            decision=serializer.validated_data['decision'],
-            reason=serializer.validated_data.get('reason', ''),
-            task_package_id=requested_package(request),
-        )
-        submission.refresh_from_db()
-        return Response(SubmissionSerializer(submission, context={'request': request}).data)
+        batch_id = requested_batch(request)
+        # A scoped response is part of the frozen-evidence boundary. Keep the
+        # existing write fence until serialization and final access checks pass.
+        # Ordinary reviews retain their existing transaction/read contract.
+        with transaction.atomic() if batch_id is not None else nullcontext():
+            review_submission(
+                submission=submission,
+                reviewer=actor,
+                principal=principal,
+                decision=serializer.validated_data['decision'],
+                reason=serializer.validated_data.get('reason', ''),
+                task_package_id=requested_package(request),
+                review_batch_id=batch_id,
+            )
+            submission.refresh_from_db()
+            data = SubmissionSerializer(submission, context={'request': request}).data
+            if batch_id is not None:
+                from review_batches import service
+
+                source = service.require_selected(
+                    submission.assignment.project, batch_id, submission, actor, principal=principal,
+                )
+                service.check_representation(data, source)
+            return Response(data)
 
 
 class SubmissionReleaseAPI(generics.GenericAPIView):

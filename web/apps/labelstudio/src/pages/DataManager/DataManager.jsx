@@ -20,6 +20,7 @@ import { MyWorkWorkspace } from "./MyWorkWorkspace";
 import { TaskPackageEntry, TaskPackages, TaskPackageTitle } from "./TaskPackages";
 import { selectedTaskPackageIds } from "./taskPackageSelection";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
+import { ReviewBatchEntry, ReviewBatches, ReviewBatchTitle } from "./ReviewBatches";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
 
@@ -432,6 +433,15 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openReviewBatches = () => {
+    modal({
+      title: <ReviewBatchTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <ReviewBatches projectId={project.id} />,
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
+
   const openMyWork = () => {
     if (!localePreference.ready) return;
     const dialog = modal({
@@ -507,6 +517,7 @@ DataManagerPage.context = ({ dmRef }) => {
         {tc("myWorkTitle")}
       </Button>
       <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
+      <ReviewBatchEntry projectId={project.id} onOpen={openReviewBatches} disabled={!localePreference.ready} />
       {canManageAssignments && (
         <Button
           size="small"

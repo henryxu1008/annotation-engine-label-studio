@@ -123,6 +123,7 @@ it("loads artifact details when a retry response has already become ready", asyn
 
 it("does not restore artifact controls from an in-flight poll after permission denial", async () => {
   let resolvePoll;
+  let resolveDenial;
   let queuedReads = 0;
   const queued = { ...receipt, release_id: "queued", state: "queued", artifacts: [] };
   mockCallApi.mockImplementation((method, options) => {
@@ -131,7 +132,7 @@ it("does not restore artifact controls from an in-flight poll after permission d
       if (++queuedReads === 1) return Promise.resolve(raw(queued));
       return new Promise((resolve) => { resolvePoll = resolve; });
     }
-    if (method === "approvedExportDownloadRaw") return Promise.resolve(raw({}, 404));
+    if (method === "approvedExportDownloadRaw") return new Promise((resolve) => { resolveDenial = resolve; });
     return defaults(method);
   });
   const { unmount, runtime } = mount();
@@ -140,11 +141,15 @@ it("does not restore artifact controls from an in-flight poll after permission d
   await waitFor(() => expect(resolvePoll).toBeDefined(), { timeout: 3000 });
   fireEvent.change(screen.getByTestId("batch-history"), { target: { value: receipt.release_id } });
   fireEvent.click(await screen.findByTestId("batch-download-JSON"));
-  await screen.findByRole("alert");
+  await waitFor(() => expect(resolveDenial).toBeDefined());
+  await act(async () => resolveDenial(raw({}, 404)));
+  // A nested snapshot panel may report its own error first. Establish that the
+  // download denial has invalidated this export generation before the late poll.
+  expect((await screen.findByTestId("batch-error")).textContent).toContain("no longer available");
   await act(async () => resolvePoll(raw({ ...queued, state: "ready", artifacts: receipt.artifacts })));
   expect(screen.queryByTestId("batch-download-JSON")).toBeNull();
   expect(downloadFile).not.toHaveBeenCalled();
   act(() => runtime.updateLocale("zh-CN"));
-  expect(screen.getByRole("alert").textContent).toContain("来源已不可用");
+  expect(screen.getByTestId("batch-error").textContent).toContain("来源已不可用");
   unmount(); runtime.destroy();
 });
