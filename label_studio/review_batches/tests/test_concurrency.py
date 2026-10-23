@@ -14,6 +14,7 @@ from rest_framework.test import APIClient
 from review_batches import service
 from review_batches.models import ReviewBatch
 from tasks.models import Annotation, ReviewDecision, Submission, TaskAssignment
+from tasks.serializers import SubmissionSerializer
 from tasks.submissions import _canonical_snapshot, _snapshot_hash, create_submission
 from tasks.tests.factories import TaskFactory
 from users.tests.factories import UserFactory
@@ -206,3 +207,76 @@ class TestBatchConcurrency(TransactionTestCase):
                 release.set()
             assert pending.result(20).status_code == 200
         assert ReviewDecision.objects.filter(submission=self.source).count() == 1
+
+    def comparison_during_change(self, change, expected):
+        batch = self.batch()
+        self.client.force_authenticate(self.reviewer)
+        response = self.client.post(
+            f'/api/submissions/{self.source.pk}/review/?review_batch={batch}',
+            {'decision': 'rejected', 'reason': 'Rework'}, format='json',
+        )
+        assert response.status_code == 200, response.data
+        newer = create_submission(assignment=self.assignment, annotation=self.annotation, actor=self.worker)
+        entered, release = threading.Event(), threading.Event()
+        original = SubmissionSerializer.to_representation
+
+        def hold(serializer, instance):
+            data = original(serializer, instance)
+            if instance.pk == newer.pk:
+                entered.set()
+                assert release.wait(15)
+            return data
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(self.reviewer)
+                return client.get(f'{self.base}{batch}/rework/{self.source.pk}/')
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(SubmissionSerializer, 'to_representation', hold):
+            pending = pool.submit(read)
+            try:
+                assert entered.wait(15)
+                change(batch, newer)
+            finally:
+                release.set()
+            result = pending.result(20)
+        assert result.status_code in expected, result.data
+        assert 'results' not in result.data
+
+    def test_comparison_revocation_commits_after_materialization(self):
+        self.comparison_during_change(
+            lambda batch, newer: ProjectMember.objects.filter(pk=self.membership.pk).update(enabled=False),
+            (403, 404),
+        )
+
+    def test_comparison_batch_deletion_commits_after_materialization(self):
+        self.comparison_during_change(lambda batch, newer: ReviewBatch.objects.filter(pk=batch).delete(), (404,))
+
+    def test_comparison_replaced_plan_commits_after_materialization(self):
+        def change(batch, newer):
+            # UPDATE is already blocked by the frozen-plan database trigger.
+            # Also reject a valid replacement under the old batch ID.
+            with transaction.atomic():
+                replacement = ReviewBatch.objects.get(pk=batch)
+                replacement.delete()
+                replacement.pk = batch
+                replacement.plan['rule']['seed'] = 'changed-after-read'
+                replacement.plan_hash = service.digest(replacement.plan)
+                replacement.save(force_insert=True)
+
+        self.comparison_during_change(change, (409,))
+
+    def test_comparison_source_deletion_commits_after_materialization(self):
+        self.comparison_during_change(lambda batch, newer: Submission.objects.filter(pk=self.source.pk).delete(), (404,))
+
+    def test_comparison_new_decision_commits_after_materialization(self):
+        from tasks.submissions import review_submission
+
+        self.comparison_during_change(
+            lambda batch, newer: review_submission(submission=newer, reviewer=self.reviewer, decision='approved'),
+            (409,),
+        )

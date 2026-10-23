@@ -39,7 +39,8 @@ class Command(BaseCommand):
             users[role] = user
         config = ('<View><Text name="text" value="$text"/><Choices name="sentiment" toName="text">'
                   '<Choice value="Positive"/><Choice value="Negative"/></Choices></View>')
-        result = [{'from_name': 'sentiment', 'to_name': 'text', 'type': 'choices',
+        result = [{'id': 'review84-synthetic-choice', 'origin': 'manual', 'from_name': 'sentiment',
+                   'to_name': 'text', 'type': 'choices',
                    'value': {'choices': ['Positive']}}]
         projects, modes = {}, {}
         for locale in ('en-US', 'zh-CN'):

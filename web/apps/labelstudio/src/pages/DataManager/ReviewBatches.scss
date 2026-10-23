@@ -20,3 +20,11 @@
   pre { overflow: auto; max-height: 280px; }
   @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } }
 }
+
+.review-batches {
+  [hidden] { display: none; }
+  &__comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  &__added { background: var(--color-positive-background, #e2f3e5); }
+  &__removed { background: var(--color-negative-background, #fbe4e4); }
+  @media (max-width: 760px) { &__comparison { grid-template-columns: 1fr; } }
+}

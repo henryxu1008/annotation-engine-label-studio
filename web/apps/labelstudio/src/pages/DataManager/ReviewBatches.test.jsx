@@ -87,3 +87,17 @@ it("hides the entry when the feature is unavailable", async () => {
   expect(screen.queryByTestId("open-review-batches")).toBeNull();
   unmount(); runtime.destroy();
 });
+
+it("returns to the same batch filter and restores focus after the authority refresh", async () => {
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "reviewBatchRework"
+    ? Promise.resolve({ results: { source: { id: 1 }, revisions: [] } }) : original(method, args));
+  const { unmount, runtime } = mount();
+  fireEvent.click(await screen.findByRole("button", { name: detail.name }));
+  fireEvent.click(await screen.findByRole("button", { name: "Rework follow-up" }));
+  fireEvent.click(screen.getByRole("button", { name: "Compare rework revisions" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Back to batch" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Compare rework revisions" })));
+  expect(screen.getByRole("button", { name: "Rework follow-up" }).getAttribute("aria-pressed")).toBe("true");
+  unmount(); runtime.destroy();
+});

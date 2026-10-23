@@ -100,6 +100,7 @@ All routes below are under /api/projects/{project}/review-batches/:
 | collection | POST | Manager; ORGANIZE_REVIEW and READ_WORK |
 | {batch}/ | GET | Manager or Reviewer; frozen identities and live progress |
 | {batch}/queue/ | GET | Reviewer; selected, pending, non-self snapshots and REVIEW |
+| {batch}/rework/{source}/ | GET | Manager or Reviewer; READ_WORK, visible frozen rejected source; paginated later revisions |
 
 The existing POST /api/submissions/{id}/review/ accepts an optional positive
 review_batch query context. Invalid, foreign or unselected contexts reject.
@@ -189,3 +190,42 @@ fetch-failure Responses and mismatched acknowledgements require read recovery.
 
 Feature activation, deployment, merge, real provider acceptance and Core
 integration are separate actions. This first slice does not close #84.
+
+## Read-only rework revision comparison
+
+The existing batch follow-up row now opens a comparison with the original
+rejected Submission, replacing the latest-snapshot-only inspector. Returning
+preserves the batch/filter and refreshes current authority and progress. The
+comparison offers every available later revision on that assignment, newest
+first with bounded pagination, and displays both snapshots, IDs, revision/hash,
+status and decision/reviewer/time/reason. Intermediate rejected and superseded
+revisions remain selectable. A missing original never falls back to a successor.
+
+The new GET is anchored to a candidate in the frozen batch, including unselected
+candidates that were explicitly rejected in the ordinary review workflow. It
+requires the existing feature/mode gates and current READ_WORK. Annotators are
+denied, Reviewer self-sources are excluded, and batch/project/source ID swapping
+does not expand scope. Later revisions must share the original assignment,
+task and submitter and pass snapshot hash, project/task and decision validation.
+Both original and page representations are checked against fresh sources after
+serialization, followed by a current role/policy check. Source corruption,
+missing original, source changes during serialization and revocation fail closed.
+The batch is also reloaded after serialization: deletion or a changed frozen
+plan (even with a matching replacement hash) discards the assembled comparison.
+Independent PostgreSQL connections cover these response-time changes, membership
+revocation, original deletion and a newly committed successor decision.
+Responses are private/no-store. No REVIEW permission is added merely to read.
+
+The UI clears snapshot evidence before each read, on failed reads and tab blur;
+read-only refresh recovers access without replaying a decision. Scope generations
+discard late responses. It reuses jsdiff's canonical JSON comparison with a
+100 ms / 2,000 edit bound; if that bound is exceeded the snapshots remain visible
+with an explicit unavailable difference calculation. Array order is significant;
+JSON object key order is not. Answer-change feedback compares annotation results
+only, while the full snapshot diff also includes task/configuration/metadata.
+Unchanged answers are explicitly labeled and never imply successful correction.
+
+This is a transient read projection, not a new frozen Manifest, audit ledger,
+quality metric, approval policy or rework scheduler. Core-only mode denies the
+new endpoint; #79/#80 exports and Host contracts are unchanged. #84 remains open.
+Risk/conflict priority and second review/arbitration remain deferred to #81.

@@ -47,6 +47,7 @@
   },
   "private": true,
   "dependencies": {
+    "diff": ">=8.0.3",
     "@ant-design/colors": "6.0.0",
     "@ant-design/icons": "4.8.1",
     "@humansignal/audio-file-decoder": "0.1.5",
