@@ -5,6 +5,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
+import { ReworkComparison } from "./ReworkComparison";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import "./ReviewBatches.scss";
 
@@ -42,7 +43,9 @@ export const ReviewBatches = ({ projectId }) => {
   const creation = useRef(null);
   const selection = useRef(null);
   const progressGeneration = useRef(0);
-  const successorGeneration = useRef(0);
+  const comparisonTrigger = useRef(null);
+  const returnFocus = useRef(false);
+  const root = useRef(null);
   const [batches, setBatches] = useState([]);
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
@@ -53,7 +56,7 @@ export const ReviewBatches = ({ projectId }) => {
   const [form, setForm] = useState({ name: "", rate: 10, per_submitter: false, seed: "review-v1", package_ids: "", submitter_ids: "" });
   const [preview, setPreview] = useState(null);
   const [reviewing, setReviewing] = useState(false);
-  const [successor, setSuccessor] = useState(null);
+  const [comparison, setComparison] = useState(null);
   const [selectedBatchId, setSelectedBatchId] = useState(null);
   const [progressBusy, setProgressBusy] = useState(false);
   const [savedReview, setSavedReview] = useState(false);
@@ -61,9 +64,10 @@ export const ReviewBatches = ({ projectId }) => {
 
   const load = useCallback(async (id = null, targetPage = 1) => {
     const current = ++generation.current;
+    returnFocus.current = false;
     selection.current = { id, projectId };
     setSelectedBatchId(id); setFilter("all"); setSavedReview(false); setProgressBusy(false);
-    setBusy(true); setError(""); setDetail(null); setReviewing(false); setBatches([]); setSuccessor(null);
+    setBusy(true); setError(""); setDetail(null); setReviewing(false); setBatches([]); setComparison(null);
     try {
       const [list, capability, selected] = await Promise.all([
         call.current("reviewBatches", { params: { pk: projectId, page: targetPage }, errorFilter: () => true }),
@@ -91,8 +95,7 @@ export const ReviewBatches = ({ projectId }) => {
     const current = generation.current;
     const request = ++progressGeneration.current;
     const isCurrent = () => current === generation.current && request === progressGeneration.current;
-    successorGeneration.current += 1;
-    setProgressBusy(true); setError(""); setSuccessor(null);
+    setProgressBusy(true); setError(""); setComparison(null);
     if (reviewSaved !== null) setSavedReview(reviewSaved);
     try {
       const [result, capability] = await Promise.all([
@@ -154,30 +157,30 @@ export const ReviewBatches = ({ projectId }) => {
     } catch { if (current === generation.current) setError("createFailed"); }
     finally { if (current === generation.current) setBusy(false); }
   };
-  const inspectSuccessor = async (id) => {
-    const current = ++generation.current;
-    const request = ++successorGeneration.current;
-    setBusy(true); setError(""); setSuccessor(null);
-    try {
-      const result = await call.current("submissionDetail", { params: { submissionPk: id }, errorFilter: () => true });
-      if (current !== generation.current || request !== successorGeneration.current) return;
-      if (failed(result)) setError("loadFailed");
-      else setSuccessor(result);
-    } catch { if (current === generation.current && request === successorGeneration.current) setError("loadFailed"); }
-    finally { if (current === generation.current) setBusy(false); }
-  };
 
   const progress = detail ? batchProgress(detail.items) : null;
   const visibleItems = detail ? filterBatchItems(detail.items, filter) : [];
   const controlsBusy = busy || progressBusy;
   const reviewEnabled = detail?.items.some((i) => i.can_review) ?? false;
   const detailContext = selection.current;
-  return <div className={cn("review-batches").toClassName()} data-testid="review-batches">
+  useEffect(() => {
+    if (comparison !== null || controlsBusy || !returnFocus.current) return;
+    returnFocus.current = false;
+    const trigger = comparisonTrigger.current;
+    const target = trigger?.isConnected && !trigger.disabled ? trigger : root.current?.querySelector('[data-testid="review-batch-refresh"]');
+    target?.focus();
+  }, [comparison, controlsBusy]);
+  return <div ref={root} className={cn("review-batches").toClassName()} data-testid="review-batches">
+    {comparison !== null && detail && <ReworkComparison key={`${projectId}:${detail.id}:${comparison}`}
+      projectId={projectId} batchId={detail.id} sourceId={comparison} onClose={() => {
+        returnFocus.current = true; setComparison(null); refreshProgress(detail.id);
+      }} />}
+    <div hidden={comparison !== null}>
     <p>{t("boundary")}</p>
     {error && <p role="alert">{t(error)}</p>}
     {savedReview && <p role="status">{t("reviewSaved")}</p>}
     {progressBusy && <p role="status">{t("refreshingProgress")}</p>}
-    <Button disabled={controlsBusy} onClick={() => selectedBatchId === null ? load(null, page) : refreshProgress(selectedBatchId)}>{t("refresh")}</Button>
+    <Button data-testid="review-batch-refresh" disabled={controlsBusy} onClick={() => selectedBatchId === null ? load(null, page) : refreshProgress(selectedBatchId)}>{t("refresh")}</Button>
     {canCreate && <fieldset disabled={controlsBusy}>
       <legend>{t("newBatch")}</legend>
       <label>{t("name")}<input value={form.name} onChange={(e) => change("name", e.target.value)} /></label>
@@ -208,7 +211,7 @@ export const ReviewBatches = ({ projectId }) => {
       <code>{detail.plan_hash}</code>
       <p>{t("asOf", { time: detail.as_of })}</p>
       <p>{t("rule", { rate: detail.rule.rate, seed: detail.rule.seed, algorithm: detail.algorithm })}</p>
-      <dl className="review-batches__progress" data-testid="review-batch-progress">
+      <dl className={cn("review-batches").elem("progress").toClassName()} data-testid="review-batch-progress">
         <div><dt>{t("selectedTotal")}</dt><dd>{progress.selected}</dd></div>
         <div><dt>{t("uncheckedTotal")}</dt><dd>{progress.unchecked}</dd></div>
         <div><dt>{t("selectedPending")}</dt><dd>{progress.pending}</dd></div>
@@ -224,7 +227,7 @@ export const ReviewBatches = ({ projectId }) => {
         <p>{t(progress.pending ? "reviewUnavailable" : "noReviewableItems")}</p>}
       {reviewing && <ReviewerWorkspace projectId={projectId} batchId={detail.id}
         reviewEnabled={reviewEnabled} onReviewSettled={(saved) => refreshProgress(detail.id, saved, detailContext)} />}
-      <div role="group" aria-label={t("filters")} className="review-batches__filters">
+      <div role="group" aria-label={t("filters")} className={cn("review-batches").elem("filters").toClassName()}>
         <Button disabled={controlsBusy} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{t("allItems")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "selectedPending"} onClick={() => setFilter("selectedPending")}>{t("selectedPending")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "selectedReviewed"} onClick={() => setFilter("selectedReviewed")}>{t("selectedReviewed")}</Button>
@@ -240,15 +243,16 @@ export const ReviewBatches = ({ projectId }) => {
           <td>{t(i.status)}{i.review_reason && <p>{i.review_reason}</p>}</td>
           <td>{i.successor ? <><p>{t("successor", { id: i.successor.id, revision: i.successor.revision })}</p>
             <p>{t("successorStatus")}: {t(["pending", "approved", "rejected", "superseded"].includes(i.successor.status) ? i.successor.status : "unknownStatus")}</p>
-            <Button disabled={controlsBusy} onClick={() => inspectSuccessor(i.successor.id)}>{t("inspectSuccessor")}</Button>
-          </> : t(i.status === "rejected" ? "noSuccessor" : "notRework")}</td>
+
+          </> : t(i.status === "rejected" ? "noSuccessor" : "notRework")}
+            {i.status === "rejected" && <Button disabled={controlsBusy} onClick={(event) => {
+              comparisonTrigger.current = event.currentTarget; setComparison(i.submission_id);
+            }}>{t("compareRework")}</Button>}
+          </td>
         </tr>)}</tbody>
       </table>
-      {successor && <section data-testid="review-batch-successor">
-        <h4>{t("successor", { id: successor.id, revision: successor.revision })}</h4>
-        <p>{t("successorReadOnly")}</p><code>{successor.result_hash}</code>
-        <pre>{JSON.stringify(successor.result_snapshot, null, 2)}</pre>
-      </section>}
+
     </section>}
+    </div>
   </div>;
 };

@@ -171,3 +171,37 @@ class QueueAPI(BatchAPI):
             raise PermissionDenied()
         require_project_operation(project, REVIEW)
         return self.get_paginated_response(data)
+
+
+class ReworkAPI(BatchAPI):
+    """Read-only comparison anchored to a visible, frozen rejected revision."""
+
+    def get(self, request, pk, batch_id, source_id):
+        principal, actor, project, role, _ = self.context(request, pk)
+        batch = service.checked_batch(project, batch_id)
+        original = service.rework_source(batch, source_id, actor, role)
+        rows = Submission.objects.filter(
+            assignment_id=original.assignment_id, revision__gt=original.revision
+        ).select_related('assignment__task', 'review__reviewer', 'submitted_by')
+        page = self.paginate_queryset(rows.order_by('-revision', '-pk'))
+        for row in page:
+            service.check_rework_revision(row, original, project.pk)
+        source_data = SubmissionSerializer(original, context={'request': request}).data
+        data = SubmissionSerializer(page, many=True, context={'request': request}).data
+        # Re-read after serialization: revoked access, changed status or evidence
+        # must not expose a stale comparison assembled from separate reads.
+        current = service.rework_source(batch, source_id, actor, role)
+        service.check_representation(source_data, current)
+        current_rows = {
+            row.pk: row for row in rows.filter(pk__in=[item['id'] for item in data])
+        }
+        for item in data:
+            row = current_rows.get(item['id'])
+            if row is None:
+                service.fail('REVIEW_BATCH_SOURCE_INVALID')
+            service.check_rework_revision(row, current, project.pk)
+            service.check_representation(item, row)
+        _, current_role, _ = service.guard(pk, principal, actor)
+        if current_role != role:
+            raise PermissionDenied()
+        return self.get_paginated_response({'source': source_data, 'revisions': data})

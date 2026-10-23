@@ -234,6 +234,29 @@ def check_representation(data, source):
         fail('REVIEW_BATCH_SOURCE_INVALID')
 
 
+def rework_source(batch, source_id, actor, role):
+    item = next((item for item in batch.plan['candidates'] if item['submission_id'] == source_id), None)
+    if item is None or (role == 'reviewer' and item['submitter_id'] == actor.pk):
+        raise NotFound()
+    source = checked_sources(batch).get(source_id)
+    if source is None:
+        raise NotFound()
+    if source.status != 'rejected':
+        fail('REVIEW_BATCH_NOT_REWORK', 400)
+    return source
+
+
+def check_rework_revision(row, original, project_id):
+    if (
+        row.assignment_id != original.assignment_id
+        or row.assignment.task_id != original.assignment.task_id
+        or row.submitted_by_id != original.submitted_by_id
+        or row.revision <= original.revision
+        or not valid_source(row, project_id)
+    ):
+        fail('REVIEW_BATCH_SOURCE_INVALID')
+
+
 def metadata(batch):
     return {"id": batch.pk, "name": batch.name, "created_at": batch.created_at, "plan_hash": batch.plan_hash}
 

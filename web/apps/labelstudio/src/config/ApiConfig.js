@@ -35,6 +35,7 @@ export const API_CONFIG = {
     reviewBatchCreate: "POST:/projects/:pk/review-batches/",
     reviewBatchDetail: "GET:/projects/:pk/review-batches/:batch/",
     reviewBatchQueue: "GET:/projects/:pk/review-batches/:batch/queue/",
+    reviewBatchRework: "GET:/projects/:pk/review-batches/:batch/rework/:source/",
     taskPackageCapability: "GET:/projects/:pk/task-packages/capability/",
     taskPackages: "GET:/projects/:pk/task-packages/",
     createTaskPackage: "POST:/projects/:pk/task-packages/",

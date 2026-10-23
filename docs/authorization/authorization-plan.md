@@ -962,3 +962,11 @@ upgrading the shared review API; ordinary unscoped review/source-read behavior
 and Core-only-review internal acquisition are unchanged. PostgreSQL NOWAIT,
 revocation, serialization corruption, original-key recovery and conflicting-key
 regressions protect the boundary.
+
+Rework comparison (#84) is a read-only batch-context projection over the frozen
+rejected source and paginated later revisions of the same assignment/task/actor.
+Reuse current READ_WORK, role, mode and source/representation validation; do not
+replace it with unscoped Submission reads or infer REVIEW/release authority.
+Revalidate after serialization and clear stale UI evidence on failed reads.
+Core-only-review denies this new route. See review-sampling-v1.md for the bounded
+JSON comparison and unchanged #81 conflict/arbitration ownership.

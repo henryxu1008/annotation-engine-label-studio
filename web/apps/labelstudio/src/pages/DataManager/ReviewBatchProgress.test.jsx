@@ -240,16 +240,16 @@ it("does not leave the batch busy when a saved review refresh overlaps a success
   let completeInspection;
   mockCallApi.mockImplementation((method, args) => {
     if (method === "reviewSubmission") return new Promise((resolve) => { completeReview = () => resolve(original(method, args)); });
-    if (method === "submissionDetail") return new Promise((resolve) => { completeInspection = resolve; });
+    if (method === "reviewBatchRework") return new Promise((resolve) => { completeInspection = resolve; });
     return original(method, args);
   });
   fireEvent.click(screen.getByTestId("review-approve"));
-  fireEvent.click(screen.getByRole("button", { name: "Inspect newer revision" }));
+  fireEvent.click(screen.getByRole("button", { name: "Compare rework revisions" }));
   await act(async () => completeReview());
   await waitFor(() => expect(count("Selected · approved")).toBe("1"));
   await act(async () => completeInspection({ id: 21, revision: 2, result_snapshot: { obsolete: true } }));
   expect(screen.getByRole("button", { name: "Refresh batch" }).disabled).toBe(false);
-  expect(screen.queryByTestId("review-batch-successor")).toBeNull();
+  expect(screen.queryByTestId("rework-comparison")).toBeNull();
   unmount(); runtime.destroy();
 });
 
