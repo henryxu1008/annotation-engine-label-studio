@@ -33,8 +33,8 @@ describe("deterministic review sampling and rework", () => {
         expect(response?.statusCode).to.eq(201);
         batch = response!.body.id;
       });
-      cy.contains("h3", `Sample ${locale}`).should("be.visible");
-      cy.contains(zh ? "未抽中，不代表批准" : "Unselected — not approval").should("be.visible");
+      cy.contains("h3", `Sample ${locale}`).scrollIntoView().should("be.visible");
+      cy.contains(zh ? "未抽中，不代表批准" : "Unselected — not approval").scrollIntoView().should("be.visible");
       cy.then(() => cy.request(`${base}${batch}/`)).then(({ body }) => {
         expect(body.selected_count).to.eq(2);
         rejected = scope.sources.find((s: any) => s.id === body.items.find((i: any) => i.selected).submission_id);
@@ -48,7 +48,7 @@ describe("deterministic review sampling and rework", () => {
       cy.get('[data-testid="review-reject-reason"]').type("Fix sentiment 修正情感");
       cy.get('[data-testid="review-reject"]').click();
       cy.get('[data-testid="review-approve"]', { timeout: 20000 }).click();
-      cy.get('[data-testid="review-queue-empty"]').should("be.visible");
+      cy.get('[data-testid="review-queue-empty"]').scrollIntoView().should("be.visible");
       cy.get('[data-testid="review-history-empty"]').should("not.exist");
       cy.then(() => cy.request({ method: "POST", url: `/api/submissions/${rejected.id}/review/?review_batch=${batch}`,
         body: { decision: "approved" }, failOnStatusCode: false })).its("status").should("eq", 400);
@@ -78,12 +78,15 @@ describe("deterministic review sampling and rework", () => {
       visit("reviewer");
       cy.get('[data-testid="open-review-workspace"]').click();
       cy.then(() => cy.get(`[data-testid="review-submission-${newSubmission}"]`).click());
+      cy.intercept({ method: "POST", pathname: /\/api\/submissions\/\d+\/review\/?$/ }).as("approveNew");
       cy.get('[data-testid="review-approve"]').click();
+      cy.wait("@approveNew").its("response.statusCode").should("eq", 200);
+      cy.then(() => cy.request(`/api/submissions/${newSubmission}/`)).its("body.status").should("eq", "approved");
       cy.get('[data-testid="review-error"]').should("not.exist");
       visit("manager");
       open();
       cy.contains("button", `Sample ${locale}`).click();
-      cy.contains(zh ? "修订 2" : "revision 2").should("be.visible");
+      cy.contains(zh ? "修订 2" : "revision 2").scrollIntoView().should("be.visible");
       cy.then(() => cy.request(`/api/submissions/${rejected.id}/`)).then(({ body }) => {
         expect(body.result_hash).to.eq(oldSnapshot.result_hash);
         expect(body.result_snapshot).to.deep.eq(oldSnapshot.result_snapshot);
