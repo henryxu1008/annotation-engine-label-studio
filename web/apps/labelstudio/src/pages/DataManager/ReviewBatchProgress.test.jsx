@@ -58,6 +58,18 @@ const openQueue = async (zh = false) => {
 
 describe.each(["en-US", "zh-CN"])("invalid progress responses in %s", (locale) => {
   const zh = locale === "zh-CN";
+  it("rejects an object-valued list label before rendering batch navigation", async () => {
+    const runtime = createLocaleRuntime(locale);
+    const Provider = runtime.provider;
+    const original = mockCallApi.getMockImplementation();
+    mockCallApi.mockImplementation((method, args) => method === "reviewBatches"
+      ? Promise.resolve({ results: { batches: [{ id: 7, name: {} }] } }) : original(method, args));
+    const { unmount } = render(<Provider><ReviewBatches projectId={4} /></Provider>);
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Batch seven" })).toBeNull();
+    unmount(); runtime.destroy();
+  });
   it("rejects a native Response on initial batch selection without rendering it", async () => {
     const runtime = createLocaleRuntime(locale);
     const Provider = runtime.provider;
@@ -75,6 +87,12 @@ describe.each(["en-US", "zh-CN"])("invalid progress responses in %s", (locale) =
   it.each([
     ["native fetch-failure Response", () => new Response("fetch failed", { status: 500 })],
     ["nonconforming projection", () => ({ id: 7, items: null })],
+    ["object batch name", () => ({ ...batch, name: {} })],
+    ["object review reason", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, review_reason: {} })) })],
+    ["object plan hash", () => ({ ...batch, plan_hash: {} })],
+    ["object item status", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, status: {} })) })],
+    ["truthy nonboolean review permission", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, can_review: "true" })) })],
+    ["object successor revision", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, successor: { id: 21, revision: {}, status: "pending" } })) })],
   ])("clears a failed manual refresh and recovers with GET only: %s", async (_, invalid) => {
     const { unmount, runtime } = await mount(locale);
     const original = mockCallApi.getMockImplementation();
@@ -360,7 +378,7 @@ it.each(["en-US", "zh-CN"])("keeps rework and frozen decision counts separate, i
     { submission_id: 14, revision: 1, selected: true, status: "superseded" },
     { submission_id: 15, revision: 1, selected: true, status: "unavailable" },
     { submission_id: 16, revision: 1, selected: true, status: "approved" },
-  ] };
+  ].map((item) => ({ can_review: false, ...item })) };
   const { unmount, runtime } = await mount(locale);
   expect(count(zh ? "抽中 · 已批准" : "Selected · approved")).toBe("1");
   expect(count(zh ? "抽中 · 已驳回" : "Selected · rejected")).toBe("1");
