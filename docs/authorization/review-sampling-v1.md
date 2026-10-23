@@ -72,6 +72,14 @@ retains its current selection and filter. A failed detail/capability refresh
 clears authorization-derived details/actions and offers a read-only retry for
 the same batch; the saved-review notice prevents repeating the write merely to
 refresh progress. Context guards ignore an old batch/project's late responses.
+Native fetch-failure Responses and nonconforming detail projections also take
+this failure path, including initial selection and post-decision refresh. Only
+a matching decision acknowledgement confirms a save; a failed progress read
+does not confirm an unknown write or authorize replaying it.
+The existing Zod dependency validates the narrow list/detail/capability view
+contracts without coercion, including all rendered scalar and item fields.
+Nullable/empty rejection reasons and unknown successor states keep their existing
+display semantics; invalid truthy permission or selection strings are rejected.
 A pending row with no current review action differs from an empty filtered view
 and from a sample with no currently reviewable items. None implies full approval.
 

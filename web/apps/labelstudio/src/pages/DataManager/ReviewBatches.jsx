@@ -7,9 +7,13 @@ import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReworkComparison } from "./ReworkComparison";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
+import { validBatchCapability, validBatchDetail, validBatchList } from "./reviewBatchResponses";
 import "./ReviewBatches.scss";
 
-const failed = (r) => !r || r.error || r.$meta?.ok === false;
+// The shared proxy returns an unparsed native Response when fetch rejects.
+// These endpoints return JSON projections, never a numeric HTTP status field.
+const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
+const failedDetail = (r, id) => failed(r) || !validBatchDetail(r, id);
 const code = (r) => r?.response?.display_context?.reason ?? r?.display_context?.reason;
 
 export const ReviewBatchTitle = () => {
@@ -27,7 +31,7 @@ export const ReviewBatchEntry = ({ projectId, onOpen, disabled }) => {
     let disposed = false;
     setEnabled(false);
     Promise.resolve(call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }))
-      .then((r) => { if (!disposed) setEnabled(!failed(r) && r.enabled === true); }).catch(() => {});
+      .then((r) => { if (!disposed) setEnabled(!failed(r) && validBatchCapability(r)); }).catch(() => {});
     return () => { disposed = true; };
   }, [projectId]);
   return enabled ? <Button size="small" look="outlined" disabled={disabled} onClick={onOpen}
@@ -77,7 +81,8 @@ export const ReviewBatches = ({ projectId }) => {
         }),
       ]);
       if (current !== generation.current) return;
-      if (failed(list) || failed(capability) || (id !== null && failed(selected))) {
+      if (failed(list) || !validBatchList(list) || failed(capability) || !validBatchCapability(capability)
+        || (id !== null && failedDetail(selected, id))) {
         setCanCreate(false); setPreview(null); creation.current = null;
         setError("loadFailed"); return;
       }
@@ -103,7 +108,7 @@ export const ReviewBatches = ({ projectId }) => {
         call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }),
       ]);
       if (!isCurrent()) return;
-      if (failed(result) || failed(capability)) throw new Error("detail unavailable");
+      if (failedDetail(result, id) || failed(capability) || !validBatchCapability(capability)) throw new Error("detail unavailable");
       setDetail(result);
       setCanCreate(capability.can_create === true);
     } catch {

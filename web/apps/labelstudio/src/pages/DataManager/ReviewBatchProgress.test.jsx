@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { createLocaleRuntime } from "@humansignal/i18n";
 import { ReviewBatches } from "./ReviewBatches";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
+import { Response } from "node-fetch";
 
 const mockCallApi = jest.fn();
 jest.mock("../../providers/ApiProvider", () => ({ useAPI: () => ({ callApi: mockCallApi }) }));
@@ -54,6 +55,110 @@ const openQueue = async (zh = false) => {
   fireEvent.click(screen.getByRole("button", { name: zh ? "审核本批样本" : "Review this sample" }));
   await screen.findByTestId("review-approve");
 };
+
+describe.each(["en-US", "zh-CN"])("invalid progress responses in %s", (locale) => {
+  const zh = locale === "zh-CN";
+  it("rejects an object-valued list label before rendering batch navigation", async () => {
+    const runtime = createLocaleRuntime(locale);
+    const Provider = runtime.provider;
+    const original = mockCallApi.getMockImplementation();
+    mockCallApi.mockImplementation((method, args) => method === "reviewBatches"
+      ? Promise.resolve({ results: { batches: [{ id: 7, name: {} }] } }) : original(method, args));
+    const { unmount } = render(<Provider><ReviewBatches projectId={4} /></Provider>);
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Batch seven" })).toBeNull();
+    unmount(); runtime.destroy();
+  });
+  it("rejects a native Response on initial batch selection without rendering it", async () => {
+    const runtime = createLocaleRuntime(locale);
+    const Provider = runtime.provider;
+    const original = mockCallApi.getMockImplementation();
+    mockCallApi.mockImplementation((method, args) => method === "reviewBatchDetail"
+      ? Promise.resolve(new Response(null, { status: 500 })) : original(method, args));
+    const { unmount } = render(<Provider><ReviewBatches projectId={4} /></Provider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Batch seven" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Batch seven" })).toBeNull();
+    expect(mockCallApi.mock.calls.some(([method]) => method === "reviewSubmission")).toBe(false);
+    unmount(); runtime.destroy();
+  });
+  it.each([
+    ["native fetch-failure Response", () => new Response("fetch failed", { status: 500 })],
+    ["nonconforming projection", () => ({ id: 7, items: null })],
+    ["object batch name", () => ({ ...batch, name: {} })],
+    ["object review reason", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, review_reason: {} })) })],
+    ["object plan hash", () => ({ ...batch, plan_hash: {} })],
+    ["object item status", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, status: {} })) })],
+    ["truthy nonboolean review permission", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, can_review: "true" })) })],
+    ["object successor revision", () => ({ ...batch, items: batch.items.map((item) => ({ ...item, successor: { id: 21, revision: {}, status: "pending" } })) })],
+  ])("clears a failed manual refresh and recovers with GET only: %s", async (_, invalid) => {
+    const { unmount, runtime } = await mount(locale);
+    const original = mockCallApi.getMockImplementation();
+    let failRead = true;
+    mockCallApi.mockImplementation((method, args) => method === "reviewBatchDetail" && failRead
+      ? Promise.resolve(invalid()) : original(method, args));
+    fireEvent.click(screen.getByTestId("review-batch-refresh"));
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Batch seven" })).toBeNull();
+    expect(screen.queryByTestId("review-approve")).toBeNull();
+    failRead = false;
+    fireEvent.click(screen.getByTestId("review-batch-refresh"));
+    await screen.findByTestId("review-batch-progress");
+    expect(mockCallApi.mock.calls.some(([method]) => method === "reviewSubmission")).toBe(false);
+    unmount(); runtime.destroy();
+  });
+
+  it.each([
+    ["native fetch-failure Response", () => new Response("fetch failed", { status: 500 })],
+    ["nonconforming projection", () => ({ id: 7, items: [] })],
+  ])("preserves confirmed save through a failed refresh and never replays it: %s", async (_, invalid) => {
+    const { unmount, runtime } = await mount(locale);
+    await openQueue(zh);
+    const original = mockCallApi.getMockImplementation();
+    let failRead = true;
+    mockCallApi.mockImplementation((method, args) => method === "reviewBatchDetail" && failRead
+      ? Promise.resolve(invalid()) : original(method, args));
+    fireEvent.click(screen.getByTestId("review-approve"));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", zh
+      ? "审核已保存，但进度未更新；请刷新批次，不要重复审核。"
+      : "Review saved, but progress could not be updated. Refresh this batch; do not repeat the review.");
+    expect(screen.queryByTestId("reviewer-workspace")).toBeNull();
+    expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+    failRead = false;
+    fireEvent.click(screen.getByTestId("review-batch-refresh"));
+    await screen.findByTestId("review-batch-progress");
+    expect(count(zh ? "抽中 · 已批准" : "Selected · approved")).toBe("1");
+    expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);
+    unmount(); runtime.destroy();
+  });
+
+  it("does not confirm or replay a lost acknowledgement when the detail refresh also fails", async () => {
+    const { unmount, runtime } = await mount(locale);
+    await openQueue(zh);
+    const original = mockCallApi.getMockImplementation();
+    let failRead = true;
+    mockCallApi.mockImplementation(async (method, args) => {
+      if (method === "reviewBatchDetail" && failRead) return new Response(null, { status: 500 });
+      const result = await original(method, args);
+      if (method === "reviewSubmission") return new Response(null, { status: 500 });
+      return result;
+    });
+    fireEvent.click(screen.getByTestId("review-approve"));
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("reviewer-workspace")).toBeNull();
+    expect(screen.queryByText(zh ? "审核已保存，无需为了刷新进度再次提交审核。"
+      : "The review was saved. Do not submit it again to refresh progress.")).toBeNull();
+    failRead = false;
+    fireEvent.click(screen.getByTestId("review-batch-refresh"));
+    await screen.findByTestId("review-batch-progress");
+    expect(count(zh ? "抽中 · 已批准" : "Selected · approved")).toBe("1");
+    expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);
+    unmount(); runtime.destroy();
+  });
+});
 
 it("recovers a thrown review transport failure by reading without replaying the command", async () => {
   const { unmount, runtime } = await mount();
@@ -273,7 +378,7 @@ it.each(["en-US", "zh-CN"])("keeps rework and frozen decision counts separate, i
     { submission_id: 14, revision: 1, selected: true, status: "superseded" },
     { submission_id: 15, revision: 1, selected: true, status: "unavailable" },
     { submission_id: 16, revision: 1, selected: true, status: "approved" },
-  ] };
+  ].map((item) => ({ can_review: false, ...item })) };
   const { unmount, runtime } = await mount(locale);
   expect(count(zh ? "抽中 · 已批准" : "Selected · approved")).toBe("1");
   expect(count(zh ? "抽中 · 已驳回" : "Selected · rejected")).toBe("1");
