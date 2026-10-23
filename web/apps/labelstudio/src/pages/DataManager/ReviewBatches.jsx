@@ -223,7 +223,7 @@ export const ReviewBatches = ({ projectId }) => {
       {detail.role === "reviewer" && !reviewEnabled &&
         <p>{t(progress.pending ? "reviewUnavailable" : "noReviewableItems")}</p>}
       {reviewing && <ReviewerWorkspace projectId={projectId} batchId={detail.id}
-        reviewEnabled={reviewEnabled} onReviewSaved={() => refreshProgress(detail.id, true, detailContext)} />}
+        reviewEnabled={reviewEnabled} onReviewSettled={(saved) => refreshProgress(detail.id, saved, detailContext)} />}
       <div role="group" aria-label={t("filters")} className="review-batches__filters">
         <Button disabled={controlsBusy} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{t("allItems")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "selectedPending"} onClick={() => setFilter("selectedPending")}>{t("selectedPending")}</Button>

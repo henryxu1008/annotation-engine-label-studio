@@ -179,5 +179,11 @@ counts/filters that keep original rejection separate from successor approval.
 The browser journey also asserts automatic progress updates and successor states
 before and after the separate new-revision review.
 
+Review queues reset their entire local state when project, package or batch scope
+changes. Late decisions cannot refresh another scope or retain its processing
+state. A thrown review transport error has an unknown outcome: refresh both queue
+and batch progress without replaying the write or claiming a confirmed save.
+Bilingual component regressions include a committed decision with a lost response.
+
 Feature activation, deployment, merge, real provider acceptance and Core
 integration are separate actions. This first slice does not close #84.

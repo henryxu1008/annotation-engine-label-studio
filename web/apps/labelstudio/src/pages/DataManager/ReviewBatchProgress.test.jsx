@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createLocaleRuntime } from "@humansignal/i18n";
 import { ReviewBatches } from "./ReviewBatches";
+import { ReviewerWorkspace } from "./ReviewerWorkspace";
 
 const mockCallApi = jest.fn();
 jest.mock("../../providers/ApiProvider", () => ({ useAPI: () => ({ callApi: mockCallApi }) }));
@@ -53,6 +54,64 @@ const openQueue = async (zh = false) => {
   fireEvent.click(screen.getByRole("button", { name: zh ? "审核本批样本" : "Review this sample" }));
   await screen.findByTestId("review-approve");
 };
+
+it("recovers a thrown review transport failure by reading without replaying the command", async () => {
+  const { unmount, runtime } = await mount();
+  await openQueue();
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "reviewSubmission"
+    ? Promise.reject(new Error("response lost")) : original(method, args));
+  fireEvent.click(screen.getByTestId("review-approve"));
+  await waitFor(() => expect(screen.getByTestId("review-approve").disabled).toBe(false));
+  expect(screen.getByTestId("review-error")).toBeTruthy();
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewBatchQueue")).toHaveLength(2);
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("refreshes counts after a committed decision loses its response without claiming confirmation in %s", async (locale) => {
+  const { unmount, runtime } = await mount(locale);
+  await openQueue(locale === "zh-CN");
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation(async (method, args) => {
+    const result = await original(method, args);
+    if (method === "reviewSubmission") throw new Error("response lost after commit");
+    return result;
+  });
+  fireEvent.click(screen.getByTestId("review-approve"));
+  await waitFor(() => expect(count(locale === "zh-CN" ? "抽中 · 已批准" : "Selected · approved")).toBe("1"));
+  expect(await screen.findByTestId("review-error")).toHaveProperty("textContent", locale === "zh-CN"
+    ? "审核响应丢失，请核对刷新后的状态再做决定。"
+    : "The review response was lost. Check the refreshed state before making another decision.");
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByTestId("review-submission-11")).toBeNull();
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1);
+  unmount(); runtime.destroy();
+});
+
+it.each(["project", "batch", "package"])("discards an in-flight command and old state when the %s scope changes", async (scope) => {
+  const runtime = createLocaleRuntime("en-US");
+  const Provider = runtime.provider;
+  const original = mockCallApi.getMockImplementation();
+  let resolveOld;
+  mockCallApi.mockImplementation((method, args) => method === "reviewSubmission"
+    ? new Promise((resolve) => { resolveOld = resolve; }) : original(method, args));
+  const onReviewSettled = jest.fn();
+  const props = { projectId: 4, batchId: 7, onReviewSettled };
+  const { rerender, unmount } = render(<Provider><ReviewerWorkspace {...props} /></Provider>);
+  fireEvent.click(await screen.findByTestId("review-approve"));
+  sources = [source(21)];
+  const changed = scope === "project" ? { projectId: 5 } : scope === "batch" ? { batchId: 8 } : { packageId: 9 };
+  rerender(<Provider><ReviewerWorkspace {...props} {...changed} /></Provider>);
+  await screen.findByTestId("review-submission-21");
+  expect(screen.queryByTestId("review-submission-11")).toBeNull();
+  expect(screen.getByTestId("review-approve").disabled).toBe(false);
+  await act(async () => resolveOld({ id: 11, status: "approved" }));
+  expect(onReviewSettled).not.toHaveBeenCalled();
+  expect(screen.getByTestId("review-approve").disabled).toBe(false);
+  expect(screen.queryByRole("status")).toBeNull();
+  unmount(); runtime.destroy();
+});
 
 it.each(["en-US", "zh-CN"])("updates progress after a real scoped decision without remounting the queue in %s", async (locale) => {
   const zh = locale === "zh-CN";

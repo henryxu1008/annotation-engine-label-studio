@@ -89,6 +89,7 @@
   "reviewLoadFailed": "无法加载复核工作区。",
   "rejectionReasonRequired": "必须填写驳回原因。",
   "reviewSaveFailed": "无法保存复核决定。",
+  "reviewOutcomeUnknown": "审核响应丢失，请核对刷新后的状态再做决定。",
   "reviewApprovedNotice": "提交 #{{id}} 的修订版 {{revision}} 已通过。",
   "reviewRejectedNotice": "提交 #{{id}} 的修订版 {{revision}} 已驳回。",
   "pendingReviews": "待复核",

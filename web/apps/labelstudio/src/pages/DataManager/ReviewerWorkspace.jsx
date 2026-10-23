@@ -10,7 +10,11 @@ import "./ReviewerWorkspace.scss";
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
 
-export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null, onReviewSaved, reviewEnabled = true }) => {
+// A scope change must discard all queue, command and notice state together.
+export const ReviewerWorkspace = (props) => <ScopedReviewerWorkspace
+  key={JSON.stringify([props.projectId, props.packageId ?? null, props.batchId ?? null])} {...props} />;
+
+const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, onReviewSettled, reviewEnabled = true }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();
@@ -154,26 +158,34 @@ export const ReviewerWorkspace = ({ projectId, packageId = null, batchId = null,
     setNotice("");
     const generation = generationRef.current;
 
-    const result = await callApiRef.current("reviewSubmission", {
-      params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}), ...(batchId !== null ? { review_batch: batchId } : {}) },
-      body: {
-        decision,
-        reason: decision === "rejected" ? rejectReason.trim() : "",
-      },
-      errorFilter: () => true,
-    });
+    let result;
+    let outcomeUnknown = false;
+    try {
+      result = await callApiRef.current("reviewSubmission", {
+        params: { submissionPk: selected.id, ...(packageId !== null ? { task_package: packageId } : {}), ...(batchId !== null ? { review_batch: batchId } : {}) },
+        body: {
+          decision,
+          reason: decision === "rejected" ? rejectReason.trim() : "",
+        },
+        errorFilter: () => true,
+      });
+    } catch {
+      // The response may have been lost after commit. Recover by reading, never replaying.
+      result = { error: true };
+      outcomeUnknown = true;
+    }
     if (generation !== generationRef.current) return;
 
     if (!result || result?.error || result?.$meta?.ok === false) {
-      setError(collaborationErrorCode(result, "reviewSaveFailed"));
+      await Promise.all([refresh(pendingPage, historyPage), onReviewSettled?.(false)]);
+      setError(outcomeUnknown ? "reviewOutcomeUnknown" : collaborationErrorCode(result, "reviewSaveFailed"));
       setProcessing(null);
-      await refresh(pendingPage, historyPage);
       return;
     }
 
     setNotice({ id: selected.id, revision: selected.revision, decision });
     setRejectReason("");
-    await Promise.all([refresh(pendingPage, historyPage), onReviewSaved?.()]);
+    await Promise.all([refresh(pendingPage, historyPage), onReviewSettled?.(true)]);
     setProcessing(null);
   };
 
