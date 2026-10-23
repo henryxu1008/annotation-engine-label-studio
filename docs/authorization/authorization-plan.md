@@ -1,5 +1,26 @@
 # Authorization integration plan
 
+The isolated real Fork → Host RAW trial uses the Python 3.11 API/RQ image in
+`deploy/fork-host-live/Dockerfile`, one editable source root, dedicated synthetic
+PostgreSQL/Redis/export storage and explicitly enabled organization Token policy.
+Release creator, snapshot creator and fetch account remain independently subject
+to current Manager checks. Token is not a read-only project credential. Host
+enforces source namespace + Submission ID globally across connections; connection
+replacement cannot bypass a frozen source conflict. Core-only-review, #76 and
+#307 environments/credentials remain outside this trial's write set. No deployment,
+Core review, Gold/certification, publication, delivery or deletion is authorized.
+Synthetic control files are not an authority: validate their marker, canonical
+namespace against operator policy, and exact organization/project/active-user
+membership graph before changing a role or Token policy. Lock that graph and
+require exactly one membership update. Create credential files exclusively as
+0600 before writing any bytes; never rely on a later chmod or overwrite a file.
+The initial seed also requires empty user/organization/project/task/annotation/
+assignment tables, including soft-deleted projects and unscoped retained rows.
+Hold PostgreSQL table fences through seeding so an uncommitted ordinary writer
+cannot cross that emptiness check. Both fixture and policy files use exclusive
+creation; existing files and symlinks are refused before database writes.
+The policy basename is reserved so credential and policy destinations stay distinct.
+
 Issue #80 adds an independently frozen [ReleaseManifest v1 source snapshot](release-manifest-v1.md)
 on top of #79 READY receipts. Preserve its exact source/media hashes, both creators'
 live authority, PostgreSQL freeze guards and Core-only denial across upgrades.
