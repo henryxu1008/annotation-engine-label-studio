@@ -34,6 +34,10 @@ describe("deterministic review sampling and rework", () => {
         batch = response!.body.id;
       });
       cy.contains("h3", `Sample ${locale}`).scrollIntoView().should("be.visible");
+      cy.get('[data-testid="review-batch-progress"]').within(() => {
+        cy.contains("dt", zh ? "抽中 · 待审核" : "Selected · pending").siblings("dd").should("have.text", "2");
+        cy.contains("dt", zh ? "未抽中" : "Unselected").siblings("dd").should("have.text", "2");
+      });
       cy.contains(zh ? "未抽中，不代表批准" : "Unselected — not approval").scrollIntoView().should("be.visible");
       cy.then(() => cy.request(`${base}${batch}/`)).then(({ body }) => {
         expect(body.selected_count).to.eq(2);
@@ -47,8 +51,16 @@ describe("deterministic review sampling and rework", () => {
       cy.then(() => cy.get(`[data-testid="review-submission-${rejected.id}"]`).click());
       cy.get('[data-testid="review-reject-reason"]').type("Fix sentiment 修正情感");
       cy.get('[data-testid="review-reject"]').click();
+      cy.get('[data-testid="review-batch-progress"]').within(() => {
+        cy.contains("dt", zh ? "抽中 · 已驳回" : "Selected · rejected").siblings("dd").should("have.text", "1");
+        cy.contains("dt", zh ? "抽中 · 待审核" : "Selected · pending").siblings("dd").should("have.text", "1");
+      });
       cy.get('[data-testid="review-approve"]', { timeout: 20000 }).click();
       cy.get('[data-testid="review-queue-empty"]').scrollIntoView().should("be.visible");
+      cy.get('[data-testid="review-batch-progress"]').within(() => {
+        cy.contains("dt", zh ? "抽中 · 已批准" : "Selected · approved").siblings("dd").should("have.text", "1");
+        cy.contains("dt", zh ? "抽中 · 待审核" : "Selected · pending").siblings("dd").should("have.text", "0");
+      });
       cy.get('[data-testid="review-history-empty"]').should("not.exist");
       cy.then(() => cy.request({ method: "POST", url: `/api/submissions/${rejected.id}/review/?review_batch=${batch}`,
         body: { decision: "approved" }, failOnStatusCode: false })).its("status").should("eq", 400);
@@ -76,6 +88,13 @@ describe("deterministic review sampling and rework", () => {
         newSubmission = newer.id;
       });
       visit("reviewer");
+      open();
+      cy.contains("button", `Sample ${locale}`).click();
+      cy.contains("button", zh ? "返工相关" : "Rework follow-up").click();
+      cy.then(() => cy.contains("tr", `#${rejected.id}`)
+        .should("contain.text", zh ? "最新修订状态: 待审核" : "Latest revision state: Pending review")
+        .and("contain.text", "Fix sentiment 修正情感"));
+      visit("reviewer");
       cy.get('[data-testid="open-review-workspace"]').click();
       cy.then(() => cy.get(`[data-testid="review-submission-${newSubmission}"]`).click());
       cy.intercept({ method: "POST", pathname: /\/api\/submissions\/\d+\/review\/?$/ }).as("approveNew");
@@ -86,6 +105,14 @@ describe("deterministic review sampling and rework", () => {
       visit("manager");
       open();
       cy.contains("button", `Sample ${locale}`).click();
+      cy.contains("button", zh ? "返工相关" : "Rework follow-up").click();
+      cy.then(() => cy.contains("tr", `#${rejected.id}`)
+        .should("contain.text", zh ? "最新修订状态: 已批准" : "Latest revision state: Approved")
+        .and("contain.text", zh ? "已驳回" : "Rejected"));
+      cy.get('[data-testid="review-batch-progress"]').within(() => {
+        cy.contains("dt", zh ? "抽中 · 已批准" : "Selected · approved").siblings("dd").should("have.text", "1");
+        cy.contains("dt", zh ? "抽中 · 已驳回" : "Selected · rejected").siblings("dd").should("have.text", "1");
+      });
       cy.contains(zh ? "修订 2" : "revision 2").scrollIntoView().should("be.visible");
       cy.then(() => cy.request(`/api/submissions/${rejected.id}/`)).then(({ body }) => {
         expect(body.result_hash).to.eq(oldSnapshot.result_hash);

@@ -56,6 +56,31 @@ Review that new revision separately through the existing project review queue;
 it is never silently appended to the frozen sample or automatically approved.
 Progress includes its read time and explicit refresh.
 
+### Progress and rework follow-up
+
+The detail UI derives counts and filters only from the authorized `items`
+projection: selected/unselected totals, then selected pending, approved,
+rejected, superseded and unavailable counts. Only approved/rejected items are
+in the reviewed filter. These are display projections, not a second persisted
+batch-completion state or decision ledger. Reviewer counts and sample rates
+explicitly describe their visible subset, excluding their own submissions.
+Filters never recalculate the frozen denominator, selection or server authority.
+
+After a successful review command, the existing queue and batch detail/capability
+reads refresh independently. The detail refresh keeps the queue mounted and
+retains its current selection and filter. A failed detail/capability refresh
+clears authorization-derived details/actions and offers a read-only retry for
+the same batch; the saved-review notice prevents repeating the write merely to
+refresh progress. Context guards ignore an old batch/project's late responses.
+A pending row with no current review action differs from an empty filtered view
+and from a sample with no currently reviewable items. None implies full approval.
+
+The rework column displays both the immutable original decision/reason and the
+latest successor revision's current state. A rejected original stays rejected
+even when that successor is approved. Unknown successor states remain explicitly
+unavailable; no new review command, automatic approval, reservation, rework task
+ledger, policy or release authority is introduced.
+
 Unselected, pending and unavailable are not approval. Even if a selected subset
 passes, that supplies no approval for the remainder. Existing ordinary project
 reviews remain available to authorized Reviewers; a batch is not an exclusive
@@ -145,6 +170,22 @@ approval and unchanged old evidence. seed_review_batches_e2e creates a separate
 synthetic organization/users/projects once, requires TEST_ENVIRONMENT, refuses
 existing fixture identities/output, and never deletes existing data. The CI
 workflow explicitly opts in only those generated synthetic project IDs.
+
+ReviewBatchProgress component integration tests exercise the real ReviewerWorkspace
+with synthetic API responses: independent queue/detail failures after a saved
+decision, read-only retry without repeating the command, revoked review actions,
+late batch/project responses, overlapping successor/detail reads, and bilingual
+counts/filters that keep original rejection separate from successor approval.
+The browser journey also asserts automatic progress updates and successor states
+before and after the separate new-revision review.
+
+Review queues reset their entire local state when project, package or batch scope
+changes. Late decisions cannot refresh another scope or retain its processing
+state. A thrown review transport error has an unknown outcome: refresh both queue
+and batch progress without replaying the write or claiming a confirmed save.
+Bilingual component regressions include a committed decision with a lost response.
+Only a response matching the submitted ID and decision confirms a save; native
+fetch-failure Responses and mismatched acknowledgements require read recovery.
 
 Feature activation, deployment, merge, real provider acceptance and Core
 integration are separate actions. This first slice does not close #84.

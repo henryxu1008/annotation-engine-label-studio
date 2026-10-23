@@ -89,6 +89,7 @@
   "reviewLoadFailed": "Review workspace could not be loaded.",
   "rejectionReasonRequired": "A rejection reason is required.",
   "reviewSaveFailed": "The review decision could not be saved.",
+  "reviewOutcomeUnknown": "The review result could not be confirmed. Check the refreshed state before making another decision.",
   "reviewApprovedNotice": "Submission #{{id}} revision {{revision}} was approved.",
   "reviewRejectedNotice": "Submission #{{id}} revision {{revision}} was rejected.",
   "pendingReviews": "Pending reviews",

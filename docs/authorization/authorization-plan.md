@@ -8,6 +8,10 @@ rework chain, and keeps unchecked work outside approved release authority.
 Preserve project-first decision/create fences, serialized-source hash checks,
 frozen plan database guards and current actor/scope checks across upgrades.
 It defaults off and requires explicit per-project Fork-review activation.
+Progress/follow-up UI derives counts from the authorized detail projection and
+keeps frozen original decisions separate from live successor status. Preserve
+the saved-write/read-failure distinction and batch/project response guards when
+upgrading ReviewerWorkspace; progress retries must never resubmit review commands.
 Core-only-review, Host policy/implementation, #81 arbitration, #86 lifecycle and
 retained environment activation are outside this slice.
 
