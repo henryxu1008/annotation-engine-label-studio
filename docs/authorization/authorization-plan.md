@@ -972,3 +972,11 @@ Reload the batch too: a deleted batch or changed frozen plan must not authorize
 an already materialized comparison, even if a replacement plan hash is valid.
 Core-only-review denies this new route. See review-sampling-v1.md for the bounded
 JSON comparison and unchanged #81 conflict/arbitration ownership.
+
+Classification disagreement (#81) is a separately gated read-only projection.
+Reuse live READ_WORK and trusted actor/project scoping; exclude Reviewer self
+sources even for signed receipts. Revalidate exact pinned source/hash/configuration
+tuples and current authority after materialization. Signed receipts never grant
+access or replace unavailable inputs with latest revisions. Preserve independent
+feature/mode gates and Core-only denial on upgrades; no review, assignment,
+arbitration or release authority is introduced. See classification-disagreement-v1.md.

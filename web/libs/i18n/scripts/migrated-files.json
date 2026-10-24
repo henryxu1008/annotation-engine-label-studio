@@ -101,5 +101,6 @@
   "libs/ui/src/lib/modal/ModalPopup.tsx",
   "apps/labelstudio/src/pages/DataManager/ApprovedDatasetExport.jsx",
   "apps/labelstudio/src/pages/DataManager/ReleaseSnapshots.jsx",
-  "apps/labelstudio/src/pages/DataManager/ReworkComparison.jsx"
+  "apps/labelstudio/src/pages/DataManager/ReworkComparison.jsx",
+  "apps/labelstudio/src/pages/DataManager/ClassificationDisagreement.jsx"
 ]
