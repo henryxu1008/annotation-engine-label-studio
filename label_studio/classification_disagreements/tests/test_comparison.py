@@ -78,7 +78,7 @@ class TestClassification(APITestCase):
         assert (data['matching_pairs'], data['total_pairs'], data['agreement']) == (1, 3, 1 / 3)
 
     def test_frozen_replay_pins_ids_hashes_config_time_and_never_uses_newest(self):
-        before = list(Submission.objects.values())
+        before = list(Submission.objects.order_by('pk').values())
         first = self.read().data
         newer = self.make_source(assignment=self.first.assignment, revision=2)
         self.set_answer(newer, 'Negative')
@@ -86,7 +86,7 @@ class TestClassification(APITestCase):
         for key in ('manifest', 'manifest_hash', 'agreement', 'locations', 'frozen'):
             assert replay[key] == first[key]
         assert first['manifest']['inputs'][0]['config_hash']
-        assert list(Submission.objects.filter(pk__in=[r['id'] for r in before]).values()) == before
+        assert list(Submission.objects.filter(pk__in=[r['id'] for r in before]).order_by('pk').values()) == before
 
     def test_one_source_and_duplicate_submitter_are_unavailable_not_perfect(self):
         assert self.read([self.first]).data['reason'] == 'insufficient_inputs'
