@@ -74,6 +74,14 @@ def controls(xml):
         for node in nodes
     ):
         raise Incomparable('unsupported_config')
+    # Text may fetch a mutable document when valueType=url. Submission snapshots
+    # preserve task data, not that fetched body, so a pinned URL cannot prove
+    # that the annotators saw identical text. Match both upstream attribute forms.
+    if any(
+        node.tag == 'Text' and any(node.get(key, 'text') != 'text' for key in ('valueType', 'valuetype'))
+        for node in nodes
+    ):
+        raise Incomparable('unsupported_config')
     texts = {node.get('name'): node.get('value') for node in nodes if node.tag == 'Text'}
     names = [node.get('name') for node in nodes if node.tag in ('Text', 'Choices')]
     if any(not name for name in names) or len(set(names)) != len(names):

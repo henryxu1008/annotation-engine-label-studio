@@ -164,6 +164,28 @@ class TestClassification(APITestCase):
             assert data['reason'] == 'unsupported_config'
             assert data['agreement'] is None and data['locations'] == []
 
+    def test_url_backed_text_is_unavailable_even_with_identical_frozen_urls(self):
+        for attribute in ('valueType="url"', 'valuetype="url"', 'valueType="json"'):
+            config = CONFIG.replace('<Text ', f'<Text {attribute} ')
+            for row in (self.first, self.second):
+
+                def remote(snapshot):
+                    snapshot['project']['label_config'] = config
+                    snapshot['task']['data']['text'] = 'https://synthetic.invalid/mutable.txt'
+
+                self.set_answer(row, 'Positive', remote)
+            initial = self.read().data
+            replay = self.read(frozen=initial['frozen']).data
+            for report in (initial, replay):
+                assert report['reason'] == 'unsupported_config'
+                assert report['agreement'] is None and report['locations'] == []
+            assert replay['manifest'] == initial['manifest']
+        for attribute in ('valueType="text"', 'valuetype="text"'):
+            config = CONFIG.replace('<Text ', f'<Text {attribute} ')
+            for row in (self.first, self.second):
+                self.set_answer(row, 'Positive', lambda snapshot: snapshot['project'].update(label_config=config))
+            assert self.read().data['agreement'] == 1
+
     def test_two_controls_report_per_control_locations_and_whole_answer_agreement(self):
         config = CONFIG.replace(
             '</View>',

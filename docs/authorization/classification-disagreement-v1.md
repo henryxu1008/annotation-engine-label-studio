@@ -42,6 +42,11 @@ Rule `classification-exact-sets/v1` supports static, global Choices targeting
 Text with explicit configured labels, including multiple-choice sets. It uses
 the existing defusedxml library, not an XML parser implementation. Per-region,
 conditional, dynamic/aliased labels, NER, bbox and other controls are unavailable.
+Text must use inline task data (the normal default or explicit `valueType="text"` /
+`valuetype="text"`). URL-backed Text is unavailable even if every frozen URL is
+identical: Submission snapshots do not preserve the fetched document body, so
+neither matching addresses nor a signed receipt proves identical displayed text.
+The projection never fetches a URL to manufacture missing immutable evidence.
 Exact frozen XML must match, and frozen task data must match. This intentionally
 does not infer equivalence between different configurations or question contents.
 

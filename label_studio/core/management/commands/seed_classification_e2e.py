@@ -58,8 +58,9 @@ class Command(BaseCommand):
                     project=project, user=user, role=role if role in ('manager', 'reviewer') else 'annotator'
                 )
             cases, tasks = {}, []
-            for case in ('agreement', 'split', 'missing', 'config'):
-                task = Task.objects.create(project=project, data={'text': f'Synthetic 分类 {case}'})
+            for case in ('agreement', 'split', 'missing', 'config', 'remote'):
+                text = 'https://synthetic.invalid/mutable.txt' if case == 'remote' else f'Synthetic 分类 {case}'
+                task = Task.objects.create(project=project, data={'text': text})
                 tasks.append(task)
                 sources = []
                 for index, actor in enumerate((users['a'], users['b'], users['c'])):
@@ -89,6 +90,8 @@ class Command(BaseCommand):
                     snapshot = _canonical_snapshot(annotation, assignment)
                     if case == 'config' and index == 1:
                         snapshot['project']['label_config'] = config.replace('Negative', 'Other')
+                    if case == 'remote':
+                        snapshot['project']['label_config'] = config.replace('<Text ', '<Text valueType="url" ')
                     source = Submission.objects.create(
                         assignment=assignment,
                         annotation=annotation,
