@@ -65,7 +65,8 @@ Base: `/api/projects/{pk}/classification-arbitrations/`.
 | POST {id}/cancel/ | Manager | expected_version, expected_input_set_hash, reason |
 
 POSTs require a UUID Idempotency-Key. Unknown fields, malformed/unsafe IDs and empty
-or over-2000-character trimmed reasons fail. Pending version 1 may become resolved
+or over-2000-character trimmed reasons fail. DRF's standard text validators reject
+NUL and unpaired Unicode surrogates with 400 before hashing or persistence. Pending version 1 may become resolved
 or cancelled version 2 once. The winner must match one complete frozen source pin;
 clients cannot submit a replacement answer.
 
@@ -84,6 +85,14 @@ record after terminal transition/source loss; altered body/actor/principal canno
 reuse it. Revoked actors cannot recover receipts or answers. Browser uncertain
 acknowledgements retain body/key, permit read-only refresh and require explicit
 recovery. No automatic POST or rekey occurs.
+
+Read responses carry an ephemeral `viewer_hash` scoped to principal/source, actor,
+project/organization and role. It is a salted HMAC for correlating concurrent
+capability and data responses, not an authorization credential. The browser drops
+mixed viewer contexts and explicitly denied reads; write controls require both
+current capability and object-level permission. The pin is never accepted in POST
+bodies or persisted in origins/receipts. Secret rotation changes this read pin but
+does not invalidate original-key recovery. Server authorization stays authoritative.
 
 Limits are inclusive: 20 participants, 8 MiB total canonical source snapshots,
 64 KiB total UTF-8 bytes across referenced frozen inline Text fields; reason is

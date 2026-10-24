@@ -1,4 +1,5 @@
 import copy
+import json
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -149,7 +150,7 @@ class TestArbitration(APITestCase):
 
     def test_strict_fields_cas_input_set_and_foreign_winner(self):
         value = self.dispatch_body()
-        for field in ('actor', 'reviewer', 'result', 'status'):
+        for field in ('actor', 'reviewer', 'result', 'status', 'viewer_hash'):
             assert self.dispatch({**value, field: self.manager.pk}).status_code == 400
         row = self.pending()
         self.client.force_authenticate(self.arbiter)
@@ -165,6 +166,26 @@ class TestArbitration(APITestCase):
             {'actor': self.manager.pk},
         ):
             assert self.command(row, {**args, **changed}).status_code == 400
+        assert not ArbitrationDecision.objects.exists()
+
+    def test_invalid_unicode_reason_is_rejected_without_writes(self):
+        row = self.pending()
+        for cancel in (False, True):
+            self.client.force_authenticate(self.manager if cancel else self.arbiter)
+            action = 'cancel' if cancel else 'decision'
+            for reason in ('\ud800', '\udfff', '\x00'):
+                value = {**self.command_body(row, cancel=cancel), 'reason': reason}
+                # A real UTF-8 JSON body can carry an escaped unpaired surrogate.
+                response = self.client.post(
+                    f'{self.arb_base}{row.pk}/{action}/',
+                    json.dumps(value, ensure_ascii=True),
+                    content_type='application/json',
+                    HTTP_IDEMPOTENCY_KEY=str(uuid4()),
+                )
+                assert response.status_code == 400
+                assert response.data['display_context']['reason'] == 'ARBITRATION_INVALID_INPUT'
+        row.refresh_from_db()
+        assert row.status == 'pending' and row.version == 1 and row.cancellation is None
         assert not ArbitrationDecision.objects.exists()
 
     def test_all_original_keys_recover_after_state_advance_source_deletion_and_key_rotation(self):
@@ -314,7 +335,15 @@ class TestArbitration(APITestCase):
         row = self.pending()
         for setting in (
             {'ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED': False},
+            {'ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED': False},
+            {'ANNOTATION_CLASSIFICATION_BATCHES_ENABLED': False},
             {'ANNOTATION_CLASSIFICATION_ARBITRATION_MODES': {}},
+            {'ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES': {}},
+            {
+                'ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES': {
+                    f'{self.org.pk}:{self.project.pk}': 'core_only_internal'
+                }
+            },
             {
                 'ANNOTATION_CLASSIFICATION_ARBITRATION_MODES': {
                     f'{self.org.pk}:{self.project.pk}': 'core_only_internal'
@@ -324,6 +353,13 @@ class TestArbitration(APITestCase):
             with self.settings(**setting):
                 for path in ('capability/', '', f'{row.pk}/'):
                     assert self.client.get(self.arb_base + path).status_code == 404
+                assert (
+                    self.client.get(
+                        self.arb_base + 'assignees/',
+                        {k: value[k] for k in ('batch_id', 'task_id', 'expected_manifest_hash')},
+                    ).status_code
+                    == 404
+                )
                 assert self.dispatch(value).status_code == 404
                 assert self.command(row, cancel=True).status_code == 404
                 self.client.force_authenticate(self.arbiter)
@@ -332,6 +368,33 @@ class TestArbitration(APITestCase):
         with self.settings(ANNOTATION_PROJECT_OPERATION_PROVIDER='review_batches.tests.test_batches.ReadOnlyPolicy'):
             assert not self.client.get(self.arb_base + 'capability/').data['can_create']
             assert self.dispatch(value).status_code == 403
+
+    def test_read_viewer_pin_binds_actor_principal_project_and_role(self):
+        row = self.pending()
+        manager_pin = self.client.get(self.arb_base + 'capability/').data['viewer_hash']
+        assert self.client.get(self.arb_base).data['viewer_hash'] == manager_pin
+        assert self.get_detail(row).data['viewer_hash'] == manager_pin
+        value = self.dispatch_body()
+        roster = self.client.get(
+            self.arb_base + 'assignees/', {k: value[k] for k in ('batch_id', 'task_id', 'expected_manifest_hash')}
+        )
+        assert roster.data['viewer_hash'] == manager_pin
+        self.client.force_authenticate(self.arbiter)
+        reviewer_pin = self.client.get(self.arb_base + 'capability/').data['viewer_hash']
+        assert reviewer_pin != manager_pin
+        assert self.get_detail(row).data['viewer_hash'] == reviewer_pin
+        assert self.client.get(self.arb_base).data['results'][0]['viewer_hash'] == reviewer_pin
+        with patch.object(
+            get_identity_provider(),
+            'resolve',
+            return_value=Principal('other-subject', 'test', self.arbiter.email, self.arbiter.pk),
+        ):
+            assert self.get_detail(row).data['viewer_hash'] != reviewer_pin
+        ProjectMember.objects.filter(project=self.project, user=self.arbiter).update(role='manager')
+        assert self.get_detail(row).data['viewer_hash'] != reviewer_pin
+        self.client.force_authenticate(self.other_arbiter)
+        listing = self.client.get(self.arb_base)
+        assert listing.data['count'] == 0 and listing.data['viewer_hash'] != reviewer_pin
 
     def test_revocation_during_read_render_and_adoption_render_discards_payload(self):
         row = self.pending()

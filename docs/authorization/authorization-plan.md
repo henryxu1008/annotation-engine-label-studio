@@ -1017,3 +1017,10 @@ transitions. Cancellation remains a SECURITY_CANCEL operation without READ_WORK.
 Recheck source graph projection, mapped principals, frozen triggers and response-time
 authority on upgrades. See [classification-arbitration-v1.md](classification-arbitration-v1.md).
 Submission, review state, sampling, Host and Core authority remain unchanged.
+
+Concurrent arbitration capability/data reads also bind an ephemeral viewer HMAC
+to the current principal, actor, project/organization and role. Denied reads or
+mixed contexts clear the UI; current capability and object permission must both
+permit an action. This pin grants no authority and does not alter persisted
+receipts, including recovery across secret rotation. Standard DRF validators reject
+invalid Unicode/NUL reasons with 400 before request hashing.

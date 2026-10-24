@@ -10,14 +10,14 @@ import "./ClassificationBatches.scss";
 
 const id = z.number().int().positive().safe(), count = z.number().int().nonnegative().safe();
 const hash = z.string().length(64), state = z.enum(["pending", "resolved", "cancelled"]);
-const capsSchema = z.object({ enabled: z.literal(true), can_read: z.boolean(), can_create: z.boolean(), can_decide: z.boolean(), can_cancel: z.boolean() });
+const capsSchema = z.object({ enabled: z.literal(true), viewer_hash: hash, can_read: z.boolean(), can_create: z.boolean(), can_decide: z.boolean(), can_cancel: z.boolean() });
 const meta = z.object({ id, schema: z.literal("classification-arbitrations/v1"), decision_rule: z.literal("adopt-exact-submission/v1"),
-  batch_id: id, task_id: id, batch_name: z.string(), assignee_id: id, input_set_hash: hash, status: state, version: id,
+  batch_id: id, task_id: id, batch_name: z.string(), assignee_id: id, input_set_hash: hash, viewer_hash: hash, status: state, version: id,
   created_at: z.string(), calculated_at: z.string(), can_decide: z.boolean(), can_cancel: z.boolean() });
 const pagination = { count, next: z.string().nullable(), previous: z.string().nullable() };
-const listSchema = z.object({ ...pagination, results: z.array(meta) });
+const listSchema = z.object({ ...pagination, viewer_hash: hash, results: z.array(meta) });
 const rosterSchema = z.object({ ...pagination, results: z.array(z.object({ id, name: z.string() })), batch_id: id, task_id: id,
-  batch_name: z.string(), origin_manifest_hash: hash, input_set_hash: hash });
+  batch_name: z.string(), origin_manifest_hash: hash, input_set_hash: hash, viewer_hash: hash });
 const pin = z.object({ submission_id: id, revision: id, submitter_id: id.nullable(), result_hash: z.string(), config_hash: z.string() });
 const reportSchema = z.object({ status: z.literal("comparable"), outcome: z.literal("disagreement"), task_id: id,
   reason: z.null(), agreement: z.number().min(0).max(1), matching_pairs: count, total_pairs: id, inputs: z.array(pin).min(2).max(20),
@@ -91,6 +91,8 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
     return read(async (current) => {
       const [capability, rows] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
         fetch("classificationArbitrations", { page: targetPage, state: targetFilter }, listSchema)]);
+      if (!capability.can_read || capability.viewer_hash !== rows.viewer_hash
+        || rows.results.some((row) => row.viewer_hash !== rows.viewer_hash)) throw new Error("read permission changed");
       if (current()) { setCaps(capability); setList(rows); }
     });
   };
@@ -99,7 +101,7 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
     return read(async (current) => {
       const [capability, detail] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
         fetch("classificationArbitrationDetail", { arbitration: identifier }, detailSchema)]);
-      if (detail.id !== identifier) throw new Error("scope changed");
+      if (!capability.can_read || capability.viewer_hash !== detail.viewer_hash || detail.id !== identifier) throw new Error("scope changed");
       if (current()) { setCaps(capability); setData(detail); }
     });
   };
@@ -109,7 +111,8 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
       const [capability, candidates] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
         fetch("classificationArbitrationAssignees", { ...initialOrigin, page: targetPage, page_size: 100 }, rosterSchema)]);
       if (candidates.batch_id !== initialOrigin.batch_id || candidates.task_id !== initialOrigin.task_id
-        || candidates.origin_manifest_hash !== initialOrigin.expected_manifest_hash || !capability.can_create) throw new Error("scope changed");
+        || candidates.origin_manifest_hash !== initialOrigin.expected_manifest_hash || !capability.can_read || !capability.can_create
+        || capability.viewer_hash !== candidates.viewer_hash) throw new Error("scope changed");
       if (current()) { setCaps(capability); setRoster(candidates); }
     });
   };
@@ -194,7 +197,7 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
       {!data.available && <p role="status" data-testid="arbitration-unavailable">{t("arbitrationUnavailable")}</p>}
       {data.available && <div data-testid="arbitration-text">{data.texts.map((text) => <section key={text.name}><h4>{text.name}</h4>
         <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{text.text}</pre></section>)}</div>}
-      {data.can_decide && data.available && <fieldset disabled={busy || unknown}>
+      {caps?.can_decide && data.can_decide && data.available && <fieldset disabled={busy || unknown}>
         <legend>{t("arbitrationChooseWinner")}</legend>
         {data.report.inputs.map((source) => <label key={source.submission_id} style={{ display: "block" }}>
           <input type="radio" name="arbitration-winner" value={source.submission_id} checked={winner === String(source.submission_id)} onChange={(e) => setWinner(e.target.value)} />
@@ -204,7 +207,7 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
         <Button disabled={!winner || !reason.trim()} onClick={() => begin("decision", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, winner_submission_id: Number(winner), reason }, data.id)}>{t("arbitrationAdopt")}</Button>
       </fieldset>}
-      {data.can_cancel && <fieldset disabled={busy || unknown}><legend>{t("arbitrationCancel")}</legend>
+      {caps?.can_cancel && data.can_cancel && <fieldset disabled={busy || unknown}><legend>{t("arbitrationCancel")}</legend>
         <label>{t("arbitrationReason")}<textarea maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         <Button disabled={!reason.trim()} onClick={() => begin("cancel", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, reason }, data.id)}>{t("arbitrationConfirmCancel")}</Button></fieldset>}

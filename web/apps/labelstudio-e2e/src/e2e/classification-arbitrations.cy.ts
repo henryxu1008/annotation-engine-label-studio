@@ -69,7 +69,25 @@ describe("frozen text classification arbitration", () => {
       } })).then(({ body }) => { activeTask = body; expect(body.id).not.to.eq(firstTask.id); });
 
       visit("reviewer"); openQueue();
+      // A late authorized detail must not override a newer read denial.
+      cy.intercept({ method: "GET", pathname: `${base}capability/`, times: 1 }, (req) => {
+        req.continue((res) => { res.body.can_read = false; });
+      }).as("arbitrationReadRevoked");
       cy.then(() => workspace().find(`[data-arbitration="${activeTask.id}"]`).click());
+      cy.wait("@arbitrationReadRevoked");
+      workspace().find('[role="alert"]').should("exist");
+      workspace().find('[data-testid="arbitration-text"]').should("not.exist");
+      workspace().contains("button", zh ? "刷新只读视图" : "Refresh read-only view").click();
+      workspace().find('[data-testid="arbitration-text"]').should("contain.text", "Synthetic 分类 split");
+      // Keep real data but simulate a capability from a different mapped viewer.
+      cy.intercept({ method: "GET", pathname: `${base}capability/`, times: 1 }, (req) => {
+        req.continue((res) => { res.body.viewer_hash = "0".repeat(64); });
+      }).as("arbitrationViewerChanged");
+      workspace().contains("button", zh ? "刷新只读视图" : "Refresh read-only view").click();
+      cy.wait("@arbitrationViewerChanged");
+      workspace().find('[role="alert"]').should("exist");
+      workspace().find('[data-testid="arbitration-text"]').should("not.exist");
+      workspace().contains("button", zh ? "刷新只读视图" : "Refresh read-only view").click();
       workspace().find('[data-testid="arbitration-text"]').should("contain.text", "Synthetic 分类 split");
       cy.then(() => cy.request(`${base}${activeTask.id}/`)).then(({ body }) => {
         expect(body.origin_manifest_hash).to.eq(undefined); expect(body.available).to.eq(true);
@@ -81,6 +99,11 @@ describe("frozen text classification arbitration", () => {
       cy.then(() => cy.request({ method: "POST", url: `${base}${firstTask.id}/decision/`, failOnStatusCode: false,
         headers: { "Idempotency-Key": crypto.randomUUID() }, body: { expected_version: 1, expected_input_set_hash: firstTask.input_set_hash,
           winner_submission_id: project.cases.split.sources[0], reason: "Synthetic late cancelled submission" } })).its("status").should("eq", 409);
+      for (const reason of ["\ud800", "\u0000"]) {
+        cy.then(() => cy.request({ method: "POST", url: `${base}${activeTask.id}/decision/`, failOnStatusCode: false,
+          headers: { "Idempotency-Key": crypto.randomUUID() }, body: { expected_version: 1, expected_input_set_hash: activeTask.input_set_hash,
+            winner_submission_id: project.cases.split.sources[0], reason } })).its("status").should("eq", 400);
+      }
       cy.intercept({ method: "POST", pathname: new RegExp(`${base}[0-9]+/decision/?$`) }, (req) => {
         if (++decisions === 1) {
           decisionKey = req.headers["idempotency-key"]; decisionBody = req.body;

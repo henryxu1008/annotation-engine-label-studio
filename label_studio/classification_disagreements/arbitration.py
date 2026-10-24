@@ -13,6 +13,7 @@ from access_control.project_operations import (
 from django.conf import settings
 from django.db import connection, models
 from django.db.models.expressions import RawSQL
+from django.utils.crypto import salted_hmac
 from organizations.models import OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework.exceptions import APIException, NotFound
@@ -42,6 +43,22 @@ def integer(value):
 
 def hash_value(value):
     return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def viewer_hash(context):
+    """Correlate read responses; never a bearer credential or persisted receipt."""
+    principal, actor, project, role = context
+    value = digest(
+        {
+            'principal': principal.principal_id,
+            'source': principal.source,
+            'actor': actor.pk,
+            'project': project.pk,
+            'organization': project.organization_id,
+            'role': role,
+        }
+    )
+    return salted_hmac(SCHEMA + '/viewer', value, algorithm='sha256').hexdigest()
 
 
 def guard(pk, principal, actor, *, create=False, decide=False, cancel=False, capability=False):
@@ -305,6 +322,7 @@ def meta(row, context):
     policy = project_operation_policy(project)
     data = {
         'id': row.pk,
+        'viewer_hash': viewer_hash(context),
         'schema': SCHEMA,
         'decision_rule': RULE,
         'batch_id': row.batch_id_frozen,

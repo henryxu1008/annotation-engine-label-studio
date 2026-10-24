@@ -11,7 +11,8 @@ from access_control.project_operations import (
 )
 from django.db import transaction
 from django.utils import timezone
-from rest_framework.exceptions import NotFound
+from rest_framework import serializers
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.generics import get_object_or_404
 
 from . import arbitration as a
@@ -29,10 +30,15 @@ def body(request, keys):
     for name in ('expected_manifest_hash', 'expected_input_set_hash'):
         if name in value and not a.hash_value(value[name]):
             a.error('INVALID_INPUT', 400)
-    if 'reason' in value and (
-        not isinstance(value['reason'], str) or not 1 <= len(value['reason'].strip()) <= a.MAX_REASON
-    ):
-        a.error('INVALID_INPUT', 400)
+    if 'reason' in value:
+        if not isinstance(value['reason'], str):
+            a.error('INVALID_INPUT', 400)
+        try:
+            # Reuse DRF's length, null-character and surrogate validators.
+            # Keep the raw body unchanged for original-key receipt matching.
+            serializers.CharField(min_length=1, max_length=a.MAX_REASON).run_validation(value['reason'])
+        except ValidationError:
+            a.error('INVALID_INPUT', 400)
     try:
         key = UUID(request.headers.get('Idempotency-Key', ''))
     except (ValueError, AttributeError):
@@ -70,6 +76,7 @@ class CapabilityAPI(ArbitrationAPI):
             read = policy.allows(READ_WORK)
             return {
                 'enabled': True,
+                'viewer_hash': a.viewer_hash(current),
                 'schema': a.SCHEMA,
                 'rule': a.RULE,
                 'can_read': read,
@@ -105,7 +112,8 @@ class ListAPI(ArbitrationAPI):
             if state != 'all':
                 rows = rows.filter(status=state)
             page = self.paginate_queryset(rows)
-            return self.get_paginated_response([a.meta(a.checked(row, context[2]), context) for row in page]).data
+            data = self.get_paginated_response([a.meta(a.checked(row, context[2]), context) for row in page]).data
+            return {**data, 'viewer_hash': a.viewer_hash(context)}
 
         return self.read(request, pk, materialize)
 
@@ -212,6 +220,7 @@ class AssigneesAPI(ArbitrationAPI):
             data = self.get_paginated_response([{'id': u.pk, 'name': u.username or u.email} for u in page]).data
             return {
                 **data,
+                'viewer_hash': a.viewer_hash(current),
                 'batch_id': batch.pk,
                 'task_id': values['task_id'],
                 'batch_name': batch.name,
