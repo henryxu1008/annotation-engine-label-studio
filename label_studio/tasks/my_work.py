@@ -9,6 +9,7 @@ from access_control.authorization import authorization
 from access_control.identity import resolve_actor
 from access_control.project_operations import EDIT, READ_WORK, REVIEW, SUBMIT, require_project_operation
 from core.permissions import all_permissions
+from django.conf import settings
 from django.db.models import (
     BooleanField,
     Case,
@@ -187,7 +188,7 @@ class MyWorkAPI(generics.GenericAPIView):
 
     @extend_schema(responses={200: OpenApiTypes.OBJECT}, summary='Read current user project work')
     def get(self, request, pk):
-        if set(request.query_params) - {'kind', 'state', 'page', 'page_size'}:
+        if set(request.query_params) - {'kind', 'state', 'page', 'page_size', 'task_package'}:
             raise ValidationError({'detail': 'Only kind, state and pagination filters are supported.'})
         principal, actor = resolve_actor(request)
         project = generics.get_object_or_404(Project.objects.for_user(actor), pk=pk)
@@ -207,9 +208,19 @@ class MyWorkAPI(generics.GenericAPIView):
             raise ValidationError({'kind': 'Expected annotation or review.'})
         if kind not in available_kinds:
             raise PermissionDenied('This project role cannot access this work queue.')
+        from task_packages.access import current_read_policy, fail
+        from task_packages.scope import PackageScope
+
+        scope = PackageScope.from_request(request, project)
+        if scope:
+            policy = scope.policy
+            if len(request.query_params.getlist('state')) > 1:
+                fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'A single work state is required.')
         as_of = timezone.now()
         if kind == 'annotation':
             queryset = annotation_work(project, actor)
+            if scope:
+                queryset = queryset.filter(task_id__in=scope.task_ids())
             counts = queryset.aggregate(**{state: Count('pk', filter=Q(work_state=state)) for state in WORK_STATES})
             state = request.query_params.get('state')
             if state:
@@ -249,7 +260,12 @@ class MyWorkAPI(generics.GenericAPIView):
                         'blocked_reason': 'WORK_SOURCE_CONFLICT'
                         if conflict
                         else (None if actions else policy.reason or 'PROJECT_OPERATION_BLOCKED'),
-                        'editor_url': f'/projects/{project.pk}/data?task={item["task_id"]}' if actions else None,
+                        'editor_url': (
+                            f'/projects/{project.pk}/data?task={item["task_id"]}'
+                            + (f'&task_package={scope.package.pk}' if scope else '')
+                        )
+                        if actions
+                        else None,
                     }
                 )
         else:
@@ -264,6 +280,8 @@ class MyWorkAPI(generics.GenericAPIView):
                 .exclude(submitted_by=actor)
                 .order_by('-submitted_at', '-pk')
             )
+            if scope:
+                queryset = scope.submissions(queryset)
             counts = {'pending': queryset.count()}
             page = self.paginate_queryset(
                 queryset.values(
@@ -289,6 +307,33 @@ class MyWorkAPI(generics.GenericAPIView):
                 }
                 for item in page
             ]
+        if scope:
+            policy = current_read_policy(project, actor, role, package_ids=[scope.package.pk])
+            if kind == 'annotation':
+                expected = {(row['assignment_id'], row['assignment_version'], row['task_id']) for row in results}
+                current = set(
+                    queryset.filter(pk__in=[row['assignment_id'] for row in results]).values_list(
+                        'pk', 'version', 'task_id'
+                    )
+                )
+            else:
+                expected = {(row['submission_id'], row['revision'], row['task_id']) for row in results}
+                current = set(
+                    queryset.filter(pk__in=[row['submission_id'] for row in results]).values_list(
+                        'pk', 'revision', 'assignment__task_id'
+                    )
+                )
+            if current != expected:
+                fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current package work access has changed.')
+            for row in results:
+                operation = EDIT if kind == 'annotation' else REVIEW
+                if not policy.allows(operation):
+                    row['allowed_actions'] = []
+                    row['blocked_reason'] = policy.reason or 'PROJECT_OPERATION_BLOCKED'
+                    if kind == 'annotation':
+                        row['editor_url'] = None
+                if kind == 'annotation':
+                    row['can_submit'] = bool(row['allowed_actions']) and policy.allows(SUBMIT)
         response = self.get_paginated_response(results)
         response.data.update(
             {
@@ -299,6 +344,11 @@ class MyWorkAPI(generics.GenericAPIView):
                 'as_of': as_of,
                 'server_now': as_of,
                 'policy': {'version': policy.version, 'state': policy.state, 'reason': policy.reason},
+                'packages_enabled': settings.ANNOTATION_FIXED_PACKAGES_ENABLED,
+                'task_package': {'id': scope.package.pk, 'name': scope.package.name} if scope else None,
+                'continue_url': f'/projects/{project.pk}/data?labeling=1&task_package={scope.package.pk}'
+                if scope and role == 'annotator' and policy.allows(EDIT) and not request.query_params.get('state')
+                else None,
             }
         )
         return response

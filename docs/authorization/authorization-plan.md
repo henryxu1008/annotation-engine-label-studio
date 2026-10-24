@@ -984,3 +984,13 @@ Repeated checks must bind the same trusted principal, local actor and role, not
 only a same-name role. The metric supports inline Text without resolvers and
 static Choices only; editor remote resolvers and dynamic label sources cannot
 stand in for immutable displayed-content evidence.
+
+Package discovery (#83) reuses existing package membership and assignment/review
+facts for batched role-scoped list summaries, pre-pagination state filters and
+explicitly selected-package My Work. Preserve sample versus assignment units and
+independent counts for overlapping packages. Package context only narrows existing
+READ_WORK/EDIT/REVIEW authority; scoped My Work rechecks materialized work identity
+and current policy before emitting actions. Failed reads clear old rows and never
+fall back to project work. Keep unscoped behavior and existing Editor/review
+navigation guards; do not turn this projection into dispatch, #86 lifecycle or
+#80 content/release identity. See package-discovery.md for scope and regressions.
