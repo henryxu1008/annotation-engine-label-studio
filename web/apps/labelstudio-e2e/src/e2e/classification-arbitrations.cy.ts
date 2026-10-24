@@ -70,7 +70,7 @@ describe("frozen text classification arbitration", () => {
 
       visit("reviewer"); openQueue();
       // A late authorized detail must not override a newer read denial.
-      cy.intercept({ method: "GET", pathname: `${base}capability/`, times: 1 }, (req) => {
+      cy.intercept({ method: "GET", pathname: new RegExp(`^${base}capability/?$`), times: 1 }, (req) => {
         req.continue((res) => { res.body.can_read = false; });
       }).as("arbitrationReadRevoked");
       cy.then(() => workspace().find(`[data-arbitration="${activeTask.id}"]`).click());
@@ -80,7 +80,7 @@ describe("frozen text classification arbitration", () => {
       workspace().contains("button", zh ? "刷新只读视图" : "Refresh read-only view").click();
       workspace().find('[data-testid="arbitration-text"]').should("contain.text", "Synthetic 分类 split");
       // Keep real data but simulate a capability from a different mapped viewer.
-      cy.intercept({ method: "GET", pathname: `${base}capability/`, times: 1 }, (req) => {
+      cy.intercept({ method: "GET", pathname: new RegExp(`^${base}capability/?$`), times: 1 }, (req) => {
         req.continue((res) => { res.body.viewer_hash = "0".repeat(64); });
       }).as("arbitrationViewerChanged");
       workspace().contains("button", zh ? "刷新只读视图" : "Refresh read-only view").click();
