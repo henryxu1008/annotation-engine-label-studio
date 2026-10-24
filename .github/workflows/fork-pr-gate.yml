@@ -99,7 +99,7 @@ jobs:
             tasks/tests/test_project_operation_policy.py \
             tasks/tests/test_my_work.py \
             review_batches/tests/test_batches.py classification_disagreements/tests/test_comparison.py classification_disagreements/tests/test_batches.py classification_disagreements/tests/test_arbitration.py \
-            task_packages/tests/test_packages.py task_packages/tests/test_continuity.py task_packages/tests/test_continuity_review.py \
+            task_packages/tests \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \
             organizations/tests/test_api.py::TestOrganizationInviteLoggingAPI
@@ -124,7 +124,7 @@ jobs:
           poetry run pytest -q \
             tasks/tests/test_project_write_concurrency.py \
             review_batches/tests classification_disagreements/tests \
-            task_packages/tests/test_packages.py task_packages/tests/test_continuity.py task_packages/tests/test_continuity_review.py \
+            task_packages/tests \
             tasks/tests/test_project_operation_policy.py tasks/tests/test_my_work.py
 
       - name: Run request locale and translated template regressions

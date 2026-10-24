@@ -1024,3 +1024,17 @@ mixed contexts clear the UI; current capability and object permission must both
 permit an action. This pin grants no authority and does not alter persisted
 receipts, including recovery across secret rotation. Standard DRF validators reject
 invalid Unicode/NUL reasons with 400 before request hashing.
+
+Package discovery (#83) reuses existing package membership and assignment/review
+facts for batched role-scoped list summaries, pre-pagination state filters and
+explicitly selected-package My Work. Preserve sample versus assignment units and
+independent counts for overlapping packages. Package context only narrows existing
+READ_WORK/EDIT/REVIEW authority; scoped My Work rechecks materialized work identity
+and current policy before emitting actions. Failed reads clear old rows and never
+fall back to project work. Keep unscoped behavior and existing Editor/review
+navigation guards; do not turn this projection into dispatch, #86 lifecycle or
+#80 content/release identity. See package-discovery.md for scope and regressions.
+Keep live project-role predicates in the membership SQL and personal/reviewer
+predicates on the counted facts. Intersect that scope once per aggregate;
+re-nesting the full visibility query can stall thousand-item progress reads.
+Package visibility still guards metadata before and after materialization.

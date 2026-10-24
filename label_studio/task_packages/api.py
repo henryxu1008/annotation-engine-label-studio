@@ -17,20 +17,19 @@ from access_control.project_operations import (
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count
 from django.utils import timezone
-from organizations.models import OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework import generics, serializers
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from tasks.models import Task, TaskAssignment
-from tasks.my_work import WORK_STATES, annotate_assignment_work, work_projects
-from users.models import User
+from tasks.models import Task
+from tasks.my_work import work_projects
 
-from .access import current_read_policy, fail, live_items, review_work, visible_packages
+from .access import current_read_policy, fail, visible_packages
 from .models import TaskPackage, TaskPackageItem
+from .progress import PackageWork, filter_states, requested_state
 
 
 class Conflict(APIException):
@@ -94,8 +93,8 @@ class PackageAPIBase(generics.GenericAPIView):
         response['Cache-Control'] = 'private, no-store'
         return response
 
-    def context(self, request, pk, *, capability=False):
-        if set(request.query_params) - {'page', 'page_size'}:
+    def context(self, request, pk, *, capability=False, filters=()):
+        if set(request.query_params) - {'page', 'page_size', *filters}:
             fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'Only pagination filters are supported.')
         principal, actor = resolve_actor(request)
         project = generics.get_object_or_404(
@@ -125,9 +124,15 @@ class PackageListAPI(PackageAPIBase):
     def get(self, request, pk):
         _, actor, project, role, _ = self.context(request, pk)
         page = self.paginate_queryset(visible_packages(project, actor, role).order_by('-pk'))
-        response = self.get_paginated_response([package_metadata(package, role) for package in page])
-        policy = current_read_policy(project, actor, role, package_ids=[package.pk for package in page])
-        response.data.update(role=role, can_create=role == 'manager' and policy.allows(ORGANIZE_WORK))
+        ids = [package.pk for package in page]
+        counts = PackageWork(project, actor, role, ids).summaries(ids) if ids else {}
+        response = self.get_paginated_response(
+            [{**package_metadata(package, role), 'counts': counts[package.pk]} for package in page]
+        )
+        policy = current_read_policy(project, actor, role, package_ids=ids)
+        response.data.update(
+            role=role, can_create=role == 'manager' and policy.allows(ORGANIZE_WORK), as_of=timezone.now()
+        )
         return response
 
     def post(self, request, pk):
@@ -184,27 +189,13 @@ class PackageListAPI(PackageAPIBase):
 
 class PackageDetailAPI(PackageAPIBase):
     def get(self, request, pk, package_id):
-        _, actor, project, role, policy = self.context(request, pk)
+        _, actor, project, role, policy = self.context(request, pk, filters=('state',))
+        state = requested_state(request, role)
         packages = visible_packages(project, actor, role)
         package = generics.get_object_or_404(packages, pk=package_id)
-        items = TaskPackageItem.objects.filter(package=package, package_id__in=packages.values('pk'))
-        live = live_items(project).filter(pk__in=items.values('pk'))
-        task_ids = live.values('task_id')
-        assignments = TaskAssignment.objects.filter(
-            project=project,
-            task_id__in=task_ids,
-            status__in=TaskAssignment.ACTIVE_STATUSES,
-        )
-        pending = review_work(project, actor, role).filter(assignment__task_id__in=task_ids)
-        if role == 'annotator':
-            assignments = assignments.filter(assignee=actor, project_id__in=work_projects(actor, ['annotator']))
-            pending = pending.filter(assignment__in=assignments)
-        elif role == 'reviewer':
-            pending = pending.filter(assignment__project_id__in=work_projects(actor, ['reviewer']))
-        else:
-            assignments = assignments.filter(project_id__in=work_projects(actor, ['manager']))
-
-        counts = {'pending_review': pending.count()}
+        projection = PackageWork(project, actor, role, [package.pk])
+        live, assignments, pending = projection.live, projection.assignments, projection.pending
+        counts = projection.summaries([package.pk])[package.pk]
         if role == 'reviewer':
             page = self.paginate_queryset(
                 pending.order_by('-submitted_at', '-pk').values(
@@ -225,38 +216,9 @@ class PackageDetailAPI(PackageAPIBase):
                 for row in page
             ]
         else:
-            work = annotate_assignment_work(assignments)
-            counts.update(work.aggregate(**{state: Count('pk', filter=Q(work_state=state)) for state in WORK_STATES}))
-            counts['assignments'] = sum(counts[state] for state in WORK_STATES)
+            work = projection.work
             if role == 'manager':
-                fixed_tasks, available_tasks = items.count(), live.count()
-                counts.update(
-                    fixed_tasks=fixed_tasks,
-                    available_tasks=available_tasks,
-                    unavailable_tasks=fixed_tasks - available_tasks,
-                    unassigned_tasks=live.exclude(task_id__in=assignments.values('task_id')).count(),
-                )
-                # Counts describe active assignment rows, including rows left after assignee revocation.
-                member = ProjectMember.objects.filter(
-                    project=project, user_id=OuterRef('pk'), enabled=True, role__in=['manager', 'annotator']
-                )
-                organization_users = OrganizationMember.objects.filter(
-                    organization=project.organization,
-                    deleted_at__isnull=True,
-                ).values('user_id')
-                eligible_users = (
-                    User.objects.filter(
-                        is_active=True,
-                        active_organization_id=project.organization_id,
-                        pk__in=organization_users,
-                    )
-                    .annotate(project_member=Exists(member))
-                    .filter(Q(pk=project.created_by_id) | Q(project_member=True))
-                )
-                counts['blocked_assignments'] = assignments.exclude(
-                    assignee_id__in=eligible_users.values('pk')
-                ).count()
-                page = self.paginate_queryset(items.order_by('original_task_id'))
+                page = self.paginate_queryset(projection.manager_items(state).order_by('original_task_id'))
                 ids = [item.original_task_id for item in page]
                 available = set(live.filter(original_task_id__in=ids).values_list('original_task_id', flat=True))
                 states = list(
@@ -273,6 +235,8 @@ class PackageDetailAPI(PackageAPIBase):
                     for item in page
                 ]
             else:
+                if state:
+                    work = work.filter(work_state=state)
                 page = self.paginate_queryset(work.values('id', 'task_id', 'work_state', 'version'))
                 results = [
                     {
@@ -316,10 +280,12 @@ class PackageDetailAPI(PackageAPIBase):
             package=package_metadata(package, role),
             role=role,
             counts=counts,
+            state=state,
+            filter_states=filter_states(role),
             as_of=timezone.now(),
             can_review=role == 'reviewer' and policy.allows(REVIEW),
             continue_url=f'/projects/{pk}/data?labeling=1&task_package={package.pk}'
-            if role == 'annotator' and policy.allows(EDIT)
+            if role == 'annotator' and policy.allows(EDIT) and not state
             else None,
             policy={'version': policy.version, 'state': policy.state, 'reason': policy.reason},
         )

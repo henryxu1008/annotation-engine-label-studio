@@ -4,7 +4,7 @@ import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
-import { displayWorkState } from "./MyWorkWorkspace";
+import { displayWorkState } from "./workDisplay";
 import "./TaskPackages.scss";
 
 const failed = (result) => !result || result.error || result.$meta?.ok === false;
@@ -40,7 +40,45 @@ export const TaskPackageEntry = ({ projectId, onOpen, disabled }) => {
   ) : null;
 };
 
-export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue }) => {
+export const PackageCounts = ({ counts = {}, role, compact = false }) => {
+  const { t } = useLocaleTranslation("taskPackages");
+  const keys = !compact
+    ? Object.keys(counts)
+    : role === "reviewer"
+      ? ["pending_review"]
+      : role === "manager"
+        ? [
+            "fixed_tasks",
+            "unassigned_tasks",
+            "in_progress",
+            "rework",
+            "pending_review",
+            "approved",
+            "blocked_assignments",
+            "unavailable_tasks",
+          ]
+        : ["assigned", "in_progress", "rework", "submitted", "approved", "conflict"];
+  return (
+    <dl className={packages.elem("counts").toClassName()}>
+      {keys
+        .filter((key) => counts[key] !== undefined)
+        .map((key) => (
+          <div key={key}>
+            <dt>{t(`count_${key}`)}</dt>
+            <dd>{counts[key]}</dd>
+          </div>
+        ))}
+    </dl>
+  );
+};
+
+const countKey = (state) =>
+  ({
+    unassigned: "unassigned_tasks",
+    unavailable: "unavailable_tasks",
+  })[state] ?? state;
+
+export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue, onSelectPackage }) => {
   const { t } = useLocaleTranslation("taskPackages");
   const { t: tc } = useLocaleTranslation("collaboration");
   const api = useAPI();
@@ -50,6 +88,8 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(null);
   const [page, setPage] = useState(1);
+  const [filter, setFilter] = useState("");
+  const listPage = useRef(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -61,16 +101,24 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
   const request = useRef(null);
 
   const load = useCallback(
-    async (packageId = null, requestedPage = 1) => {
+    async (packageId = null, requestedPage = 1, state = "") => {
       const current = ++generation.current;
       setLoading(true);
       setData(null);
       setError("");
       setSelected(packageId);
+      setPage(requestedPage);
+      setFilter(state);
       try {
         const fetchPage = (value) =>
           callApi.current(packageId ? "taskPackageDetail" : "taskPackages", {
-            params: { pk: projectId, ...(packageId ? { package: packageId } : {}), page: value, page_size: 50 },
+            params: {
+              pk: projectId,
+              ...(packageId ? { package: packageId } : {}),
+              page: value,
+              page_size: 50,
+              ...(packageId && state ? { state } : {}),
+            },
             errorFilter: () => true,
           });
         let response = await fetchPage(requestedPage);
@@ -84,6 +132,7 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
         else {
           setData(response);
           setPage(requestedPage);
+          if (!packageId) listPage.current = requestedPage;
         }
       } catch {
         if (current === generation.current) setError("loadFailed");
@@ -102,6 +151,7 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
     setInstructions("");
     setSource("");
     setIds(initialTaskIds.join(", "));
+    listPage.current = 1;
     load();
     return () => {
       generation.current += 1;
@@ -187,11 +237,11 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
       <p>{t("boundary")}</p>
       <div className={packages.elem("toolbar").toClassName()}>
         {selected && (
-          <Button onClick={() => load()} disabled={loading || saving}>
+          <Button onClick={() => load(null, listPage.current)} disabled={loading || saving}>
             {t("back")}
           </Button>
         )}
-        <Button onClick={() => load(selected, page)} disabled={loading || saving}>
+        <Button onClick={() => load(selected, page, filter)} disabled={loading || saving}>
           {t("refresh")}
         </Button>
       </div>
@@ -199,17 +249,21 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
       {error && <p role="alert">{t(error)}</p>}
       {data && !selected && (
         <>
+          <p>{t("overlapNotice")}</p>
+          <p>{t(data.role === "manager" ? "managerScope" : data.role === "reviewer" ? "reviewScope" : "ownScope")}</p>
+          {data.as_of && <p>{t("asOf", { time: data.as_of })}</p>}
           <ul>
             {data.results.map((item) => (
-              <li key={item.id}>
-                <Button disabled={saving} onClick={() => load(item.id)}>
+              <li key={item.id} data-testid={`package-summary-${item.id}`}>
+                <Button disabled={saving} onClick={() => (onSelectPackage ? onSelectPackage(item) : load(item.id))}>
                   {item.name}
                 </Button>
+                <PackageCounts counts={item.counts} role={data.role} compact />
               </li>
             ))}
           </ul>
           {!data.results.length && <p>{t("empty")}</p>}
-          {data.can_create && (
+          {data.can_create && !onSelectPackage && (
             <form onSubmit={makePreview}>
               <h3>{t("createTitle")}</h3>
               <label>
@@ -275,17 +329,41 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
           <p className={packages.elem("instructions").toClassName()}>{data.package.instructions}</p>
           {data.role === "manager" && <p>{data.package.source_note}</p>}
           <p>{t(data.role === "manager" ? "managerScope" : data.role === "reviewer" ? "reviewScope" : "ownScope")}</p>
-          <dl className={packages.elem("counts").toClassName()}>
-            {Object.entries(data.counts).map(([key, value]) => (
-              <div key={key}>
-                <dt>{t(`count_${key}`)}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
+          <PackageCounts counts={data.counts} role={data.role} />
           <p>{t("asOf", { time: data.as_of })}</p>
-          {data.continue_url && <a href={data.continue_url} data-external>{t("continue")}</a>}
-          {data.can_review && onOpenReviewQueue && <Button onClick={() => onOpenReviewQueue(data.package.id)}>{t("reviewQueue")}</Button>}
+          {data.filter_states?.length > 0 && (
+            <div className={packages.elem("filters").toClassName()} role="group" aria-label={t("filterLabel")}>
+              <Button
+                disabled={loading}
+                look={filter ? "outlined" : undefined}
+                aria-pressed={!filter}
+                onClick={() => load(selected, 1)}
+              >
+                {t("allStates")}
+              </Button>
+              {data.filter_states.map((state) => (
+                <Button
+                  key={state}
+                  disabled={loading}
+                  aria-pressed={filter === state}
+                  look={filter === state ? undefined : "outlined"}
+                  onClick={() => load(selected, 1, state)}
+                >
+                  {t(`count_${countKey(state)}`)}
+                </Button>
+              ))}
+            </div>
+          )}
+          {filter && <p>{t("filteredRows", { count: data.count })}</p>}
+          {filter && data.role === "annotator" && <p>{t("filterHint")}</p>}
+          {!filter && data.continue_url && (
+            <a href={data.continue_url} data-external>
+              {t("continue")}
+            </a>
+          )}
+          {data.can_review && onOpenReviewQueue && (
+            <Button onClick={() => onOpenReviewQueue(data.package.id)}>{t("reviewQueue")}</Button>
+          )}
           <table>
             <thead>
               <tr>
@@ -324,11 +402,11 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
       )}
       {data && (
         <div className={packages.elem("toolbar").toClassName()}>
-          <Button disabled={!data.previous || loading || saving} onClick={() => load(selected, page - 1)}>
+          <Button disabled={!data.previous || loading || saving} onClick={() => load(selected, page - 1, filter)}>
             {t("previous")}
           </Button>
           <span>{t("page", { page })}</span>
-          <Button disabled={!data.next || loading || saving} onClick={() => load(selected, page + 1)}>
+          <Button disabled={!data.next || loading || saving} onClick={() => load(selected, page + 1, filter)}>
             {t("next")}
           </Button>
         </div>
