@@ -226,5 +226,18 @@
   "reviewBatches:answersUnchanged",
   "reviewBatches:diffUnavailable",
   "reviewBatches:originalRevision",
-  "reviewBatches:comparedRevision"
+  "reviewBatches:comparedRevision",
+  "reviewBatches:classificationDisagrees",
+  "reviewBatches:classificationAgrees",
+  "reviewBatches:classificationReason_insufficient_inputs",
+  "reviewBatches:classificationReason_duplicate_submitter",
+  "reviewBatches:classificationReason_missing_submitter",
+  "reviewBatches:classificationReason_invalid_source",
+  "reviewBatches:classificationReason_unsupported_config",
+  "reviewBatches:classificationReason_cancelled_or_missing",
+  "reviewBatches:classificationReason_missing_or_malformed",
+  "reviewBatches:classificationReason_config_mismatch",
+  "reviewBatches:classificationReason_task_data_mismatch",
+  "reviewBatches:classificationReason_source_unavailable",
+  "reviewBatches:classificationReason_unknown"
 ]
