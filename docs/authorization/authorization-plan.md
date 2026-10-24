@@ -1005,3 +1005,15 @@ The UI may invalidate a first attempt only for recognized preview rejection
 codes with matching HTTP statuses. Once confirmation is unknown, subsequent
 errors and late responses must preserve the original request/key; reads never
 resubmit it or silently create a replacement.
+
+### Frozen text classification arbitration (#81)
+
+Arbitration adds a separate immutable local ledger and independent disabled-by-default
+flag/mode map. Only current Managers dispatch/cancel; only the assigned independent
+Reviewer can adopt an existing frozen revision. All sources remain pinned and verified;
+source loss masks answers, while authorized original-key recovery retains receipts.
+Project-first fencing, CAS and PostgreSQL/SQLite constraints protect concurrent terminal
+transitions. Cancellation remains a SECURITY_CANCEL operation without READ_WORK.
+Recheck source graph projection, mapped principals, frozen triggers and response-time
+authority on upgrades. See [classification-arbitration-v1.md](classification-arbitration-v1.md).
+Submission, review state, sampling, Host and Core authority remain unchanged.

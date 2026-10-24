@@ -42,8 +42,8 @@ const allowed = {
     { text: "PDF", line: 468, reason: "The PDF file-format acronym is identical in both locales." },
   ],
   "apps/labelstudio/src/pages/DataManager/DataManager.jsx": [
-    { text: "English", line: 112, reason: "Language names are self-identifying choices." },
-    { text: "简体中文", line: 113, reason: "Language names are self-identifying choices." },
+    { text: "English", line: 113, reason: "Language names are self-identifying choices." },
+    { text: "简体中文", line: 114, reason: "Language names are self-identifying choices." },
   ],
   "libs/app-common/src/pages/AccountSettings/sections/Hotkeys/Import.tsx": [
     { text: '[{"id": 1, "section": "annotation-actions", "element": "button", "label": "Save", "key": "Ctrl+S"}]', line: 191, reason: "Example serialized hotkey payload; values must remain importable." },

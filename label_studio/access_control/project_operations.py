@@ -26,6 +26,8 @@ ASSIGN = 'assign'
 ORGANIZE_WORK = 'organize_work'
 ORGANIZE_REVIEW = 'organize_review'
 ORGANIZE_CLASSIFICATION = 'organize_classification'
+ORGANIZE_ARBITRATION = 'organize_arbitration'
+ARBITRATE = 'arbitrate'
 SECURITY_CANCEL = 'security_cancel'
 LEGACY_OPERATIONS = frozenset({READ_WORK, EDIT, SUBMIT, REVIEW, ASSIGN})
 
@@ -48,6 +50,8 @@ class LegacyProjectOperationProvider:
             operations = operations | {ORGANIZE_REVIEW}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_CLASSIFICATION}
+        if getattr(settings, 'ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED', False):
+            operations = operations | {ORGANIZE_ARBITRATION, ARBITRATE}
         if getattr(settings, 'ANNOTATION_FIXED_PACKAGES_ENABLED', False):
             return ProjectOperationPolicy('legacy-fixed-list-v1', 'legacy', operations | {ORGANIZE_WORK})
         return ProjectOperationPolicy('legacy-single-task-v1', 'legacy', operations)

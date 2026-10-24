@@ -23,6 +23,7 @@ import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReviewBatchEntry, ReviewBatches, ReviewBatchTitle } from "./ReviewBatches";
 import { ClassificationDisagreement, ClassificationEntry, ClassificationTitle } from "./ClassificationDisagreement";
 import { ClassificationBatches, ClassificationBatchEntry, ClassificationBatchTitle } from "./ClassificationBatches";
+import { ClassificationArbitrations, ClassificationArbitrationEntry, ClassificationArbitrationTitle } from "./ClassificationArbitrations";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
 
@@ -455,12 +456,23 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openArbitrations = (initialOrigin = null) => {
+    const trigger = document.activeElement;
+    modal({
+      title: <ClassificationArbitrationTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <ClassificationArbitrations projectId={project.id} initialOrigin={initialOrigin} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
+
   const openClassificationBatches = () => {
     const trigger = document.activeElement;
     modal({
       title: <ClassificationBatchTitle />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <ClassificationBatches projectId={project.id} />,
+      body: <ClassificationBatches projectId={project.id} onOpenArbitration={openArbitrations} />,
       onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
       style: { width: 1100, maxWidth: "calc(100vw - 32px)" },
     });
@@ -544,6 +556,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <ReviewBatchEntry projectId={project.id} onOpen={openReviewBatches} disabled={!localePreference.ready} />
       <ClassificationEntry projectId={project.id} onOpen={openClassification} disabled={!localePreference.ready} />
       <ClassificationBatchEntry projectId={project.id} onOpen={openClassificationBatches} disabled={!localePreference.ready} />
+      <ClassificationArbitrationEntry projectId={project.id} onOpen={() => openArbitrations()} disabled={!localePreference.ready} />
       {canManageAssignments && (
         <Button
           size="small"

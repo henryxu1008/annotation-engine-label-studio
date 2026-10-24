@@ -270,56 +270,83 @@ def metadata(batch, actor, role):
     return data
 
 
-def project_items(batch, actor, role):
+def _project_items(batch, actor, role, *, task_id=None, lock=False):
     items = visible_items(batch, actor, role)
-    task_ids = [item["task_id"] for item in items]
-    tasks = dict(Task.objects.filter(pk__in=task_ids).values_list("pk", "project_id"))
-    cohort = [entry for item in items for entry in item["cohort"]]
-    assignments = {a.pk: a for a in TaskAssignment.objects.filter(pk__in=[e["assignment_id"] for e in cohort])}
-    source_ids = [e["source"]["submission_id"] for e in cohort if e["source"]]
+    if task_id is not None:
+        items = [item for item in items if item['task_id'] == task_id]
+    task_ids = [item['task_id'] for item in items]
+    task_query = Task.objects.filter(pk__in=task_ids).order_by('pk')
+    if lock:
+        task_query = task_query.select_for_update()
+    tasks = dict(task_query.values_list('pk', 'project_id'))
+    cohort = [entry for item in items for entry in item['cohort']]
+    assignment_query = TaskAssignment.objects.filter(pk__in=[e['assignment_id'] for e in cohort]).order_by('pk')
+    if lock:
+        assignment_query = assignment_query.select_for_update()
+    assignments = {a.pk: a for a in assignment_query}
+    source_ids = [e['source']['submission_id'] for e in cohort if e['source']]
+    if lock:
+        list(
+            Submission.objects.filter(pk__in=source_ids)
+            .select_for_update()
+            .order_by('pk')
+            .values_list('pk', flat=True)
+        )
     sources = load_sources(source_ids)
     projected = []
     for item in items:
         rows, reason = [], None
-        if tasks.get(item["task_id"]) != batch.project_id:
-            reason = "source_unavailable"
-        for entry in item["cohort"]:
-            assignment = assignments.get(entry["assignment_id"])
+        if tasks.get(item['task_id']) != batch.project_id:
+            reason = 'source_unavailable'
+        for entry in item['cohort']:
+            assignment = assignments.get(entry['assignment_id'])
             if (
                 assignment is None
                 or assignment.project_id != batch.project_id
-                or assignment.task_id != item["task_id"]
-                or assignment.assignee_id != entry["assignee_id"]
+                or assignment.task_id != item['task_id']
+                or assignment.assignee_id != entry['assignee_id']
             ):
-                reason = "source_unavailable"
-            pin = entry["source"]
+                reason = 'source_unavailable'
+            pin = entry['source']
             if pin:
-                row = sources.get(pin["submission_id"])
+                row = sources.get(pin['submission_id'])
                 try:
                     valid = row is not None and valid_source(row, batch.project_id) and source_pin(row) == pin
                 except (TypeError, ValueError, KeyError):
                     valid = False
                 if not valid:
-                    reason = "source_unavailable"
+                    reason = 'source_unavailable'
                 else:
                     rows.append(row)
         report = (
-            service.unavailable(reason or item["selection_reason"])
-            if reason or item["selection_reason"]
+            service.unavailable(reason or item['selection_reason'])
+            if reason or item['selection_reason']
             else service.calculate(rows, batch.project_id)
         )
-        if not reason and frozen_result(report) != item["result"]:
-            reason = "source_integrity_failed"
+        if not reason and frozen_result(report) != item['result']:
+            reason = 'source_integrity_failed'
             report = service.unavailable(reason)
         projected.append(
             {
-                "task_id": item["task_id"],
-                "outcome": outcome(report),
-                "inputs": [] if reason else [entry["source"] for entry in item["cohort"] if entry["source"]],
+                'task_id': item['task_id'],
+                'outcome': outcome(report),
+                'inputs': [] if reason else [entry['source'] for entry in item['cohort'] if entry['source']],
                 **report,
             }
         )
-    return projected
+    return projected, sources
+
+
+def project_items(batch, actor, role):
+    return _project_items(batch, actor, role)[0]
+
+
+def project_item_sources(batch, actor, role, task_id, *, lock=False):
+    """Share exact-source checks with arbitration, without fetching unrelated tasks."""
+    items, sources = _project_items(batch, actor, role, task_id=task_id, lock=lock)
+    if not items:
+        raise NotFound()
+    return items[0], sources
 
 
 def counts(items):

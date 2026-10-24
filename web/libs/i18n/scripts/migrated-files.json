@@ -103,5 +103,6 @@
   "apps/labelstudio/src/pages/DataManager/ReleaseSnapshots.jsx",
   "apps/labelstudio/src/pages/DataManager/ReworkComparison.jsx",
   "apps/labelstudio/src/pages/DataManager/ClassificationDisagreement.jsx",
-  "apps/labelstudio/src/pages/DataManager/ClassificationBatches.jsx"
+  "apps/labelstudio/src/pages/DataManager/ClassificationBatches.jsx",
+  "apps/labelstudio/src/pages/DataManager/ClassificationArbitrations.jsx"
 ]

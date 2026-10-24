@@ -5,6 +5,7 @@ import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { ClassificationResult } from "./ClassificationDisagreement";
+import { ClassificationArbitrationEntry } from "./ClassificationArbitrations";
 import "./ReviewBatches.scss";
 import "./ClassificationBatches.scss";
 
@@ -63,7 +64,7 @@ export const ClassificationBatchEntry = ({ projectId, onOpen, disabled }) => {
     data-testid="open-classification-batches">{t("batchTitle")}</Button> : null;
 };
 
-export const ClassificationBatches = ({ projectId }) => {
+export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), focusTask = useRef(null), root = useRef(null);
@@ -217,6 +218,8 @@ export const ClassificationBatches = ({ projectId }) => {
       <Button disabled={busy} onClick={() => loadList()}>{t("batchBackList")}</Button>
       {answer ? <>
         <Button onClick={() => openBatch(batchId, page, state)}>{t("batchBackQueue")}</Button>
+        {answer.item.outcome === "disagreement" && answer.manifest_hash && <ClassificationArbitrationEntry projectId={projectId} dispatch
+          onOpen={onOpenArbitration ? () => onOpenArbitration({ batch_id: answer.id, task_id: answer.item.task_id, expected_manifest_hash: answer.manifest_hash }) : undefined} />}
         <ClassificationResult report={report} durable />
       </> : detail && queue && <>
         <h3>{detail.name}</h3>
