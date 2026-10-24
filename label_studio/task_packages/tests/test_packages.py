@@ -21,6 +21,7 @@ from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.test import APIClient, APITestCase
 from task_packages import api as package_api
+from task_packages import progress as package_progress
 from task_packages.models import TaskPackage, TaskPackageItem
 from tasks.models import AnnotationDraft, Submission, Task, TaskAssignment
 from tasks.tests.factories import TaskFactory
@@ -110,6 +111,12 @@ class TestPackages(PackageFixture, APITestCase):
         ids = [task.pk for task in [*self.tasks, *additional]]
         response = self.create(task_ids=ids)
         assert response.status_code == 201, response.content
+        if connection.vendor == 'postgresql':
+            # Repeated membership semijoins can make this small summary scan
+            # a thousand-item scope for minutes under a different query plan.
+            # Bound actual SQL execution, rather than asserting a SQL shape.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '10s'")
         page = self.client.get(f'{self.url}{response.json()["id"]}/', {'page_size': 100}).json()
         assert page['count'] == page['counts']['fixed_tasks'] == page['counts']['unassigned_tasks'] == 1000
         assert len(page['results']) == 100 and page['next'] is not None
@@ -274,10 +281,11 @@ class TestPackages(PackageFixture, APITestCase):
             for params in (
                 {'assignee': self.other.pk},
                 {'project': project.pk},
-                {'state': 'approved'},
+                {'state': 'unsupported'},
             ):
                 assert self.client.get(url, params).status_code == 400
         assert self.client.post(f'{self.url}{package_id}/dispatch/', {}, format='json').status_code == 404
+        assert self.client.get(self.url, {'state': 'approved'}).status_code == 400
 
     def test_revocation_is_live_for_list_detail_and_create_and_no_store(self):
         package_id = self.create().json()['id']
@@ -582,7 +590,7 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
         member = ProjectMember.objects.get(project=self.project, user=self.other)
         reader = self.client_for(self.other)
         writer = self.client_for(self.manager)
-        original = package_api.live_items
+        original = package_progress.live_items
         for change in ({'enabled': False}, {'role': 'annotator'}):
             ProjectMember.objects.filter(pk=member.pk).update(role='manager', enabled=True)
             entered, release = Event(), Event()
@@ -599,7 +607,7 @@ class TestPackageConcurrency(PackageFixture, TransactionTestCase):
                 finally:
                     close_old_connections()
 
-            with patch('task_packages.api.live_items', side_effect=pause_before_aggregates), ThreadPoolExecutor(
+            with patch('task_packages.progress.live_items', side_effect=pause_before_aggregates), ThreadPoolExecutor(
                 max_workers=1
             ) as pool:
                 future = pool.submit(read)
