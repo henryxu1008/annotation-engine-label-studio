@@ -60,7 +60,9 @@ jobs:
       - name: Install backend OS dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gettext libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          # DOM assertions alone cannot detect missing Chinese screenshot glyphs.
+          test -n "$(fc-list :lang=zh-cn family)"
       - name: Install backend dependencies
         run: poetry install --with test
       - name: Prepare fresh synthetic database
