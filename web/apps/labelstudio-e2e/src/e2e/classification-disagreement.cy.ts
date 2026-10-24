@@ -11,8 +11,20 @@ describe("read-only classification disagreement", () => {
       let receipt: string, initial: any;
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, "/user/account/personal-info");
-        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.get('[data-testid="language-preference-select"]').should("be.enabled").then(($select) => {
+          if ($select.val() !== locale) {
+            cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("classificationLocaleSaved");
+            cy.get('[data-testid="language-preference-select"]').select(locale);
+            cy.wait("@classificationLocaleSaved").then(({ response }) => {
+              expect(response?.statusCode).to.eq(200);
+              expect(response?.body.preference).to.eq(locale);
+            });
+          }
+        });
+        cy.get('[data-testid="language-preference-select"]').should("have.value", locale).and("not.be.disabled");
+        cy.get("html").should("have.attr", "lang", locale);
         cy.visit(path);
+        cy.get("html").should("have.attr", "lang", locale);
       };
       const open = () => cy.get('[data-testid="open-classification-disagreement"]', { timeout: 30000 }).click();
       const choose = (name: string) => {
