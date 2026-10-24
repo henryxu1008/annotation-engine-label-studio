@@ -124,6 +124,23 @@ class TestClassificationBatchConcurrency(TransactionTestCase):
         assert response.data["display_context"]["reason"] == "CLASSIFICATION_BATCH_KEY_CONFLICT"
         assert ClassificationBatch.objects.count() == 1
 
+    def test_original_key_recovery_rechecks_revocation_after_waiting(self):
+        body, key, attempted = self.body(), uuid4(), threading.Event()
+        created = self.create(body, key)
+        assert created.status_code == 201
+        client = self.client_for()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                Project.objects.select_for_update().get(pk=self.project.pk)
+                future = pool.submit(self.post, client, body, key, attempted)
+                assert attempted.wait(20)
+                OrganizationMember.objects.filter(organization=self.org, user=self.manager).update(
+                    deleted_at=timezone.now()
+                )
+            response = future.result(25)
+        assert response.status_code in (403, 404) and "replayed" not in response.data
+        assert ClassificationBatch.objects.get().pk == created.data["id"]
+
     def test_new_revision_commits_before_waiting_creation(self):
         body, client, attempted = self.body(), self.client_for(), threading.Event()
         with ThreadPoolExecutor(max_workers=1) as pool:

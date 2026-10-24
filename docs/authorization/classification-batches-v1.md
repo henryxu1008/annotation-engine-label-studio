@@ -44,7 +44,7 @@ locations and calculation hash. No complete text, raw snapshot or answer sets
 are copied. Authorized detail reads recover answers only from verified exact
 sources and check the frozen calculation hash.
 
-PostgreSQL/SQLite UPDATE triggers guard all frozen fields, including bulk/SQL
+PostgreSQL/SQLite UPDATE triggers guard the primary key and all frozen fields, including bulk/SQL
 updates. Creator FK may become null but cannot be rebound; frozen creator pins
 remain. Source deletion does not cascade to the batch. Existing project deletion
 cascades still apply: this is durable local work history, not permanent audit
@@ -53,6 +53,12 @@ retention or a delivery Manifest. No update/delete API or editable admin exists.
 Input limits are inclusive: 100 tasks, 20 active participants per task, 2,000 total
 participants, 8,388,608 cumulative canonical snapshot JSON bytes. Reject the whole
 request with 422; do not truncate, sample, split automatically or enqueue jobs.
+Snapshot loading uses a one-row iterator and checks canonical bytes before
+retaining each row or decoding later rows. It never reads live Task.data/meta or
+review comments, which are not frozen inputs. A single snapshot must still be
+decoded to measure its exact canonical bytes; this is not a wire-size preflight.
+If changed live sources exceed the frozen budget on a read, hide the answer set
+as unavailable and stop loading later sources.
 
 ## API and idempotency
 

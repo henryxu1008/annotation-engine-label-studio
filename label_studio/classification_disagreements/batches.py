@@ -81,9 +81,51 @@ def frozen_result(report):
     }
 
 
+def load_sources(ids, *, strict=False):
+    # Check each decoded snapshot before retaining it or fetching the next one.
+    # Live task bodies and review comments are not classification inputs.
+    query = (
+        Submission.objects.filter(pk__in=ids)
+        .select_related("assignment__task", "review")
+        .only(
+            "id",
+            "assignment_id",
+            "revision",
+            "result_snapshot",
+            "result_hash",
+            "submitted_by_id",
+            "status",
+            "assignment__id",
+            "assignment__task_id",
+            "assignment__project_id",
+            "assignment__assignee_id",
+            "assignment__task__id",
+            "assignment__task__project_id",
+            "review__id",
+            "review__decision",
+        )
+        .order_by("pk")
+    )
+    used_bytes, sources = 0, {}
+    for row in query.iterator(chunk_size=1):
+        try:
+            used_bytes += len(canonical(row.result_snapshot))
+        except (TypeError, ValueError):
+            if strict:
+                fail("CLASSIFICATION_BATCH_SOURCE_INVALID")
+            return {}
+        if used_bytes > MAX_BYTES:
+            if strict:
+                too_large()
+            # A corrupted live source cannot reveal a partial frozen answer set.
+            return {}
+        sources[row.pk] = row
+    return sources
+
+
 def build_plan(project, ids, *, lock=False):
     ids = positive_ids(ids)
-    tasks = Task.objects.filter(pk__in=ids).order_by("pk")
+    tasks = Task.objects.filter(pk__in=ids).only("id", "project_id").order_by("pk")
     if lock:
         tasks = tasks.select_for_update()
     tasks = list(tasks)
@@ -116,22 +158,14 @@ def build_plan(project, ids, *, lock=False):
             .order_by("pk")
             .values_list("pk", flat=True)
         )
-    sources = {
-        row.assignment_id: row
-        for row in Submission.objects.filter(pk__in=source_ids)
-        .select_related("assignment__task", "review")
-        .order_by("pk")
-    }
-    used_bytes, items = 0, []
+    sources = {row.assignment_id: row for row in load_sources(source_ids, strict=True).values()}
+    items = []
     for task_id in ids:
         cohort, rows, reason = [], [], None
         for assignment in grouped[task_id]:
             row = sources.get(assignment.pk)
             if row is not None:
                 try:
-                    used_bytes += len(canonical(row.result_snapshot))
-                    if used_bytes > MAX_BYTES:
-                        too_large()
                     valid = valid_source(row, project.pk)
                 except (TypeError, ValueError, KeyError):
                     valid = False
@@ -243,10 +277,7 @@ def project_items(batch, actor, role):
     cohort = [entry for item in items for entry in item["cohort"]]
     assignments = {a.pk: a for a in TaskAssignment.objects.filter(pk__in=[e["assignment_id"] for e in cohort])}
     source_ids = [e["source"]["submission_id"] for e in cohort if e["source"]]
-    sources = {
-        row.pk: row
-        for row in Submission.objects.filter(pk__in=source_ids).select_related("assignment__task", "review")
-    }
+    sources = load_sources(source_ids)
     projected = []
     for item in items:
         rows, reason = [], None

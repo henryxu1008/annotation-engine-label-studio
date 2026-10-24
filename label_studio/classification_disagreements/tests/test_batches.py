@@ -262,6 +262,7 @@ class TestClassificationBatches(APITestCase):
     def test_freeze_guards_cover_bulk_and_sql_and_allow_only_creator_null_cleanup(self):
         batch = self.new_batch()
         changes = {
+            "id": batch.pk + 100000,
             "project_id": self.other.pk,
             "creator_principal": "other",
             "actor_id_frozen": self.worker.pk,
@@ -283,6 +284,61 @@ class TestClassificationBatches(APITestCase):
         ClassificationBatch.objects.filter(pk=batch.pk).update(created_by=None)
         batch.refresh_from_db()
         assert batch.actor_id_frozen == self.manager.pk
+
+    def test_over_budget_stops_decoding_later_snapshots(self):
+        loaded = []
+        from_db = Submission.from_db
+
+        def record(db, fields, values):
+            row = from_db(db, fields, values)
+            if "result_snapshot" in fields:
+                loaded.append(row.pk)
+            return row
+
+        size = len(batches.canonical(self.first.result_snapshot))
+        with patch.object(Submission, "from_db", side_effect=record), patch.object(batches, "MAX_BYTES", size - 1):
+            response = self.client.post(self.base + "preview/", self.args, format="json")
+        assert response.status_code == 422
+        assert loaded == [self.first.pk], "An over-budget source must stop later snapshot decoding"
+        assert not ClassificationBatch.objects.exists()
+
+    def test_plan_and_reads_never_load_unfrozen_task_payloads(self):
+        # Large mutable task bodies are outside the frozen snapshot byte budget.
+        Task.objects.filter(pk=self.first.assignment.task_id).update(
+            data={"text": "live body" * 100000}, meta={"unused": "metadata" * 100000}
+        )
+        from_db = Task.from_db
+
+        def scope_only(db, fields, values):
+            assert "data" not in fields and "meta" not in fields
+            return from_db(db, fields, values)
+
+        with patch.object(Task, "from_db", side_effect=scope_only):
+            batch = self.new_batch()
+            assert self.item(batch).data["item"]["agreement"] == 1
+
+    def test_oversized_changed_source_masks_answers_and_stops_later_decoding(self):
+        batch = self.new_batch()
+        snapshot = copy.deepcopy(self.first.result_snapshot)
+        snapshot["task"]["meta"] = {"oversized": "x" * batches.MAX_BYTES}
+        Submission.objects.filter(pk=self.first.pk).update(result_snapshot=snapshot, result_hash=_snapshot_hash(snapshot))
+        loaded, from_db = [], Submission.from_db
+
+        def record(db, fields, values):
+            row = from_db(db, fields, values)
+            if "result_snapshot" in fields:
+                loaded.append(row.pk)
+            return row
+
+        with patch.object(Submission, "from_db", side_effect=record):
+            response = self.item(batch)
+        assert response.status_code == 200, response.data
+        assert loaded == [self.first.pk, self.first.pk]  # Materialization and final recheck.
+        report = response.data["item"]
+        assert report["outcome"] == "unavailable" and report["agreement"] is None
+        assert report["inputs"] == [] and report["locations"] == []
+        batch.refresh_from_db()
+        assert batches.digest(batch.manifest) == batch.manifest_hash
 
     def test_exact_budget_boundaries_and_no_partial_batch(self):
         # Canonical bytes, including Unicode, not Python character count.

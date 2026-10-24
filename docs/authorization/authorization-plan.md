@@ -996,3 +996,8 @@ answers/scores without changing the frozen batch. PostgreSQL/SQLite triggers
 protect the manifest; retain the projects.0028 → core.0001 schema dependency on
 upgrades. See classification-batches-v1.md. Core-only-review denies all new batch
 routes; no arbitration, sampling, review, export or Host authority is introduced.
+Migration 0003 also freezes the batch primary key, preserving object identity
+and original-key recovery for databases that already applied 0002. Bound source
+loading before retaining each decoded snapshot; never load unfrozen Task.data,
+Task.meta or review comments for this calculation. An over-budget changed source
+masks answers rather than returning partial comparisons.
