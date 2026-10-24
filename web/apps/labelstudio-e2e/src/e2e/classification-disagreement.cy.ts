@@ -62,6 +62,11 @@ describe("read-only classification disagreement", () => {
       choose("remote"); compare();
       cy.get('[data-testid="classification-unavailable"]').should("contain.text", zh ? "静态全局 Choices" : "static global Choices");
       cy.get('[data-testid="classification-agreement"]').should("not.exist");
+      for (const unsupported of ["resolver", "dynamic"]) {
+        choose(unsupported); compare();
+        cy.get('[data-testid="classification-unavailable"]').should("contain.text", zh ? "静态全局 Choices" : "static global Choices");
+        cy.get('[data-testid="classification-agreement"]').should("not.exist");
+      }
       visit("a");
       cy.get('[data-testid="open-classification-disagreement"]').should("not.exist");
       cy.then(() => cy.request({ url: `${base}tasks/${scope.cases.split.task}/`, qs: { frozen: receipt }, failOnStatusCode: false }))

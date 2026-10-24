@@ -85,7 +85,7 @@ def controls(xml):
     # Text may fetch a mutable document when valueType=url. Submission snapshots
     # preserve task data, not that fetched body, so a pinned URL cannot prove
     # that the annotators saw identical text.
-    if any(node.tag == 'Text' and node.get('valuetype', 'text') != 'text' for node in nodes):
+    if any(node.tag == 'Text' and (node.get('valuetype', 'text') != 'text' or node.get('resolver')) for node in nodes):
         raise Incomparable('unsupported_config')
     texts = {node.get('name'): node.get('value') for node in nodes if node.tag == 'Text'}
     names = [node.get('name') for node in nodes if node.tag in ('Text', 'Choices')]
@@ -105,6 +105,7 @@ def controls(xml):
             or node.get('perregion', 'false') != 'false'
             or node.get('peritem', 'false') != 'false'
             or node.get('visiblewhen')
+            or node.get('value')
         ):
             raise Incomparable('unsupported_config')
         labels = [choice.get('value') for choice in node]

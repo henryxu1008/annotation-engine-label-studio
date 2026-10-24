@@ -95,3 +95,49 @@ it("does not expose the entry when the capability read is denied", async () => {
   expect(screen.queryByTestId("open-classification-disagreement")).toBeNull();
   unmount(); runtime.destroy();
 });
+
+it("drops late source identities after the task changes", async () => {
+  const { unmount, runtime } = mount();
+  let finish;
+  mockCallApi.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Load available revisions" }));
+  fireEvent(window, new Event("blur"));
+  fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "9" } });
+  const next = pins.map((pin) => ({ ...pin, submission_id: pin.submission_id + 20, task_id: 9 }));
+  mockCallApi.mockResolvedValueOnce({ sources: next, max_inputs: 20 });
+  fireEvent.click(screen.getByRole("button", { name: "Load available revisions" }));
+  await screen.findByRole("checkbox", { name: /Submission #21/ });
+  await act(async () => finish({ sources: pins, max_inputs: 20 }));
+  expect(screen.queryByRole("checkbox", { name: /Submission #1 ·/ })).toBeNull();
+  expect(screen.getByRole("checkbox", { name: /Submission #21/ })).toBeTruthy();
+  unmount(); runtime.destroy();
+});
+
+it("does not let a stale rejected request erase a successful frozen retry", async () => {
+  const { unmount, runtime } = mount();
+  await calculate();
+  let reject;
+  mockCallApi.mockImplementationOnce(() => new Promise((_, failure) => { reject = failure; }));
+  fireEvent.click(screen.getByRole("button", { name: "Recheck frozen inputs" }));
+  fireEvent(window, new Event("blur"));
+  fireEvent.click(screen.getByRole("button", { name: "Recheck frozen inputs" }));
+  await screen.findByTestId("classification-report");
+  await act(async () => reject(new Error("late denied request")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByTestId("classification-report").textContent).toContain("fixed-time");
+  unmount(); runtime.destroy();
+});
+
+it("drops a pending report when the project scope changes", async () => {
+  const { rerender, unmount, runtime, Provider } = mount();
+  await calculate();
+  let finish;
+  mockCallApi.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Recheck frozen inputs" }));
+  rerender(<Provider><ClassificationDisagreement projectId={5} initialTaskId={8} /></Provider>);
+  await act(async () => finish(response()));
+  expect(screen.queryByTestId("classification-report")).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Recheck frozen inputs" })).toBeNull();
+  unmount(); runtime.destroy();
+});

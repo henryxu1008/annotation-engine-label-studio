@@ -26,6 +26,12 @@ class ComparisonAPI(generics.GenericAPIView):
             service.task_scope(project, task_id)
         return principal, actor, project, role
 
+    def recheck_context(self, request, pk, task_id, principal, actor, role):
+        current_principal, current_actor, project, current_role = self.context(request, pk, task_id)
+        if current_principal != principal or current_actor.pk != actor.pk or current_role != role:
+            fail('CLASSIFICATION_AUTHORITY_CHANGED')
+        return project
+
 
 class CapabilityAPI(ComparisonAPI):
     def get(self, request, pk):
@@ -46,14 +52,15 @@ class SourcesAPI(ComparisonAPI):
         if len(rows) > 100:
             fail('CLASSIFICATION_TOO_MANY_SOURCES', 422)
         data = [{**service.pin(row), 'status': row.status} for row in rows]
-        _, _, current_project, current_role = self.context(request, pk, task_id)
+        current_project = self.recheck_context(request, pk, task_id, principal, actor, role)
         current = list(
-            service.sources(current_project, task_id, actor, current_role).order_by(
-                'submitted_by_id', '-revision', '-pk'
-            )[:101]
+            service.sources(current_project, task_id, actor, role).order_by('submitted_by_id', '-revision', '-pk')[
+                :101
+            ]
         )
-        if role != current_role or data != [{**service.pin(row), 'status': row.status} for row in current]:
+        if data != [{**service.pin(row), 'status': row.status} for row in current]:
             fail('CLASSIFICATION_SOURCES_CHANGED')
+        self.recheck_context(request, pk, task_id, principal, actor, role)
         return Response({'sources': data, 'max_inputs': service.MAX_INPUTS})
 
 
@@ -129,17 +136,13 @@ class ReportAPI(ComparisonAPI):
             fail('CLASSIFICATION_INPUT_CHANGED')
         # Refetch the exact input set and live authority after constructing the
         # projection. Never substitute newest revisions or another submitter.
-        _, _, current_project, current_role = self.context(request, pk, task_id)
-        current = list(
-            service.sources(current_project, task_id, actor, current_role).filter(pk__in=ids).order_by('pk')
-        )
-        if current_role != role or [service.pin(row) for row in current] != inputs:
+        current_project = self.recheck_context(request, pk, task_id, principal, actor, role)
+        current = list(service.sources(current_project, task_id, actor, role).filter(pk__in=ids).order_by('pk'))
+        if [service.pin(row) for row in current] != inputs:
             fail('CLASSIFICATION_INPUT_CHANGED')
         if len(rows) == len(ids) and service.calculate(current, project.pk) != result:
             fail('CLASSIFICATION_INPUT_CHANGED')
-        _, final_role = service.guard(pk, principal, actor)
-        if final_role != role:
-            fail('CLASSIFICATION_INPUT_CHANGED')
+        self.recheck_context(request, pk, task_id, principal, actor, role)
         return Response(
             {
                 'schema': service.SALT,

@@ -58,8 +58,12 @@ class Command(BaseCommand):
                     project=project, user=user, role=role if role in ('manager', 'reviewer') else 'annotator'
                 )
             cases, tasks = {}, []
-            for case in ('agreement', 'split', 'missing', 'config', 'remote'):
-                text = 'https://synthetic.invalid/mutable.txt' if case == 'remote' else f'Synthetic 分类 {case}'
+            for case in ('agreement', 'split', 'missing', 'config', 'remote', 'resolver', 'dynamic'):
+                text = (
+                    'https://synthetic.invalid/mutable.txt'
+                    if case in ('remote', 'resolver')
+                    else f'Synthetic 分类 {case}'
+                )
                 task = Task.objects.create(project=project, data={'text': text})
                 tasks.append(task)
                 sources = []
@@ -92,6 +96,13 @@ class Command(BaseCommand):
                         snapshot['project']['label_config'] = config.replace('Negative', 'Other')
                     if case == 'remote':
                         snapshot['project']['label_config'] = config.replace('<Text ', '<Text valueType="url" ')
+                    if case == 'resolver':
+                        snapshot['project']['label_config'] = config.replace(
+                            '<Text ', '<Text valueType="text" resolver="csv" '
+                        )
+                    if case == 'dynamic':
+                        snapshot['project']['label_config'] = config.replace('<Choices ', '<Choices value="$options" ')
+                        snapshot['task']['data']['options'] = [{'value': 'Positive'}, {'value': 'Negative'}]
                     source = Submission.objects.create(
                         assignment=assignment,
                         annotation=annotation,

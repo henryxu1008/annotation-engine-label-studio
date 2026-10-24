@@ -980,3 +980,7 @@ tuples and current authority after materialization. Signed receipts never grant
 access or replace unavailable inputs with latest revisions. Preserve independent
 feature/mode gates and Core-only denial on upgrades; no review, assignment,
 arbitration or release authority is introduced. See classification-disagreement-v1.md.
+Repeated checks must bind the same trusted principal, local actor and role, not
+only a same-name role. The metric supports inline Text without resolvers and
+static Choices only; editor remote resolvers and dynamic label sources cannot
+stand in for immutable displayed-content evidence.

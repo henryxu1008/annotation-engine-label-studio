@@ -47,6 +47,11 @@ Text must use inline task data (the normal default or explicit `valueType="text"
 identical: Submission snapshots do not preserve the fetched document body, so
 neither matching addresses nor a signed receipt proves identical displayed text.
 The projection never fetches a URL to manufacture missing immutable evidence.
+Text resolvers (including CSV with explicit inline `valueType="text"`) are also
+unavailable: the upstream editor resolves them before applying valueType. Choices
+with a dynamic `value` remain outside the static-label first slice, even when
+static child Choices are also present. Attribute names follow upstream lowercase
+semantics; contradictory case-duplicate attributes are rejected.
 Exact frozen XML must match, and frozen task data must match. This intentionally
 does not infer equivalence between different configurations or question contents.
 
@@ -74,6 +79,10 @@ read. Both collection and exact-source reads repeat object scope; ID swapping,
 mutable actor fields, self-sources and cross-project receipts do not expand it.
 Refetch exact inputs and live authority after constructing results. Concurrent
 revocation, deletion or changed evidence discards the materialized answer payload.
+Every repeated check must resolve the same trusted principal, mapped local actor
+and role. A same-role remapping cannot retain the original actor's self-source
+filter or borrow the session user's wider permissions. Drift discards source
+identities and report values, including drift during final serialization.
 Responses are private/no-store; referrer policy is no-referrer. UI generations
 discard stale scope/blur responses and clear evidence before reads or after
 failure. Frozen retries use GET only. Returning through the existing modal keeps

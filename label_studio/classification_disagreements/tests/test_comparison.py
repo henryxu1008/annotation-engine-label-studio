@@ -1,6 +1,7 @@
 import copy
 from unittest.mock import patch
 
+from access_control.identity import get_identity_provider
 from classification_disagreements import service
 from django.test import override_settings
 from rest_framework.test import APITestCase
@@ -218,6 +219,89 @@ class TestClassification(APITestCase):
         assert data['agreement'] == 0
         assert {row['from_name']: row['agreement'] for row in data['locations']} == {'second': 0, 'sentiment': 1}
 
+    def test_resolvers_and_dynamic_choices_are_not_frozen_display_evidence(self):
+        for config in (
+            CONFIG.replace('<Text ', '<Text resolver="csv" '),
+            CONFIG.replace('<Text ', '<Text valueType="text" ReSoLvEr="csv|column=body" '),
+            CONFIG.replace('<Choices ', '<Choices value="$options" '),
+        ):
+            for row in (self.first, self.second):
+
+                def dynamic(snapshot):
+                    snapshot['project']['label_config'] = config
+                    snapshot['task']['data']['text'] = 'https://synthetic.invalid/mutable.csv'
+                    snapshot['task']['data']['options'] = [{'value': 'Positive'}, {'value': 'Negative'}]
+
+                self.set_answer(row, 'Positive', dynamic)
+            initial = self.read().data
+            replay = self.read(frozen=initial['frozen']).data
+            for report in (initial, replay):
+                assert report['reason'] == 'unsupported_config', report
+                assert report['agreement'] is None and report['locations'] == []
+            assert initial['manifest'] == replay['manifest']
+
+    def test_mapped_actor_change_during_report_discards_the_projection(self):
+        third = self.make_source(worker=self.manager)
+        third.assignment.task = self.first.assignment.task
+        third.assignment.save()
+        self.set_answer(third, 'Negative')
+        self.member.role = 'reviewer'
+        self.member.save()
+        calculate = service.calculate
+
+        calls, threshold = 0, 1
+
+        def remap(rows, project_id):
+            nonlocal calls
+            result = calculate(rows, project_id)
+            calls += 1
+            if calls == threshold:
+                fixtures.MappedIdentity.actor = self.worker
+            return result
+
+        with override_settings(ANNOTATION_IDENTITY_PROVIDER='review_batches.tests.test_batches.MappedIdentity'):
+            get_identity_provider.cache_clear()
+            try:
+                for threshold in (1, 2):
+                    calls = 0
+                    fixtures.MappedIdentity.actor = self.reviewer
+                    with patch.object(service, 'calculate', remap):
+                        response = self.read([self.first, third])
+                    assert response.status_code == 409, response.data
+                    assert 'locations' not in response.data
+            finally:
+                fixtures.MappedIdentity.actor = None
+                get_identity_provider.cache_clear()
+
+    def test_mapped_actor_change_during_source_listing_discards_identities(self):
+        self.member.role = 'reviewer'
+        self.member.save()
+        pin = service.pin
+
+        calls, threshold = 0, 1
+
+        def remap(row):
+            nonlocal calls
+            result = pin(row)
+            calls += 1
+            if calls == threshold:
+                fixtures.MappedIdentity.actor = self.worker
+            return result
+
+        with override_settings(ANNOTATION_IDENTITY_PROVIDER='review_batches.tests.test_batches.MappedIdentity'):
+            get_identity_provider.cache_clear()
+            try:
+                for threshold in (1, 2):
+                    calls = 0
+                    fixtures.MappedIdentity.actor = self.reviewer
+                    with patch.object(service, 'pin', remap):
+                        response = self.client.get(self.url + 'sources/')
+                    assert response.status_code == 409, response.data
+                    assert 'sources' not in response.data
+            finally:
+                fixtures.MappedIdentity.actor = None
+                get_identity_provider.cache_clear()
+
     def test_hash_corruption_and_frozen_source_deletion_do_not_fallback(self):
         frozen = self.read().data['frozen']
         self.second.delete()
@@ -235,6 +319,17 @@ class TestClassification(APITestCase):
         assert [row['submission_id'] for row in sources] == [self.first.pk]
         self.review_member.delete()
         assert self.read([self.first]).status_code in (403, 404)
+
+    def test_mapped_annotator_cannot_borrow_session_manager_authority(self):
+        with override_settings(ANNOTATION_IDENTITY_PROVIDER='review_batches.tests.test_batches.MappedIdentity'):
+            get_identity_provider.cache_clear()
+            try:
+                fixtures.MappedIdentity.actor = self.worker
+                for path in (self.url, self.url + 'sources/', self.base + 'capability/'):
+                    assert self.client.get(path).status_code in (403, 404)
+            finally:
+                fixtures.MappedIdentity.actor = None
+                get_identity_provider.cache_clear()
 
     def test_token_is_not_authority_and_cannot_change_project_or_actor(self):
         token = self.read().data['frozen']
