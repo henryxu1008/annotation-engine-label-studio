@@ -83,6 +83,92 @@ it("keeps the original body/key after an unknown acknowledgement and read-only r
   unmount(); runtime.destroy();
 });
 
+it.each([
+  ["en-US", 409, "CLASSIFICATION_BATCH_PREVIEW_CHANGED"],
+  ["zh-CN", 409, "CLASSIFICATION_BATCH_PREVIEW_CHANGED"],
+  ["en-US", 400, "CLASSIFICATION_BATCH_PREVIEW_INVALID"],
+  ["zh-CN", 400, "CLASSIFICATION_BATCH_PREVIEW_INVALID"],
+  ["en-US", 422, "CLASSIFICATION_BATCH_TOO_LARGE"],
+])("allows a fresh preview after a definite first rejection in %s (%s)", async (locale, status, reason) => {
+  let attempts = 0, plans = 0;
+  mockCallApi.mockImplementation(async (method, options) => {
+    if (method === "createClassificationBatch" && ++attempts === 1) {
+      return { error: "rejected", $meta: { ok: false, status }, response: { display_context: { reason } } };
+    }
+    const data = await respond(method, options);
+    return method === "classificationBatchPreview" && ++plans > 1
+      ? { ...data, preview_token: "fresh-signed", plan_hash: "fresh-plan" } : data;
+  });
+  const { runtime, unmount } = mount(locale), zh = locale === "zh-CN";
+  await create(zh);
+  expect((await screen.findByRole("alert")).textContent).toContain(zh ? "预览已失效" : "Preview is no longer valid");
+  expect(screen.queryByRole("button", { name: zh ? "恢复原请求" : "Recover original request" })).toBeNull();
+  expect(screen.getByLabelText(zh ? "批次名称" : "Batch name").value).toBe("Synthetic batch");
+  fireEvent.click(screen.getByRole("button", { name: zh ? "预览比较" : "Preview comparison" }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "创建冻结批次" : "Create frozen batch" }));
+  await screen.findByRole("button", { name: zh ? "查看冻结对照" : "View frozen comparison" });
+  const calls = mockCallApi.mock.calls.filter(([method]) => method === "createClassificationBatch");
+  expect(calls).toHaveLength(2);
+  expect(calls[1][1].headers["Idempotency-Key"]).not.toBe(calls[0][1].headers["Idempotency-Key"]);
+  expect(calls[1][1].body).toEqual({ preview_token: "fresh-signed", expected_plan_hash: "fresh-plan" });
+  unmount(); runtime.destroy();
+});
+
+it("does not discard an already unknown intent after a rejected recovery", async () => {
+  let attempts = 0;
+  mockCallApi.mockImplementation(async (method, options) => {
+    if (method === "createClassificationBatch") {
+      if (++attempts === 1) throw new Error("lost acknowledgement");
+      return { error: "rejected", $meta: { ok: false, status: 409 },
+        response: { display_context: { reason: "CLASSIFICATION_BATCH_PREVIEW_CHANGED" } } };
+    }
+    return respond(method, options);
+  });
+  const { runtime, unmount } = mount();
+  await create();
+  fireEvent.click(await screen.findByRole("button", { name: "Recover original request" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Recover original request" }).disabled).toBe(false));
+  const calls = mockCallApi.mock.calls.filter(([method]) => method === "createClassificationBatch");
+  expect(calls).toHaveLength(2);
+  expect(calls[1][1].headers).toEqual(calls[0][1].headers);
+  expect(calls[1][1].body).toEqual(calls[0][1].body);
+  expect(screen.getByLabelText("Batch name").closest("fieldset").disabled).toBe(true);
+  unmount(); runtime.destroy();
+});
+
+it.each([[503, "CLASSIFICATION_BATCH_PREVIEW_CHANGED"], [409, ["CLASSIFICATION_BATCH_PREVIEW_CHANGED"]]])(
+  "keeps an ambiguous or malformed rejection (%s) as unknown", async (status, reason) => {
+  mockCallApi.mockImplementation((method, options) => method === "createClassificationBatch"
+    ? Promise.resolve({ error: "server error", $meta: { ok: false, status },
+      response: { display_context: { reason } } }) : respond(method, options));
+  const { runtime, unmount } = mount();
+  await create();
+  await screen.findByRole("button", { name: "Recover original request" });
+  expect(screen.getByLabelText("Batch name").closest("fieldset").disabled).toBe(true);
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "createClassificationBatch")).toHaveLength(1);
+  unmount(); runtime.destroy();
+});
+
+it("retains the original key when a rejection arrives after blur", async () => {
+  let resolve, attempts = 0;
+  mockCallApi.mockImplementation((method, options) => {
+    if (method === "createClassificationBatch" && ++attempts === 1) return new Promise((done) => { resolve = done; });
+    return respond(method, options);
+  });
+  const { runtime, unmount } = mount();
+  await create();
+  fireEvent.blur(window);
+  await act(async () => resolve({ error: "rejected", $meta: { ok: false, status: 409 },
+    response: { display_context: { reason: "CLASSIFICATION_BATCH_PREVIEW_CHANGED" } } }));
+  fireEvent.click(await screen.findByRole("button", { name: "Recover original request" }));
+  await screen.findByRole("button", { name: "View frozen comparison" });
+  const calls = mockCallApi.mock.calls.filter(([method]) => method === "createClassificationBatch");
+  expect(calls).toHaveLength(2);
+  expect(calls[1][1].headers).toEqual(calls[0][1].headers);
+  expect(calls[1][1].body).toEqual(calls[0][1].body);
+  unmount(); runtime.destroy();
+});
+
 it("retains a confirmed save when subsequent reads fail without resubmitting", async () => {
   mockCallApi.mockImplementation((method, options) => method === "classificationBatchItems" ? Promise.reject(new Error("read failed")) : respond(method, options));
   const { runtime, unmount } = mount();

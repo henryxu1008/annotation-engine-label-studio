@@ -145,6 +145,7 @@
   "batchNext": "Next page",
   "batchRefresh": "Refresh read-only view",
   "batchReadFailed": "The request could not be verified. Check access and limits, then retry the same scope.",
+  "batchPreviewRejected": "Preview is no longer valid. Check the scope and limits, then preview again before creating a batch.",
   "batchUnknown": "Creation has no confirmed acknowledgement. Keep the original request and key to recover it.",
   "batchRecover": "Recover original request",
   "batchSaved": "Batch #{{id}} was saved. Refreshing the view does not repeat creation.",

@@ -8,7 +8,7 @@ describe("persistent classification disagreement queues", () => {
       const zh = locale === "zh-CN", scope = fixture.projects[locale];
       const base = `/api/projects/${scope.id}/classification-disagreements/batches/`;
       const name = `Synthetic queue ${locale}`;
-      let batchId: number, key: any, body: any, manifestHash: string, posts = 0;
+      let batchId: number, key: any, body: any, manifestHash: string, initialBatchCount: number, posts = 0;
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').should("be.enabled").then(($select) => {
@@ -31,6 +31,19 @@ describe("persistent classification disagreement queues", () => {
       visit("manager"); open();
       cy.contains("button", zh ? "新建比较批次" : "New comparison batch").click();
       workspace().find("input").first().type(name);
+      cy.contains("button", zh ? "预览比较" : "Preview comparison").click();
+      cy.get('[data-testid="classification-batch-preview"]').should("contain.text", "9");
+      cy.request(base).then(({ body }) => { initialBatchCount = body.count; });
+      // Exercise a real server rejection before any creation, in both locales.
+      cy.intercept({ method: "POST", pathname: new RegExp(`${base.replace(/\/$/, "")}/?$`), times: 1 }, (req) => {
+        req.body = { ...req.body, preview_token: "synthetic-invalid-preview" };
+      }).as("rejectClassificationPreview");
+      cy.contains("button", zh ? "创建冻结批次" : "Create frozen batch").click();
+      cy.wait("@rejectClassificationPreview").its("response.statusCode").should("eq", 400);
+      workspace().find('[role="alert"]').should("contain.text", zh ? "预览已失效" : "Preview is no longer valid");
+      cy.contains("button", zh ? "恢复原请求" : "Recover original request").should("not.exist");
+      workspace().find("input").first().should("have.value", name).and("be.enabled");
+      cy.request(base).then(({ body }) => expect(body.count).to.eq(initialBatchCount));
       cy.contains("button", zh ? "预览比较" : "Preview comparison").click();
       cy.get('[data-testid="classification-batch-preview"]').should("contain.text", "9");
       cy.intercept({ method: "POST", pathname: new RegExp(`${base.replace(/\/$/, "")}/?$`) }, (req) => {

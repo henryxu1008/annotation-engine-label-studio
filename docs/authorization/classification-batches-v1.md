@@ -91,6 +91,12 @@ required. New creation returns 201 with its matching idempotency key.
 Unknown UI acknowledgements retain the original request/key for explicit recovery
 within the open workspace. Reading/reloading the queue never repeats creation.
 Confirmed creation remains visible as a saved notice even if later reads fail.
+On a first attempt, a recognized preview/source/scope/budget rejection with its
+matching HTTP status invalidates the preview and permits explicit re-preview
+with the form intact. It never retries automatically. Once an acknowledgement
+is unknown (including blur), later errors cannot discard the original key or
+enable a replacement creation; recover that same intent explicitly. Generic,
+malformed and 5xx responses remain unknown regardless of their claimed reason.
 
 ## Authority and live availability
 

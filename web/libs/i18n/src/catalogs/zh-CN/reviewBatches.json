@@ -145,6 +145,7 @@
   "batchNext": "下一页",
   "batchRefresh": "刷新只读视图",
   "batchReadFailed": "无法验证本次请求。请核对权限和限额，再重试相同范围。",
+  "batchPreviewRejected": "预览已失效。请核对范围和限额，重新预览后再创建批次。",
   "batchUnknown": "创建尚未获得确认；保留原请求和键以恢复结果。",
   "batchRecover": "恢复原请求",
   "batchSaved": "批次 #{{id}} 已保存；刷新视图不会重复创建。",

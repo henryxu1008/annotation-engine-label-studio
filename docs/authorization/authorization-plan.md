@@ -1001,3 +1001,7 @@ and original-key recovery for databases that already applied 0002. Bound source
 loading before retaining each decoded snapshot; never load unfrozen Task.data,
 Task.meta or review comments for this calculation. An over-budget changed source
 masks answers rather than returning partial comparisons.
+The UI may invalidate a first attempt only for recognized preview rejection
+codes with matching HTTP statuses. Once confirmation is unknown, subsequent
+errors and late responses must preserve the original request/key; reads never
+resubmit it or silently create a replacement.

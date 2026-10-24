@@ -35,6 +35,13 @@ const itemSchema = metadata.extend({ observed_at: z.string(), item: summary.exte
   : r.agreement !== null && r.total_pairs > 0) });
 const createdSchema = metadata.extend({ replayed: z.boolean(), idempotency_key: z.string().uuid() });
 const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
+const previewRejections = {
+  CLASSIFICATION_BATCH_PREVIEW_INVALID: 400,
+  CLASSIFICATION_BATCH_PREVIEW_CHANGED: 409,
+  CLASSIFICATION_BATCH_SCOPE_CHANGED: 409,
+  CLASSIFICATION_BATCH_SOURCE_INVALID: 409,
+  CLASSIFICATION_BATCH_TOO_LARGE: 422,
+};
 const states = ["disagreement", "agreement", "unavailable", "all"];
 
 export const ClassificationBatchTitle = () => {
@@ -70,7 +77,14 @@ export const ClassificationBatches = ({ projectId }) => {
   const clear = () => { setList(null); setDetail(null); setQueue(null); setAnswer(null); setCanCreate(false); };
   const fetch = async (method, params, schema, body, headers) => {
     const result = await call.current(method, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
-    if (failed(result)) throw new Error("unavailable");
+    if (failed(result)) {
+      const error = new Error("unavailable");
+      const reason = result?.response?.display_context?.reason;
+      error.previewRejected = method === "createClassificationBatch" && result?.$meta?.ok === false
+        && typeof reason === "string" && Object.prototype.hasOwnProperty.call(previewRejections, reason)
+        && previewRejections[reason] === result.$meta.status;
+      throw error;
+    }
     return schema.parse(result);
   };
   const read = async (work) => {
@@ -141,6 +155,7 @@ export const ClassificationBatches = ({ projectId }) => {
   const create = async () => {
     const intent = pending.current;
     if (!intent) return;
+    const recovering = intent.attempted;
     intent.attempted = true;
     const current = ++generation.current;
     setBusy(true); setError(false); clear();
@@ -151,7 +166,13 @@ export const ClassificationBatches = ({ projectId }) => {
       pending.current = null; setUnknown(false); setPreview(null);
       setSaved({ id: result.id, replayed: result.replayed });
       await openBatch(result.id);
-    } catch { if (current === generation.current) { setUnknown(true); setError(true); } }
+    } catch (error) {
+      if (current === generation.current) {
+        if (!recovering && error?.previewRejected === true) {
+          pending.current = null; setPreview(null); setUnknown(false); setError("batchPreviewRejected");
+        } else { setUnknown(true); setError(true); }
+      }
+    }
     finally { if (current === generation.current) setBusy(false); }
   };
   const refresh = () => view === "detail" && batchId ? openBatch(batchId, page, state) : loadList(page);
@@ -160,7 +181,7 @@ export const ClassificationBatches = ({ projectId }) => {
   return <section ref={root} className="review-batches classification-batches" data-testid="classification-batches" aria-busy={busy}>
     <p>{t("batchBoundary")}</p>
     {busy && <p role="status">{t("classificationLoading")}</p>}
-    {error && <p role="alert">{t("batchReadFailed")}</p>}
+    {error && <p role="alert">{t(typeof error === "string" ? error : "batchReadFailed")}</p>}
     {saved && <p role="status">{t(saved.replayed ? "batchRecovered" : "batchSaved", { id: saved.id })}</p>}
     {unknown && <p role="status">{t("batchUnknown")} <Button disabled={busy} onClick={create}>{t("batchRecover")}</Button></p>}
     {!busy && view !== "create" && <Button onClick={refresh}>{t("batchRefresh")}</Button>}
