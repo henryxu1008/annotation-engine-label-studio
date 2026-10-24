@@ -111,6 +111,12 @@ class TestPackages(PackageFixture, APITestCase):
         ids = [task.pk for task in [*self.tasks, *additional]]
         response = self.create(task_ids=ids)
         assert response.status_code == 201, response.content
+        if connection.vendor == 'postgresql':
+            # Repeated membership semijoins can make this small summary scan
+            # a thousand-item scope for minutes under a different query plan.
+            # Bound actual SQL execution, rather than asserting a SQL shape.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '10s'")
         page = self.client.get(f'{self.url}{response.json()["id"]}/', {'page_size': 100}).json()
         assert page['count'] == page['counts']['fixed_tasks'] == page['counts']['unassigned_tasks'] == 1000
         assert len(page['results']) == 100 and page['next'] is not None

@@ -8,7 +8,7 @@ from tasks.models import TaskAssignment
 from tasks.my_work import WORK_STATES, annotate_assignment_work, work_projects
 from users.models import User
 
-from .access import fail, live_items, review_work, visible_packages
+from .access import fail, live_items, review_work
 from .models import TaskPackageItem
 
 
@@ -51,25 +51,30 @@ class PackageWork:
 
     def __init__(self, project, actor, role, package_ids):
         self.role = role
-        packages = visible_packages(project, actor, role).filter(pk__in=package_ids)
-        self.items = TaskPackageItem.objects.filter(package__in=packages)
-        self.live = live_items(project).filter(pk__in=self.items.values('pk'))
-        self.assignments = TaskAssignment.objects.filter(
-            project=project, task_id__in=self.live.values('task_id'), status__in=TaskAssignment.ACTIVE_STATUSES
-        )
-        self.pending = review_work(project, actor, role).filter(assignment__task_id__in=self.live.values('task_id'))
+        # The API checks package visibility before/after materialization. Every
+        # projection still repeats live project authority in its own SQL, while
+        # personal assignment/review predicates below narrow the returned facts.
+        # Re-nesting visible_packages inside each membership intersection can
+        # make an empty pending count scan the same thousand-item scope repeatedly.
+        scope = {
+            'package__project': project,
+            'package_id__in': package_ids,
+            'package__project_id__in': work_projects(actor, [role]),
+        }
+        self.items = TaskPackageItem.objects.filter(**scope)
+        self.live = live_items(project).filter(**scope)
+        self._assignments = TaskAssignment.objects.filter(project=project, status__in=TaskAssignment.ACTIVE_STATUSES)
+        self._pending = review_work(project, actor, role)
         if role == 'annotator':
-            self.assignments = self.assignments.filter(
-                assignee=actor, project_id__in=work_projects(actor, ['annotator'])
+            self._assignments = self._assignments.filter(assignee=actor)
+            self._pending = self._pending.filter(
+                assignment__assignee=actor, assignment__status__in=TaskAssignment.ACTIVE_STATUSES
             )
-            self.pending = self.pending.filter(assignment__in=self.assignments)
-        elif role == 'reviewer':
-            self.pending = self.pending.filter(assignment__project_id__in=work_projects(actor, ['reviewer']))
-        else:
-            self.assignments = self.assignments.filter(project_id__in=work_projects(actor, ['manager']))
+        self.assignments = self._assignments.filter(task_id__in=self.live.values('task_id'))
+        self.pending = self._pending.filter(assignment__task_id__in=self.live.values('task_id'))
         self.work = annotate_assignment_work(self.assignments)
         self.blocked = (
-            self.assignments.exclude(assignee_id__in=eligible_assignees(project)) if role == 'manager' else None
+            self._assignments.exclude(assignee_id__in=eligible_assignees(project)) if role == 'manager' else None
         )
 
     def summaries(self, package_ids):
@@ -88,10 +93,13 @@ class PackageWork:
             for row in grouped_counts(rows, path, **counts):
                 result[row.pop('package_key')].update(row)
 
-        pending = self.pending.filter(assignment__task__package_items__in=self.live.values('pk'))
+        # Intersect membership once per aggregate, not once via task IDs and
+        # again via the package join. Distinct counts keep overlapping packages
+        # independent without duplicating assignments or submissions.
+        pending = self._pending.filter(assignment__task__package_items__in=self.live.values('pk'))
         collect(pending, 'assignment__task__package_items__package_id', pending_review=Count('pk', distinct=True))
         if self.role != 'reviewer':
-            work = self.work.filter(task__package_items__in=self.live.values('pk'))
+            work = annotate_assignment_work(self._assignments.filter(task__package_items__in=self.live.values('pk')))
             collect(
                 work,
                 'task__package_items__package_id',
@@ -103,7 +111,7 @@ class PackageWork:
             collect(self.items, 'package_id', fixed_tasks=Count('pk'))
             collect(self.live, 'package_id', available_tasks=Count('pk'))
             collect(
-                self.live.exclude(task_id__in=self.assignments.values('task_id')),
+                self.live.exclude(task_id__in=self._assignments.values('task_id')),
                 'package_id',
                 unassigned_tasks=Count('pk'),
             )
@@ -120,7 +128,7 @@ class PackageWork:
         if state == 'unavailable':
             return self.items.exclude(pk__in=self.live.values('pk'))
         if state == 'unassigned':
-            return self.live.exclude(task_id__in=self.assignments.values('task_id'))
+            return self.live.exclude(task_id__in=self._assignments.values('task_id'))
         if state == 'pending_review':
             return self.items.filter(task_id__in=self.pending.values('assignment__task_id'))
         if state:

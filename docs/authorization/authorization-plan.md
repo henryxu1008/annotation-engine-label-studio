@@ -1015,3 +1015,7 @@ and current policy before emitting actions. Failed reads clear old rows and neve
 fall back to project work. Keep unscoped behavior and existing Editor/review
 navigation guards; do not turn this projection into dispatch, #86 lifecycle or
 #80 content/release identity. See package-discovery.md for scope and regressions.
+Keep live project-role predicates in the membership SQL and personal/reviewer
+predicates on the counted facts. Intersect that scope once per aggregate;
+re-nesting the full visibility query can stall thousand-item progress reads.
+Package visibility still guards metadata before and after materialization.

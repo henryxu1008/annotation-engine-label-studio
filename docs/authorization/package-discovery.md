@@ -34,7 +34,13 @@ Annotator summaries expose only that actor's current active assignments.
 Reviewer summaries expose only current pending non-self work, including the
 existing cancelled-source semantics. No answer, task body or other actor identity
 is added. Package list aggregation is batched, rather than one detail request
-per package.
+per package. Each aggregate intersects the live membership scope once. Current
+project-role predicates remain in the membership SQL, with own-assignment or
+non-self-review predicates on the counted facts. Package metadata still uses
+visible_packages before and after materialization. Avoid re-nesting that entire
+visibility query inside every intersection: a PostgreSQL plan for an empty
+pending count over a thousand-item package can otherwise scan the same scope
+repeatedly. The thousand-item regression bounds actual PostgreSQL query time.
 
 A fixed task may belong to both A and B. Each package counts its membership
 independently; there is no cross-package grand total. Inside a package, a task
