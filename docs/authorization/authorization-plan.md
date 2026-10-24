@@ -985,6 +985,27 @@ only a same-name role. The metric supports inline Text without resolvers and
 static Choices only; editor remote resolvers and dynamic label sources cannot
 stand in for immutable displayed-content evidence.
 
+Durable classification batches (#81) add a separately gated immutable analysis
+record and ORGANIZE_CLASSIFICATION; do not substitute REVIEW/ORGANIZE_REVIEW.
+Creation retains the project-first transaction through response rendering and
+rechecks the signed preview plan, identity and operation. Original-key recovery
+is principal/actor-bound and never selects new sources. Reviewer filtering omits
+whole self-participant tasks before SQL count/pagination; no complete manifest
+hash or hidden counts may escape through a subset view. Live source loss masks
+answers/scores without changing the frozen batch. PostgreSQL/SQLite triggers
+protect the manifest; retain the projects.0028 → core.0001 schema dependency on
+upgrades. See classification-batches-v1.md. Core-only-review denies all new batch
+routes; no arbitration, sampling, review, export or Host authority is introduced.
+Migration 0003 also freezes the batch primary key, preserving object identity
+and original-key recovery for databases that already applied 0002. Bound source
+loading before retaining each decoded snapshot; never load unfrozen Task.data,
+Task.meta or review comments for this calculation. An over-budget changed source
+masks answers rather than returning partial comparisons.
+The UI may invalidate a first attempt only for recognized preview rejection
+codes with matching HTTP statuses. Once confirmation is unknown, subsequent
+errors and late responses must preserve the original request/key; reads never
+resubmit it or silently create a replacement.
+
 Package discovery (#83) reuses existing package membership and assignment/review
 facts for batched role-scoped list summaries, pre-pagination state filters and
 explicitly selected-package My Work. Preserve sample versus assignment units and

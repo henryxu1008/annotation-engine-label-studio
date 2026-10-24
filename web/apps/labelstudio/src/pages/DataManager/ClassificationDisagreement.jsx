@@ -23,7 +23,37 @@ const reportResponse = z.object({
   : r.agreement !== null && r.total_pairs > 0);
 const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
 const reasons = ["insufficient_inputs", "duplicate_submitter", "missing_submitter", "invalid_source", "unsupported_config",
-  "cancelled_or_missing", "missing_or_malformed", "config_mismatch", "task_data_mismatch", "source_unavailable"];
+  "cancelled_or_missing", "missing_or_malformed", "config_mismatch", "task_data_mismatch", "source_unavailable",
+  "missing_submission", "latest_revision_unusable", "source_integrity_failed"];
+
+// Shared presentation only: the batch caller supplies its separately authorized,
+// exact pinned projection. This component never selects or fetches sources.
+export const ClassificationResult = ({ report, durable = false }) => {
+  const { t } = useLocaleTranslation("reviewBatches");
+  const hashStyle = { display: "block", whiteSpace: "normal", overflowWrap: "anywhere" };
+  return <section data-testid="classification-report">
+    <p>{t("classificationRule", { rule: report.manifest.rule, time: report.manifest.calculated_at })}</p>
+    <code style={hashStyle}>{report.manifest_hash}</code>
+    <p>{t("classificationObserved", { time: report.observed_at })}</p>
+    <p>{t(durable ? "batchFrozenBoundary" : "classificationFrozenBoundary")}</p>
+    <ul>{report.manifest.inputs.map((r) => <li key={r.submission_id}>
+      {t("classificationSource", { id: r.submission_id, revision: r.revision, actor: r.submitter_id ?? "—" })}
+      <code style={hashStyle}>{r.result_hash}</code><code style={hashStyle}>{r.config_hash}</code>
+    </li>)}</ul>
+    {report.status === "unavailable" ? <p role="status" data-testid="classification-unavailable">
+      {t("classificationUnavailable")}: {t(reasons.includes(report.reason) ? `classificationReason_${report.reason}` : "classificationReason_unknown")}
+    </p> : <>
+      <p data-testid="classification-agreement">{t("classificationAgreement", { matched: report.matching_pairs,
+        total: report.total_pairs, rate: (report.agreement * 100).toFixed(2) })}</p>
+      <p>{t("classificationFormula")}</p>
+      {report.locations.map((location) => <section key={location.from_name} data-testid="classification-location">
+        <h4>{location.from_name} → {location.to_name}</h4>
+        <p>{t(location.disagrees ? "classificationDisagrees" : "classificationAgrees")}</p>
+        <ul>{location.values.map((value) => <li key={value.submission_id}>#{value.submission_id}: {value.choices.join(", ")}</li>)}</ul>
+      </section>)}
+    </>}
+  </section>;
+};
 
 export const ClassificationTitle = () => {
   const { t } = useLocaleTranslation("reviewBatches");
@@ -100,27 +130,6 @@ export const ClassificationDisagreement = ({ projectId, initialTaskId = "" }) =>
       <Button disabled={!selected.length || selected.length > 20} onClick={() => compare()}>{t("classificationCompare")}</Button>
     </fieldset>}
     {receipt.current && <Button disabled={busy} onClick={() => compare(receipt.current)}>{t("classificationRefreshFrozen")}</Button>}
-    {report && <section data-testid="classification-report">
-      <p>{t("classificationRule", { rule: report.manifest.rule, time: report.manifest.calculated_at })}</p>
-      <code>{report.manifest_hash}</code>
-      <p>{t("classificationObserved", { time: report.observed_at })}</p>
-      <p>{t("classificationFrozenBoundary")}</p>
-      <ul>{report.manifest.inputs.map((r) => <li key={r.submission_id}>
-        {t("classificationSource", { id: r.submission_id, revision: r.revision, actor: r.submitter_id ?? "—" })}
-        <code>{r.result_hash}</code><code>{r.config_hash}</code>
-      </li>)}</ul>
-      {report.status === "unavailable" ? <p role="status" data-testid="classification-unavailable">
-        {t("classificationUnavailable")}: {t(reasons.includes(report.reason) ? `classificationReason_${report.reason}` : "classificationReason_unknown")}
-      </p> : <>
-        <p data-testid="classification-agreement">{t("classificationAgreement", { matched: report.matching_pairs,
-          total: report.total_pairs, rate: (report.agreement * 100).toFixed(2) })}</p>
-        <p>{t("classificationFormula")}</p>
-        {report.locations.map((location) => <section key={location.from_name} data-testid="classification-location">
-          <h4>{location.from_name} → {location.to_name}</h4>
-          <p>{t(location.disagrees ? "classificationDisagrees" : "classificationAgrees")}</p>
-          <ul>{location.values.map((value) => <li key={value.submission_id}>#{value.submission_id}: {value.choices.join(", ")}</li>)}</ul>
-        </section>)}
-      </>}
-    </section>}
+    {report && <ClassificationResult report={report} />}
   </section>;
 };

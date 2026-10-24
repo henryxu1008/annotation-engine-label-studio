@@ -95,6 +95,7 @@ jobs:
           poetry run python label_studio/manage.py seed_enterprise_e2e
           TEST_ENVIRONMENT=1 poetry run python label_studio/manage.py seed_review_batches_e2e
           TEST_ENVIRONMENT=1 poetry run python label_studio/manage.py seed_classification_e2e
+          TEST_ENVIRONMENT=1 poetry run python label_studio/manage.py seed_classification_batches_e2e
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -132,9 +133,10 @@ jobs:
           ANNOTATION_FIXED_PACKAGES_ENABLED: "true"
           ANNOTATION_REVIEW_BATCHES_ENABLED: "true"
           ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED: "true"
+          ANNOTATION_CLASSIFICATION_BATCHES_ENABLED: "true"
         run: |
           export ANNOTATION_REVIEW_BATCH_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.review84-e2e.json"))["modes"]))')"
-          export ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.classification81-e2e.json"))["modes"]))')"
+          export ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES="$(python -c 'import json; a=json.load(open("web/apps/labelstudio-e2e/.classification81-e2e.json"))["modes"]; a.update(json.load(open("web/apps/labelstudio-e2e/.classification-batches81-e2e.json"))["modes"]); print(json.dumps(a))')"
           nohup poetry run python label_studio/manage.py runserver 0.0.0.0:8080 > /tmp/label-studio-django.log 2>&1 &
           echo $! > /tmp/label-studio-django.pid
 
@@ -171,6 +173,13 @@ jobs:
           yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts \
             --config baseUrl=http://localhost:8080,video=true \
             --spec apps/labelstudio-e2e/src/e2e/classification-disagreement.cy.ts
+
+      - name: Run bilingual persistent classification queue regression
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/classification-batches.cy.ts
 
       - name: Run existing enterprise UI Cypress specs
         working-directory: web
