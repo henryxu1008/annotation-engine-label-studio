@@ -69,18 +69,23 @@ def controls(xml):
     nodes = list(root.iter())
     if any(node.tag not in ('View', 'Text', 'Choices', 'Choice') for node in nodes):
         raise Incomparable('unsupported_config')
+    # The upstream editor lowercases attribute names (Tree.tsx). Apply the same
+    # semantics before checking unsupported behavior, without rewriting frozen XML.
+    for node in nodes:
+        attributes = {key.lower(): value for key, value in node.attrib.items()}
+        if len(attributes) != len(node.attrib):
+            raise Incomparable('unsupported_config')
+        node.attrib.clear()
+        node.attrib.update(attributes)
     if any(
-        any(key in node.attrib for key in ('visibleWhen', 'whenTagName', 'whenLabelValue', 'whenChoiceValue'))
+        any(key in node.attrib for key in ('visiblewhen', 'whentagname', 'whenlabelvalue', 'whenchoicevalue'))
         for node in nodes
     ):
         raise Incomparable('unsupported_config')
     # Text may fetch a mutable document when valueType=url. Submission snapshots
     # preserve task data, not that fetched body, so a pinned URL cannot prove
-    # that the annotators saw identical text. Match both upstream attribute forms.
-    if any(
-        node.tag == 'Text' and any(node.get(key, 'text') != 'text' for key in ('valueType', 'valuetype'))
-        for node in nodes
-    ):
+    # that the annotators saw identical text.
+    if any(node.tag == 'Text' and node.get('valuetype', 'text') != 'text' for node in nodes):
         raise Incomparable('unsupported_config')
     texts = {node.get('name'): node.get('value') for node in nodes if node.tag == 'Text'}
     names = [node.get('name') for node in nodes if node.tag in ('Text', 'Choices')]
@@ -90,16 +95,16 @@ def controls(xml):
     for node in nodes:
         if node.tag != 'Choices':
             continue
-        name, target = node.get('name'), node.get('toName')
+        name, target = node.get('name'), node.get('toname')
         if (
             not name
             or name in result
             or target not in texts
             or not texts[target]
             or not texts[target].startswith('$')
-            or node.get('perRegion', 'false') != 'false'
-            or node.get('perItem', 'false') != 'false'
-            or node.get('visibleWhen')
+            or node.get('perregion', 'false') != 'false'
+            or node.get('peritem', 'false') != 'false'
+            or node.get('visiblewhen')
         ):
             raise Incomparable('unsupported_config')
         labels = [choice.get('value') for choice in node]

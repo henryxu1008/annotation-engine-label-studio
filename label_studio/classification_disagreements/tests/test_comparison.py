@@ -154,8 +154,11 @@ class TestClassification(APITestCase):
     def test_conditional_containers_aliases_per_region_and_entities_are_unsupported(self):
         for config in (
             CONFIG.replace('<View>', '<View visibleWhen="choice-selected">'),
+            CONFIG.replace('<View>', '<View visiblewhen="choice-selected">'),
             CONFIG.replace('value="Positive"', 'value="Positive" alias="Alias"'),
             CONFIG.replace('<Choices ', '<Choices perRegion="true" '),
+            CONFIG.replace('<Choices ', '<Choices perregion="true" '),
+            CONFIG.replace('<Choices ', '<Choices PERITEM="true" '),
             '<!DOCTYPE x [<!ENTITY unsafe "Positive">]>' + CONFIG,
         ):
             for row in (self.first, self.second):
@@ -165,7 +168,14 @@ class TestClassification(APITestCase):
             assert data['agreement'] is None and data['locations'] == []
 
     def test_url_backed_text_is_unavailable_even_with_identical_frozen_urls(self):
-        for attribute in ('valueType="url"', 'valuetype="url"', 'valueType="json"'):
+        for attribute in (
+            'valueType="url"',
+            'valuetype="url"',
+            'ValueType="url"',
+            'vAlUeTyPe="url"',
+            'valueType="json"',
+            'valueType="text" valuetype="url"',
+        ):
             config = CONFIG.replace('<Text ', f'<Text {attribute} ')
             for row in (self.first, self.second):
 
