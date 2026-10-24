@@ -13,8 +13,14 @@ from users.models import User
 
 
 class Command(BaseCommand):
+    domain = 'classification81.example.test'
+    prefix = 'class81'
+    fixture_schema = 'classification-disagreements-e2e/v1'
+    default_output = 'web/apps/labelstudio-e2e/.classification81-e2e.json'
+    extra_cases = ()
+
     def add_arguments(self, parser):
-        parser.add_argument('--output', default='web/apps/labelstudio-e2e/.classification81-e2e.json')
+        parser.add_argument('--output', default=self.default_output)
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -22,12 +28,12 @@ class Command(BaseCommand):
         if (
             not settings.TEST_ENVIRONMENT
             or output.exists()
-            or User.objects.filter(email__endswith='@classification81.example.test').exists()
+            or User.objects.filter(email__endswith=f'@{self.domain}').exists()
         ):
             raise CommandError('Fresh synthetic database/output and TEST_ENVIRONMENT required')
         password = 'SyntheticClassification81!123'
         manager = User.objects.create_user(
-            'manager@classification81.example.test', password, username='class81-manager'
+            f'manager@{self.domain}', password, username=f'{self.prefix}-manager'
         )
         org = Organization.create_organization(created_by=manager, title='Synthetic classification disagreement')
         manager.active_organization = org
@@ -35,7 +41,7 @@ class Command(BaseCommand):
         users = {'manager': manager}
         for role in ('reviewer', 'a', 'b', 'c'):
             user = User.objects.create_user(
-                f'{role}@classification81.example.test', password, username=f'class81-{role}', active_organization=org
+                f'{role}@{self.domain}', password, username=f'{self.prefix}-{role}', active_organization=org
             )
             org.add_user(user)
             users[role] = user
@@ -58,7 +64,7 @@ class Command(BaseCommand):
                     project=project, user=user, role=role if role in ('manager', 'reviewer') else 'annotator'
                 )
             cases, tasks = {}, []
-            for case in ('agreement', 'split', 'missing', 'config', 'remote', 'resolver', 'dynamic'):
+            for case in ('agreement', 'split', 'missing', 'config', 'remote', 'resolver', 'dynamic', *self.extra_cases):
                 text = (
                     'https://synthetic.invalid/mutable.txt'
                     if case in ('remote', 'resolver')
@@ -67,10 +73,15 @@ class Command(BaseCommand):
                 task = Task.objects.create(project=project, data={'text': text})
                 tasks.append(task)
                 sources = []
-                for index, actor in enumerate((users['a'], users['b'], users['c'])):
+                # The self case represents a historical annotator now promoted
+                # to Reviewer. It must not expose that person's own comparison.
+                third = users['reviewer'] if case == 'self' else users['c']
+                for index, actor in enumerate((users['a'], users['b'], third)):
                     assignment = TaskAssignment.objects.create(
                         project=project, task=task, assignee=actor, assigned_by=manager
                     )
+                    if case == 'unsubmitted' and index == 2:
+                        continue
                     choices = ['Negative' if case == 'split' and index == 1 else 'Positive']
                     result = (
                         []
@@ -117,7 +128,7 @@ class Command(BaseCommand):
             projects[locale] = {'id': project.pk, 'cases': cases}
             modes[f'{org.pk}:{project.pk}'] = 'fork_review'
         data = {
-            'synthetic': 'classification-disagreements-e2e/v1',
+            'synthetic': self.fixture_schema,
             'password': password,
             'modes': modes,
             'users': {role: {'id': user.pk, 'email': user.email} for role, user in users.items()},

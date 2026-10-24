@@ -22,6 +22,7 @@ import { selectedTaskPackageIds } from "./taskPackageSelection";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReviewBatchEntry, ReviewBatches, ReviewBatchTitle } from "./ReviewBatches";
 import { ClassificationDisagreement, ClassificationEntry, ClassificationTitle } from "./ClassificationDisagreement";
+import { ClassificationBatches, ClassificationBatchEntry, ClassificationBatchTitle } from "./ClassificationBatches";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
 
@@ -454,6 +455,17 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openClassificationBatches = () => {
+    const trigger = document.activeElement;
+    modal({
+      title: <ClassificationBatchTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <ClassificationBatches projectId={project.id} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
+
   const openMyWork = () => {
     if (!localePreference.ready) return;
     const dialog = modal({
@@ -531,6 +543,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
       <ReviewBatchEntry projectId={project.id} onOpen={openReviewBatches} disabled={!localePreference.ready} />
       <ClassificationEntry projectId={project.id} onOpen={openClassification} disabled={!localePreference.ready} />
+      <ClassificationBatchEntry projectId={project.id} onOpen={openClassificationBatches} disabled={!localePreference.ready} />
       {canManageAssignments && (
         <Button
           size="small"

@@ -78,6 +78,9 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("projects", "0027_project_custom_task_lock_ttl"),
+        # This migration writes AsyncMigrationStatus even when executed inline.
+        # App traversal order is not a substitute for a schema dependency.
+        ("core", "0001_initial"),
     ]
 
     operations = [

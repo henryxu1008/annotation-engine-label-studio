@@ -104,6 +104,8 @@ inserted revision while a response is materialized. Bilingual component and real
 browser journeys use isolated synthetic users/projects only. CI seeds that
 separate fixture and enables only its exact project IDs.
 
-NER, bbox, field comparison, confidence/risk ordering, durable metric history,
+The opt-in durable project batch is documented in classification-batches-v1.md;
+it does not change the transient manual comparison contract above.
+NER, bbox, field comparison, confidence/risk ordering, cross-batch metric history,
 arbitration tasks/commands and second review remain deferred. #81 and #84 remain
 open. Merge, deployment and Core integration are separate approvals.

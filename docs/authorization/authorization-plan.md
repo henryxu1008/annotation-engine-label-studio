@@ -984,3 +984,15 @@ Repeated checks must bind the same trusted principal, local actor and role, not
 only a same-name role. The metric supports inline Text without resolvers and
 static Choices only; editor remote resolvers and dynamic label sources cannot
 stand in for immutable displayed-content evidence.
+
+Durable classification batches (#81) add a separately gated immutable analysis
+record and ORGANIZE_CLASSIFICATION; do not substitute REVIEW/ORGANIZE_REVIEW.
+Creation retains the project-first transaction through response rendering and
+rechecks the signed preview plan, identity and operation. Original-key recovery
+is principal/actor-bound and never selects new sources. Reviewer filtering omits
+whole self-participant tasks before SQL count/pagination; no complete manifest
+hash or hidden counts may escape through a subset view. Live source loss masks
+answers/scores without changing the frozen batch. PostgreSQL/SQLite triggers
+protect the manifest; retain the projects.0028 → core.0001 schema dependency on
+upgrades. See classification-batches-v1.md. Core-only-review denies all new batch
+routes; no arbitration, sampling, review, export or Host authority is introduced.
