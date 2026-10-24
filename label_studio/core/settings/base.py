@@ -237,6 +237,7 @@ INSTALLED_APPS = [
     'tasks',
     'task_packages',
     'review_batches',
+    'classification_disagreements',
     'data_manager',
     'io_storages',
     'ml',
@@ -900,6 +901,7 @@ ANNOTATION_REVIEW_BATCHES_ENABLED = get_bool_env('ANNOTATION_REVIEW_BATCHES_ENAB
 # Explicit project-local opt-in. Never infer Fork review authority from exports.
 ANNOTATION_REVIEW_BATCH_MODES = json.loads(get_env('ANNOTATION_REVIEW_BATCH_MODES', '{}'))
 ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED = get_bool_env('ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED', False)
+ANNOTATION_CLASSIFICATION_BATCHES_ENABLED = get_bool_env('ANNOTATION_CLASSIFICATION_BATCHES_ENABLED', False)
 ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES = json.loads(get_env('ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES', '{}'))
 DEBUG_CONTEXTLOG = get_bool_env('DEBUG_CONTEXTLOG', False)
 

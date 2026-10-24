@@ -83,7 +83,9 @@ describe("read-only classification disagreement", () => {
       cy.then(() => cy.request({ url: `${base}tasks/${scope.cases.split.task}/`, qs: { frozen: receipt }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);
       visit("manager"); open(); choose("split"); compare();
-      cy.get('[data-testid="classification-report"]').should("be.visible");
+      // Scroll to the metric a reviewer reads in the constrained modal viewport.
+      cy.get('[data-testid="classification-agreement"]').scrollIntoView()
+        .should("be.visible").and("contain.text", "33.33%");
       cy.request("DELETE", `/api/tasks/${scope.cases.split.task}/`);
       cy.contains("button", zh ? "重验冻结输入" : "Recheck frozen inputs").click();
       cy.get('[data-testid="classification-workspace"] [role="alert"]').should("be.visible");
