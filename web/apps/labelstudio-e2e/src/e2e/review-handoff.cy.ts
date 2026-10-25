@@ -76,7 +76,7 @@ describe("frozen review to arbitration handoff", () => {
       cy.get(`[data-handoff-source="${scope.cases.split.sources[1]}"]`).click();
       cy.get('[data-testid="handoff-start"]').click();
       workspace().find("select").should("not.exist");
-      cy.intercept("POST", `${base}*/sources/*/arbitration-handoffs/`).as("handoffLink");
+      cy.intercept({ method: "POST", pathname: new RegExp(`^${base}[0-9]+/sources/[0-9]+/arbitration-handoffs/?$`) }).as("handoffLink");
       workspace().contains("button", zh ? "确认关联" : "Confirm association").click();
       cy.wait("@handoffLink").then(({ request, response }) => {
         expect(request.body.mode).to.eq("link_existing"); expect(request.body.arbitration_id).to.eq(saved.arbitration_id);
