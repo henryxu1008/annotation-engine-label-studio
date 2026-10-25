@@ -7,6 +7,8 @@ from classification_disagreements.tests import test_arbitration as arbitration
 from classification_disagreements.tests import test_arbitration_concurrency as concurrent
 from django.db import close_old_connections, connection, transaction
 from django.test import TransactionTestCase, override_settings
+from django.utils import timezone
+from organizations.models import OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework.test import APIClient
 from review_batches.models import ReviewArbitrationHandoff
@@ -153,7 +155,7 @@ class TestHandoffConcurrency(HandoffFixtures, TransactionTestCase):
 
     def test_revocation_first_denies_without_orphan_task(self):
         response = self.ordered_source_change(
-            lambda: ProjectMember.objects.filter(project=self.project, user=self.manager).update(enabled=False)
+            lambda: OrganizationMember.objects.filter(organization=self.org, user=self.manager).update(deleted_at=timezone.now())
         )
         assert response.status_code in (403, 404)
         assert not ArbitrationTask.objects.exists() and not ReviewArbitrationHandoff.objects.exists()

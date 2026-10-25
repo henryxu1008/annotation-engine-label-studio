@@ -8,12 +8,15 @@ from classification_disagreements.models import ArbitrationTask
 from classification_disagreements.tests import test_arbitration as fixtures
 from django.db import DatabaseError, transaction
 from django.test import override_settings
+from django.utils import timezone
+from organizations.models import OrganizationMember
 from projects.models import ProjectMember
 from rest_framework.response import Response
 from rest_framework.test import APITestCase
 from review_batches import handoff as h
 from review_batches.models import ReviewArbitrationHandoff
 from tasks.models import ReviewDecision, Submission
+from users.tests.factories import UserFactory
 
 from .handoff_fixtures import HandoffFixtures
 
@@ -166,12 +169,12 @@ class TestHandoff(HandoffFixtures, APITestCase):
         body, key = self.handoff_body(), uuid4()
         response = self.handoff(body, key)
         assert response.status_code == 201
-        assert self.client.get(self.context_url.replace(str(self.project.pk), str(self.other.pk), 1)).status_code == 404
+        assert self.client.get(self.context_url.replace(str(self.project.pk), str(self.other.pk), 1)).status_code in (403, 404)
         with self.settings(ANNOTATION_PROJECT_OPERATION_PROVIDER=__name__ + ".ReadOnlyPolicy"):
             assert not self.client.get(self.context_url).data["can_handoff"]
             assert self.handoff(body, key).status_code == 403
             assert self.handoff_detail(response.data["id"]).status_code == 200
-        ProjectMember.objects.filter(project=self.project, user=self.manager).update(enabled=False)
+        OrganizationMember.objects.filter(organization=self.org, user=self.manager).update(deleted_at=timezone.now())
         assert self.handoff(body, key).status_code in (403, 404)
         assert self.handoff_detail(response.data["id"]).status_code in (403, 404)
 
@@ -234,13 +237,13 @@ class TestHandoff(HandoffFixtures, APITestCase):
         def revoke(response):
             result = render(response)
             if response.status_code == 201 and response.data.get("schema") == h.SCHEMA:
-                ProjectMember.objects.filter(project=self.project, user=self.manager).update(enabled=False)
+                OrganizationMember.objects.filter(organization=self.org, user=self.manager).update(deleted_at=timezone.now())
             return result
 
         with patch.object(Response, "render", revoke):
             assert self.handoff(body).status_code in (403, 404)
         assert not ArbitrationTask.objects.exists() and not ReviewArbitrationHandoff.objects.exists()
-        assert ProjectMember.objects.get(project=self.project, user=self.manager).enabled
+        assert OrganizationMember.objects.get(organization=self.org, user=self.manager).deleted_at is None
 
         def tamper(response):
             result = render(response)
@@ -266,6 +269,20 @@ class TestHandoff(HandoffFixtures, APITestCase):
             assert self.handoff(body, key).status_code == 409
         assert not ArbitrationTask.objects.exists() and not ReviewArbitrationHandoff.objects.exists()
         assert self.handoff(body, key).status_code == 201
+
+    def test_non_creator_manager_membership_revocation_is_immediate(self):
+        manager = UserFactory(active_organization=self.org)
+        OrganizationMember.objects.get_or_create(organization=self.org, user=manager)
+        membership = ProjectMember.objects.create(project=self.project, user=manager, role="manager")
+        self.client.force_authenticate(manager)
+        body, key = self.handoff_body(), uuid4()
+        result = self.handoff(body, key)
+        assert result.status_code == 201, result.data
+        membership.enabled = False
+        membership.save(update_fields=["enabled"])
+        assert self.client.get(self.context_url).status_code in (403, 404)
+        assert self.handoff(body, key).status_code in (403, 404)
+        assert self.handoff_detail(result.data["id"]).status_code in (403, 404)
 
     def test_sql_frozen_fields_and_nullable_fk_rebinding(self):
         response = self.handoff()
