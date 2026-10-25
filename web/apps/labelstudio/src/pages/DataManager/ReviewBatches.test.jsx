@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createLocaleRuntime } from "@humansignal/i18n";
 import { ReviewBatchEntry, ReviewBatches } from "./ReviewBatches";
 
@@ -125,5 +125,59 @@ it.each(["en-US", "zh-CN"])("keeps refresh reachable after a priority comparison
   fireEvent.click(refresh);
   await screen.findByRole("heading", { name: detail.name });
   expect(mockCallApi.mock.calls.some(([method]) => method === "reviewSubmission")).toBe(false);
+  unmount(); runtime.destroy();
+});
+
+it.each([
+  ["en-US", true], ["zh-CN", true], ["en-US", false], ["zh-CN", false],
+])("retains a dispatched legacy key across blur in %s, pending=%s", async (locale, pending) => {
+  const zh = locale === "zh-CN";
+  let settle;
+  let attempts = 0;
+  mockCallApi.mockImplementation((method) => {
+    if (method === "reviewBatches") return Promise.resolve({ results: { batches: [] } });
+    if (method === "reviewBatchCapability") return Promise.resolve({ enabled: true, can_create: true });
+    if (method === "reviewBatchPreview") return Promise.resolve({ plan_hash: "a".repeat(64), plan: { candidates: [{ selected: true }] } });
+    if (method === "reviewBatchCreate") {
+      attempts += 1;
+      return pending && attempts === 1 ? new Promise((resolve) => { settle = resolve; }) : Promise.resolve({ error: true });
+    }
+    return Promise.resolve({});
+  });
+  const { unmount, runtime } = mount(locale);
+  fireEvent.change(await screen.findByLabelText(zh ? "审核批次名称" : "Batch name"), { target: { value: "Legacy" } });
+  fireEvent.click(screen.getByRole("button", { name: zh ? "预览抽样" : "Preview sampling" }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "创建／重试" : "Create / retry" }));
+  if (!pending) await screen.findByRole("alert");
+  fireEvent(window, new Event("blur"));
+  const recover = await screen.findByRole("button", { name: zh ? "恢复原批次创建" : "Recover original batch creation" });
+  if (pending) await act(async () => settle({ error: true }));
+  fireEvent.click(recover);
+  await waitFor(() => expect(attempts).toBe(2));
+  const calls = mockCallApi.mock.calls.filter(([method]) => method === "reviewBatchCreate");
+  for (const key of ["params", "body", "headers"]) expect(calls[0][1][key]).toEqual(calls[1][1][key]);
+  expect(calls[0][1].body.priority).toBeUndefined();
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewBatchPreview")).toHaveLength(1);
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("does not turn a definitive legacy rejection into an unknown write after blur in %s", async (locale) => {
+  const zh = locale === "zh-CN";
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => {
+    if (method === "reviewBatchPreview") return Promise.resolve({ plan_hash: "a".repeat(64), plan: { candidates: [{ selected: true }] } });
+    if (method === "reviewBatchCreate") return Promise.resolve({ error: true, $meta: { status: 400 } });
+    return original(method, args);
+  });
+  const { unmount, runtime } = mount(locale);
+  fireEvent.change(await screen.findByLabelText(zh ? "审核批次名称" : "Batch name"), { target: { value: "Legacy" } });
+  fireEvent.click(screen.getByRole("button", { name: zh ? "预览抽样" : "Preview sampling" }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "创建／重试" : "Create / retry" }));
+  await screen.findByRole("alert");
+  fireEvent(window, new Event("blur"));
+  expect(screen.queryByRole("button", { name: zh ? "恢复原批次创建" : "Recover original batch creation" })).toBeNull();
+  fireEvent.click(screen.getByTestId("review-batch-refresh"));
+  await waitFor(() => expect(screen.getByRole("button", { name: zh ? "预览抽样" : "Preview sampling" }).disabled).toBe(false));
+  expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewBatchCreate")).toHaveLength(1);
   unmount(); runtime.destroy();
 });

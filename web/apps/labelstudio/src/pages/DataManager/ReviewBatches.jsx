@@ -182,6 +182,8 @@ export const ReviewBatches = ({ projectId }) => {
         body: intent.body, headers: { "Idempotency-Key": intent.key }, errorFilter: () => true });
       if (current !== generation.current) return;
       if (failed(result)) {
+        const status = result?.$meta?.status ?? (typeof result?.status === "number" ? result.status : null);
+        if (!status || status < 400 || status >= 500) intent.uncertain = true;
         if (!intent.unknown && (intent.body.priority ? priorityRejection(result) : code(result) === "REVIEW_BATCH_PREVIEW_CHANGED")) {
           setPreview(null); creation.current = null; setError("changed");
         } else {
@@ -199,6 +201,7 @@ export const ReviewBatches = ({ projectId }) => {
       setPreview(null); creation.current = null;
       await load(result.id);
     } catch { if (current === generation.current) {
+      intent.uncertain = true;
       if (intent.body.priority) { intent.unknown = true; setCreationUnknown(true); }
       setError(intent.body.priority ? "priorityUnknownWrite" : "createFailed");
     } }
@@ -210,7 +213,7 @@ export const ReviewBatches = ({ projectId }) => {
       const intent = creation.current;
       // Pending reads have no rendered detail/creation intent yet. Revoke their
       // generations too, so a late response cannot republish evidence after blur.
-      if (intent?.body.priority && intent.inFlight) { intent.unknown = true; setCreationUnknown(true); }
+      if (intent?.inFlight || intent?.unknown || intent?.uncertain) { intent.unknown = true; setCreationUnknown(true); }
       generation.current += 1; progressGeneration.current += 1;
       returnFocus.current = false; setComparison(null);
       setBusy(false); setProgressBusy(false); setDetail(null); setBatches([]); setReviewing(false);

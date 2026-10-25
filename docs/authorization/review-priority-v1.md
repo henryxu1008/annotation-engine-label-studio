@@ -115,8 +115,10 @@ recognized server rejections with matching HTTP statuses permit a new explicit
 preview. Confirmed saves remain confirmed even if subsequent reads fail.
 Blur invalidates all pending panel reads, including initial detail, analysis
 selection and previews before any creation intent exists. It closes any rework
-comparison so explicit GET refresh stays reachable. Only an in-flight priority
-write becomes an uncertain original-key command; reads never become recovery POSTs.
+comparison so explicit GET refresh stays reachable. In-flight or uncertain
+creation writes retain their original body/key, including legacy strategy writes;
+reads never become recovery POSTs. A definitive legacy 4xx rejection does not
+create an uncertain-write recovery lock.
 
 ## Acceptance and remaining scope
 
