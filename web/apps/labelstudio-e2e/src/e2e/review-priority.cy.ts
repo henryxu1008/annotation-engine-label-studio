@@ -2,7 +2,9 @@
 
 describe("optional frozen conflict-priority sampling", () => {
   let fixture: any;
+  let releasePending: (() => void) | undefined;
   before(() => cy.readFile(".review-priority-e2e.json").then((value) => { fixture = value; }));
+  afterEach(() => { releasePending?.(); releasePending = undefined; });
   for (const locale of ["en-US", "zh-CN"] as const) {
     it(`freezes selection, preserves revisions and recovers the original key in ${locale}`, () => {
       const zh = locale === "zh-CN";
@@ -34,6 +36,26 @@ describe("optional frozen conflict-priority sampling", () => {
       cy.get('[data-testid="open-review-batches"]', { timeout: 30000 }).click();
       cy.contains("label", zh ? "审核批次名称" : "Batch name").find("input").type(name);
       cy.contains("label", zh ? "抽样比例" : "Sample percentage").find("input").clear().type("5");
+      cy.contains("label", zh ? "优先抽审冻结分类分歧" : "Prioritize frozen classification conflicts").find("input").check();
+      cy.contains("label", zh ? "冻结分类批次" : "Frozen classification batch").find("select").select(String(scope.analysis.id));
+      // Hold a real preview response until after blur: no rendered preview or
+      // creation intent exists yet, so invalidation must fence the pending read.
+      let previewHeld = false;
+      cy.intercept({ method: "POST", pathname: `${base}preview/`, times: 1 }, (req) => {
+        req.continue((res) => {
+          expect(res.statusCode).to.eq(200);
+          previewHeld = true;
+          return new Cypress.Promise<void>((resolve) => { releasePending = resolve; });
+        });
+      }).as("blurredPriorityPreview");
+      cy.contains("button", zh ? "预览抽样" : "Preview sampling").click();
+      cy.wrap(null).should(() => expect(previewHeld).to.eq(true));
+      cy.window().then((win) => { win.dispatchEvent(new win.Event("blur")); });
+      cy.contains("label", zh ? "审核批次名称" : "Batch name").should("not.exist");
+      cy.then(() => { releasePending?.(); releasePending = undefined; });
+      cy.wait("@blurredPriorityPreview").its("response.statusCode").should("eq", 200);
+      cy.get('[data-testid="review-batch-preview"]').should("not.exist");
+      cy.get('[data-testid="review-batch-refresh"]').click();
       cy.contains("label", zh ? "优先抽审冻结分类分歧" : "Prioritize frozen classification conflicts").find("input").check();
       cy.contains("label", zh ? "冻结分类批次" : "Frozen classification batch").find("select").select(String(scope.analysis.id));
       cy.contains("button", zh ? "预览抽样" : "Preview sampling").click();

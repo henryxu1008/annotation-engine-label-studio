@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createLocaleRuntime } from "@humansignal/i18n";
 import { ReviewBatches } from "./ReviewBatches";
 
@@ -101,5 +101,59 @@ it("permits a fresh explicit preview only for a recognized first-attempt rejecti
   await screen.findByRole("alert");
   expect(screen.queryByRole("button", { name: "Recover original batch creation" })).toBeNull();
   expect(screen.getByRole("button", { name: "Preview sampling" }).disabled).toBe(false);
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("discards an initial priority detail that arrives after blur in %s", async (locale) => {
+  let resolveDetail;
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => {
+    if (method === "reviewBatches") return Promise.resolve({ results: { batches: [{ id: 9, name: "Private batch" }] } });
+    if (method === "reviewBatchCapability") return Promise.resolve({ enabled: true, can_create: true,
+      can_prioritize: true, can_read_priority: true, viewer_hash: hash });
+    if (method === "reviewBatchDetail") return new Promise((done) => { resolveDetail = done; });
+    return original(method, args);
+  });
+  const { unmount, runtime } = mount(locale);
+  fireEvent.click(await screen.findByRole("button", { name: "Private batch" }));
+  fireEvent(window, new Event("blur"));
+  await act(async () => resolveDetail({ id: 9, name: "Private batch", role: "manager", plan_hash: hash,
+    viewer_hash: hash, algorithm: "classification-conflict-ranked/v1", as_of: "2026-10-25T10:00:00Z",
+    rule: { rate: 50, seed: "fixed" }, candidate_count: 0, selected_count: 0, items: [] }));
+  expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Private batch" })).toBeNull();
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("discards an unconfirmed priority preview that arrives after blur in %s", async (locale) => {
+  let resolvePreview;
+  const zh = locale === "zh-CN";
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "reviewBatchPreview"
+    ? new Promise((done) => { resolvePreview = done; }) : original(method, args));
+  const { unmount, runtime } = mount(locale);
+  fireEvent.click(await screen.findByLabelText(zh ? "优先抽审冻结分类分歧" : "Prioritize frozen classification conflicts"));
+  await screen.findByRole("option", { name: "#5 · Frozen" });
+  fireEvent.change(screen.getByLabelText(zh ? "冻结分类批次" : "Frozen classification batch"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: zh ? "预览抽样" : "Preview sampling" }));
+  fireEvent(window, new Event("blur"));
+  await act(async () => resolvePreview(preview));
+  expect(screen.queryByTestId("review-batch-preview")).toBeNull();
+  expect(screen.queryByRole("button", { name: zh ? "创建／重试" : "Create / retry" })).toBeNull();
+  expect(mockCallApi.mock.calls.some(([method]) => method === "reviewBatchCreate")).toBe(false);
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("discards a pending frozen-analysis selector after blur in %s", async (locale) => {
+  let resolveList;
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "classificationBatches"
+    ? new Promise((done) => { resolveList = done; }) : original(method, args));
+  const { unmount, runtime } = mount(locale);
+  fireEvent.click(await screen.findByLabelText(locale === "zh-CN" ? "优先抽审冻结分类分歧" : "Prioritize frozen classification conflicts"));
+  fireEvent(window, new Event("blur"));
+  await act(async () => resolveList({ results: [{ id: 5, name: "Frozen", manifest_hash: hash }] }));
+  expect(screen.queryByRole("option", { name: "#5 · Frozen" })).toBeNull();
+  expect(screen.queryByTestId("review-priority-selector")).toBeNull();
   unmount(); runtime.destroy();
 });

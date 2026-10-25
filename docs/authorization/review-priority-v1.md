@@ -99,6 +99,9 @@ Keep the 1,000-review-candidate limit and all classification limits: 100 tasks,
 snapshot JSON bytes, inclusive. Reject excess with 422; do not truncate, silently
 sample analysis inputs or lift the limit. The existing one-row loader measures
 canonical bytes before retaining the next row. It is not wire-size preflight.
+Review planning checks the bounded candidate ID denominator before loading answer
+snapshots, then validates sources one row at a time and retains only identity
+pins. Enumeration drift fails closed. Stable legacy plans retain identical hashes.
 
 The existing form adds an explicit paginated frozen-analysis selector. Changing
 inputs clears the preview. Explain frozen conflict coverage, unknown inputs and
@@ -110,6 +113,10 @@ does not POST. Unknown outcomes survive failed reads, blur and later errors;
 late acknowledgements cannot confirm another generation. Before uncertainty,
 recognized server rejections with matching HTTP statuses permit a new explicit
 preview. Confirmed saves remain confirmed even if subsequent reads fail.
+Blur invalidates all pending panel reads, including initial detail, analysis
+selection and previews before any creation intent exists. It closes any rework
+comparison so explicit GET refresh stays reachable. Only an in-flight priority
+write becomes an uncertain original-key command; reads never become recovery POSTs.
 
 ## Acceptance and remaining scope
 

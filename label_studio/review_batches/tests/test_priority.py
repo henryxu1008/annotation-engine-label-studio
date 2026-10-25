@@ -5,8 +5,9 @@ from uuid import uuid4
 from classification_disagreements import batches
 from classification_disagreements.models import ClassificationBatch
 from classification_disagreements.tests import test_comparison as fixtures
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, connection, transaction
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework.renderers import JSONRenderer
 from rest_framework.test import APITestCase
 from review_batches import priority, service
@@ -267,7 +268,9 @@ class TestPriority(APITestCase):
         assert result.status_code == 200, result.data
         assert len(result.data['plan']['candidates']) == 1000
         self.make_source()
-        assert self.preview().status_code == 422
+        with CaptureQueriesContext(connection) as captured:
+            assert self.preview().status_code == 422
+        assert not any('result_snapshot' in q['sql'] for q in captured.captured_queries)
         assert not ReviewBatch.objects.exists()
 
     def test_rendered_evidence_tampering_rolls_back_new_batch(self):

@@ -1055,3 +1055,10 @@ unchanged. Reviewer responses do not expose classification manifests
 or other annotators' answers. Priority does not grant REVIEW, approve work or
 change release policy. Recheck these boundaries, JSON DTOs, legacy hashes and
 unknown-write recovery on upgrades. See review-priority-v1.md. #81/#84 remain open.
+
+Blur fences pending reads before a detail or creation intent exists and exits
+rework comparison without hiding refresh. Retain uncertain priority writes under
+their original key/body. Check review candidate IDs against the limit before
+loading snapshots and validate accepted sources one row at a time; do not hold
+all review snapshots alongside classification inputs. Stable legacy hashes and
+the existing candidate/classification budgets remain unchanged.

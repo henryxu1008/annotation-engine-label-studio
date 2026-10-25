@@ -101,3 +101,29 @@ it("returns to the same batch filter and restores focus after the authority refr
   expect(screen.getByRole("button", { name: "Rework follow-up" }).getAttribute("aria-pressed")).toBe("true");
   unmount(); runtime.destroy();
 });
+
+it.each(["en-US", "zh-CN"])("keeps refresh reachable after a priority comparison loses focus in %s", async (locale) => {
+  const zh = locale === "zh-CN";
+  const original = mockCallApi.getMockImplementation();
+  const viewerHash = "b".repeat(64);
+  mockCallApi.mockImplementation((method, args) => {
+    if (method === "reviewBatchCapability") return Promise.resolve({ enabled: true, can_create: true,
+      can_prioritize: true, can_read_priority: true, viewer_hash: viewerHash });
+    if (method === "reviewBatchDetail") return Promise.resolve({ ...detail,
+      algorithm: "classification-conflict-ranked/v1", viewer_hash: viewerHash });
+    if (method === "reviewBatchRework") return Promise.resolve({ viewer_hash: viewerHash,
+      results: { source: { id: 1 }, revisions: [] } });
+    return original(method, args);
+  });
+  const { unmount, runtime } = mount(locale);
+  fireEvent.click(await screen.findByRole("button", { name: detail.name }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "对照返工修订" : "Compare rework revisions" }));
+  await screen.findByTestId("rework-comparison");
+  fireEvent(window, new Event("blur"));
+  const refresh = screen.getByRole("button", { name: zh ? "刷新批次" : "Refresh batch" });
+  expect(screen.queryByTestId("rework-comparison")).toBeNull();
+  fireEvent.click(refresh);
+  await screen.findByRole("heading", { name: detail.name });
+  expect(mockCallApi.mock.calls.some(([method]) => method === "reviewSubmission")).toBe(false);
+  unmount(); runtime.destroy();
+});

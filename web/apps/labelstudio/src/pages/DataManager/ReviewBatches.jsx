@@ -59,7 +59,6 @@ export const ReviewBatches = ({ projectId }) => {
   const comparisonTrigger = useRef(null);
   const returnFocus = useRef(false);
   const root = useRef(null);
-  const priorityView = useRef(false);
   const [batches, setBatches] = useState([]);
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
@@ -209,9 +208,11 @@ export const ReviewBatches = ({ projectId }) => {
   useEffect(() => {
     const blur = () => {
       const intent = creation.current;
-      if (!intent?.body.priority && !priorityView.current) return;
-      if (intent?.inFlight) { intent.unknown = true; setCreationUnknown(true); }
+      // Pending reads have no rendered detail/creation intent yet. Revoke their
+      // generations too, so a late response cannot republish evidence after blur.
+      if (intent?.body.priority && intent.inFlight) { intent.unknown = true; setCreationUnknown(true); }
       generation.current += 1; progressGeneration.current += 1;
+      returnFocus.current = false; setComparison(null);
       setBusy(false); setProgressBusy(false); setDetail(null); setBatches([]); setReviewing(false);
       setCanCreate(false); setCanPrioritize(false); setPreview(null);
       if (!intent?.unknown) creation.current = null;
@@ -222,7 +223,6 @@ export const ReviewBatches = ({ projectId }) => {
   }, [projectId]);
 
   const progress = detail ? batchProgress(detail.items) : null;
-  priorityView.current = detail?.algorithm === "classification-conflict-ranked/v1";
   const visibleItems = detail ? filterBatchItems(detail.items, filter) : [];
   const controlsBusy = busy || progressBusy;
   useEffect(() => {

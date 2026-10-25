@@ -158,14 +158,22 @@ def build_plan(project, args):
         )
     if args["submitter_ids"]:
         rows = rows.filter(submitted_by_id__in=args["submitter_ids"])
-    sources = list(rows.select_related("assignment__task", "review").order_by("pk")[: MAX_CANDIDATES + 1])
-    if len(sources) > MAX_CANDIDATES:
+    # Reject an excessive denominator before materializing any answer snapshots.
+    source_ids = list(rows.order_by("pk").values_list("pk", flat=True)[: MAX_CANDIDATES + 1])
+    if len(source_ids) > MAX_CANDIDATES:
         fail("REVIEW_BATCH_TOO_LARGE", 422)
-    if not sources:
+    if not source_ids:
         fail("REVIEW_BATCH_EMPTY", 400)
-    if any(not valid_source(row, project.pk) for row in sources):
-        fail("REVIEW_BATCH_SOURCE_INVALID")
-    candidates = [identity(row) for row in sources]
+    candidates = []
+    # Keep the existing byte-budget semantics; retain only bounded identity pins,
+    # rather than all candidate snapshots while classification evidence is loaded.
+    source_rows = rows.filter(pk__in=source_ids).select_related("assignment__task", "review").order_by("pk")
+    for row in source_rows.iterator(chunk_size=1):
+        if not valid_source(row, project.pk):
+            fail("REVIEW_BATCH_SOURCE_INVALID")
+        candidates.append(identity(row))
+    if len(candidates) != len(source_ids):
+        fail("REVIEW_BATCH_PREVIEW_CHANGED")
     priority_plan, states, algorithm = None, {}, ALGORITHM
     if 'priority' in args:
         from . import priority
