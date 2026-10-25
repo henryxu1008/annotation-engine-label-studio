@@ -89,3 +89,18 @@ PostgreSQL separate connections cover duplicate dispatch/link, decision/cancel
 orderings, revocation and new-revision races. A dedicated synthetic bilingual
 browser workflow exercises the full handoff and return path without enlarging
 the existing Enterprise E2E job. Local Docker/#76 remain read-only.
+
+### Retained runtime observation during implementation
+
+The 2026-10-25 read-only preservation check found the baseline #76 database
+container ID missing, with a newly created container using the same name
+(created 12:13:23 UTC, observed running/healthy). The other five protected
+container fingerprints and the protected worktree matched the implementation
+baseline. This window is recorded as CHANGED_DATABASE_CONTAINER_REPLACED; the
+cause and the missing container's current fingerprint are UNKNOWN. This task
+issued no Docker start/stop/restart/remove commands and does not infer database
+content integrity from the replacement container's health.
+
+The prior runtime CHANGED incident, initial exit cause UNKNOWN and
+NOT_RUN_AFTER_DOCKER_INTERRUPTION full-database comparison remain independent
+historical evidence. No current read-only observation erases those records.
