@@ -143,35 +143,7 @@ class ListAPI(ArbitrationAPI):
                 )
                 row = a.checked(previous, project)
             else:
-                batch = get_object_or_404(ClassificationBatch, project=project, pk=value['batch_id'])
-                origin = a.origin(project, batch, value['task_id'], value['expected_manifest_hash'])
-                target = a.assignee(project, value['assignee_id'], origin['item'])
-                initial = a.evidence(project, actor, context[3], origin, lock=True)
-                a.require_evidence(initial)
-                input_hash = a.input_hash(project, origin['item'])
-                if ArbitrationTask.objects.filter(
-                    project=project,
-                    task_id_frozen=value['task_id'],
-                    input_set_hash=input_hash,
-                    status__in=['pending', 'resolved'],
-                ).exists():
-                    a.error('DUPLICATE_ACTIVE')
-                row = ArbitrationTask.objects.create(
-                    project=project,
-                    created_by=actor,
-                    assignee=target,
-                    creator_principal=principal.principal_id,
-                    actor_id_frozen=actor.pk,
-                    assignee_id_frozen=target.pk,
-                    batch_id_frozen=batch.pk,
-                    task_id_frozen=value['task_id'],
-                    input_set_hash=input_hash,
-                    origin=origin,
-                    origin_hash=a.digest(origin),
-                    participant_ids=a.participants(origin['item']),
-                    idempotency_key=key,
-                    request_hash=request_hash,
-                )
+                row, initial = a.create_task(context, value, key, request_hash)
 
             result = {
                 **a.meta(row, context),
