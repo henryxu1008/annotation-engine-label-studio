@@ -157,7 +157,7 @@ def checked(row, project):
             and analysis["metric_rule"] == a.service.RULE and analysis["selection"] == a.batches.SELECTION
             and all(a.integer(target[k]) for k in ("id", "actor_id", "assignee_id", "batch_id"))
             and all(a.hash_value(target[k]) for k in ("origin_hash", "input_set_hash"))
-            and isinstance(target["created_at"], str)
+            and isinstance(target["created_at"], str) and a.integer(target["version_at_link"])
             and (target["status_at_link"], target["version_at_link"]) in (("pending", 1), ("resolved", 2))
             and (o["mode"] != "dispatch" or target["status_at_link"] == "pending")
         )
@@ -204,6 +204,7 @@ def detail(row, context):
         "submission_id": row.submission_id_frozen, "revision": row.origin["review"]["candidate"]["revision"],
         "arbitration_id": row.arbitration_id_frozen, "mode": row.origin["mode"],
         "created_at": row.created_at.isoformat(), "actor_id": row.actor_id_frozen,
+        "target": {k: row.origin["target"][k] for k in ("id", "input_set_hash", "created_at", "assignee_id", "batch_id")},
         "viewer_hash": a.viewer_hash(context), "available": False, "reason": "source_unavailable",
         "source_status": "unavailable", "arbitration_status": None, "arbitration_version": None, "decision": None,
     }

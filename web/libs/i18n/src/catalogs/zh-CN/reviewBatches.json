@@ -201,5 +201,17 @@
   "priority_metric_unavailable": "未知：冻结输入不可比较",
   "priorityUnknownWrite": "创建尚未获得确认，请保留原请求和键；刷新不会重复创建。",
   "priorityRecover": "恢复原批次创建",
-  "prioritySaved": "批次 #{{id}} 已保存；刷新读取不会再创建批次。"
+  "prioritySaved": "批次 #{{id}} 已保存；刷新读取不会再创建批次。",
+  "handoffTitle": "审核仲裁交接",
+  "handoffBoundary": "将冻结审核依据交接到现有仲裁流程；仲裁不会自动通过或改变源审核。",
+  "handoffSource": "审核批次 #{{batch}} · 提交 #{{source}}",
+  "handoffBack": "返回审核批次",
+  "handoffBackHistory": "返回交接历史",
+  "handoffStart": "准备交接",
+  "handoffEmpty": "此冻结修订暂无可见交接记录。",
+  "handoffReviewState": "源审核状态",
+  "handoffLinkTitle": "关联已有仲裁",
+  "handoffLinkHint": "仲裁 #{{id}} 已覆盖同一组冻结输入。确认关联以保留两份来源依据。",
+  "handoffConfirmLink": "确认关联",
+  "arbitrationSaved_handoff": "交接已保存至仲裁 #{{id}}，审核状态未改变。"
 }

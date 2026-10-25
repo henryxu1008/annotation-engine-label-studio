@@ -201,5 +201,17 @@
   "priority_metric_unavailable": "Unknown: frozen inputs are not comparable",
   "priorityUnknownWrite": "Creation has no confirmed acknowledgement. Keep the original request and key; refresh does not repeat creation.",
   "priorityRecover": "Recover original batch creation",
-  "prioritySaved": "Batch #{{id}} was saved. Refresh reads do not create another batch."
+  "prioritySaved": "Batch #{{id}} was saved. Refresh reads do not create another batch.",
+  "handoffTitle": "Review arbitration handoff",
+  "handoffBoundary": "Link frozen review evidence to the existing arbitration workflow. Arbitration does not approve or alter the source review.",
+  "handoffSource": "Review batch #{{batch}} · submission #{{source}}",
+  "handoffBack": "Back to review batch",
+  "handoffBackHistory": "Back to handoff history",
+  "handoffStart": "Prepare handoff",
+  "handoffEmpty": "No visible handoffs for this frozen revision.",
+  "handoffReviewState": "Source review state",
+  "handoffLinkTitle": "Link existing arbitration",
+  "handoffLinkHint": "Arbitration #{{id}} already covers these exact frozen inputs. Confirm the association to retain both origins.",
+  "handoffConfirmLink": "Confirm association",
+  "arbitrationSaved_handoff": "Handoff saved to arbitration #{{id}}. Review state is unchanged."
 }
