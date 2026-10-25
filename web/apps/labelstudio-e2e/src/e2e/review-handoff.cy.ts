@@ -62,8 +62,10 @@ describe("frozen review to arbitration handoff", () => {
       cy.get(`[data-handoff-source="${scope.cases.split.sources[0]}"]`).should("have.focus");
 
       visit("reviewer");
-      cy.get('[data-testid="open-classification-arbitrations"]').click();
-      cy.then(() => workspace().find(`[data-arbitration="${saved.arbitration_id}"]`).click());
+      openReview();
+      cy.get(`[data-handoff-source="${scope.cases.split.sources[0]}"]`).click();
+      cy.get('[data-testid="handoff-start"]').should("not.exist");
+      cy.then(() => cy.get(`[data-handoff="${saved.id}"]`).click());
       workspace().find('input[type="radio"]').first().check();
       workspace().find("textarea").type(zh ? "采纳已有冻结修订" : "Adopt existing frozen revision");
       workspace().contains("button", zh ? "采纳此冻结修订" : "Adopt this frozen revision").click();

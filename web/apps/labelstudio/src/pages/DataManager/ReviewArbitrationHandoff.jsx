@@ -33,6 +33,7 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
     window.addEventListener("blur", blur);
     return () => { ++generation.current; window.removeEventListener("blur", blur); };
   }, [projectId, source.batch, source.source]);
+  useEffect(() => { if (!target && !busy) heading.current?.focus(); }, [target, busy]);
   if (target) return <ClassificationArbitrations projectId={projectId} handoffSource={source}
     initialHandoffId={target.handoff ?? null} initialTaskId={target.arbitration ?? null}
     onBackToReview={() => { setTarget(null); load(page); heading.current?.focus(); }} />;

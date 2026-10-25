@@ -106,7 +106,7 @@ jobs:
           done
           tail -200 /tmp/review-handoff.log
           exit 1
-      - name: Run bilingual frozen priority sampling journey
+      - name: Run bilingual review arbitration handoff journey
         working-directory: web
         run: |
           yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts \

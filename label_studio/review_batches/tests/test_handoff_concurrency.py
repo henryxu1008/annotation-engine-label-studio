@@ -9,7 +9,7 @@ from django.db import close_old_connections, connection, transaction
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from organizations.models import OrganizationMember
-from projects.models import Project, ProjectMember
+from projects.models import Project
 from rest_framework.test import APIClient
 from review_batches.models import ReviewArbitrationHandoff
 

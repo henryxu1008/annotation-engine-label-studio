@@ -220,7 +220,7 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
     {saved && <p role="status" data-testid="arbitration-saved">{t(`arbitrationSaved_${saved.action}`, { id: saved.id })}</p>}
     {unknown && <p role="status">{t("arbitrationUnknown")} <Button disabled={busy} onClick={() => send()}>{t("arbitrationRecover")}</Button></p>}
     {!busy && <Button onClick={refresh}>{t("batchRefresh")}</Button>}
-    {onBackToReview ? <Button disabled={busy || unknown} onClick={onBackToReview}>{t("handoffBackHistory")}</Button>
+    {handoffSource ? <Button disabled={busy || unknown || !onBackToReview} onClick={onBackToReview}>{t("handoffBackHistory")}</Button>
       : view !== "list" && <Button disabled={busy || unknown} onClick={() => loadList(page)}>{t("arbitrationBack")}</Button>}
     {view === "list" && list && <>
       {caps?.can_create && <p>{t("arbitrationStartHint")}</p>}

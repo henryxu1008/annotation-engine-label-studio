@@ -209,8 +209,11 @@ class TestHandoff(HandoffFixtures, APITestCase):
             assert self.handoff(body, key).status_code == 422
         with patch.object(a, "MAX_PARTICIPANTS", 1):
             assert self.handoff(body, key).status_code == 422
+        text_bytes = len(self.first.result_snapshot["task"]["data"]["text"].encode("utf-8"))
+        with patch.object(a, "MAX_TEXT_BYTES", text_bytes - 1):
+            assert self.handoff(body, key).status_code == 422
         assert not ArbitrationTask.objects.exists() and not ReviewArbitrationHandoff.objects.exists()
-        with patch.object(a, "MAX_SNAPSHOT_BYTES", snapshots):
+        with patch.object(a, "MAX_SNAPSHOT_BYTES", snapshots), patch.object(a, "MAX_PARTICIPANTS", 2), patch.object(a, "MAX_TEXT_BYTES", text_bytes):
             response = self.handoff(body, key)
             assert response.status_code == 201, response.data
         with patch.object(a, "evidence", side_effect=AssertionError("Replay must not reload answers")):
