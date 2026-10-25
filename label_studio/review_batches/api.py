@@ -38,6 +38,7 @@ class BatchAPI(generics.GenericAPIView):
     def finalize_response(self, request, response, *args, **kwargs):
         response = super().finalize_response(request, response, *args, **kwargs)
         response["Cache-Control"] = "private, no-store"
+        response["Referrer-Policy"] = "no-referrer"
         return response
 
     def context(self, request, pk, manager=False):

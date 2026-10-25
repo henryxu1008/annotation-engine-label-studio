@@ -78,6 +78,7 @@ class TestPriority(APITestCase):
         before = list(Submission.objects.order_by('pk').values())
         first, repeated = self.preview(), self.preview()
         assert first.status_code == 200, first.data
+        assert first['Referrer-Policy'] == 'no-referrer'
         assert first.data == repeated.data
         plan = first.data['plan']
         assert plan['algorithm'] == priority.ALGORITHM
@@ -96,6 +97,7 @@ class TestPriority(APITestCase):
         }
         created = self.create()
         assert created.status_code == 201, created.data
+        assert created['Referrer-Policy'] == 'no-referrer'
         assert list(Submission.objects.order_by('pk').values()) == before
         assert not ReviewDecision.objects.exists()
         assert 'choices' not in str(plan['priority']) and 'Synthetic' not in str(plan['priority'])
@@ -170,12 +172,14 @@ class TestPriority(APITestCase):
         self.client.force_authenticate(self.reviewer)
         detail = self.client.get(f'{self.base}{created.data["id"]}/')
         assert detail.status_code == 200, detail.data
+        assert detail['Referrer-Policy'] == 'no-referrer'
         assert 'priority_source' not in detail.data
         assert detail.data['priority_summary']['conflict_candidates'] == 0
         assert self.analysis['manifest_hash'] not in str(detail.data)
         assert detail.data['items'] == []
         queue = self.client.get(f'{self.base}{created.data["id"]}/queue/')
         assert queue.status_code == 200 and queue.data['count'] == 0
+        assert queue['Referrer-Policy'] == 'no-referrer'
         result = self.client.post(
             f'/api/submissions/{self.first.pk}/review/?review_batch={created.data["id"]}',
             {'decision': 'approved'},
