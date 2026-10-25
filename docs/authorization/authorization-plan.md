@@ -1006,6 +1006,25 @@ codes with matching HTTP statuses. Once confirmation is unknown, subsequent
 errors and late responses must preserve the original request/key; reads never
 resubmit it or silently create a replacement.
 
+### Frozen text classification arbitration (#81)
+
+Arbitration adds a separate immutable local ledger and independent disabled-by-default
+flag/mode map. Only current Managers dispatch/cancel; only the assigned independent
+Reviewer can adopt an existing frozen revision. All sources remain pinned and verified;
+source loss masks answers, while authorized original-key recovery retains receipts.
+Project-first fencing, CAS and PostgreSQL/SQLite constraints protect concurrent terminal
+transitions. Cancellation remains a SECURITY_CANCEL operation without READ_WORK.
+Recheck source graph projection, mapped principals, frozen triggers and response-time
+authority on upgrades. See [classification-arbitration-v1.md](classification-arbitration-v1.md).
+Submission, review state, sampling, Host and Core authority remain unchanged.
+
+Concurrent arbitration capability/data reads also bind an ephemeral viewer HMAC
+to the current principal, actor, project/organization and role. Denied reads or
+mixed contexts clear the UI; current capability and object permission must both
+permit an action. This pin grants no authority and does not alter persisted
+receipts, including recovery across secret rotation. Standard DRF validators reject
+invalid Unicode/NUL reasons with 400 before request hashing.
+
 Package discovery (#83) reuses existing package membership and assignment/review
 facts for batched role-scoped list summaries, pre-pagination state filters and
 explicitly selected-package My Work. Preserve sample versus assignment units and

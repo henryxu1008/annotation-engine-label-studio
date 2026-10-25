@@ -1,0 +1,124 @@
+name: Classification Arbitration E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: classification-arbitration-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  POETRY_VERSION: 2.3.2
+  DJANGO_SETTINGS_MODULE: core.settings.label_studio
+  DJANGO_DB: postgresql
+  POSTGRE_HOST: localhost
+  POSTGRE_PORT: "5432"
+  POSTGRE_NAME: classification_arbitration
+  POSTGRE_USER: postgres
+  POSTGRE_PASSWORD: arbitration-ci-synthetic-only
+  DEBUG: "true"
+  HOSTNAME: http://localhost:8080
+  FRONTEND_HOSTNAME: http://localhost:8080
+  FRONTEND_HMR: "false"
+  COLLECT_ANALYTICS: "false"
+  LATEST_VERSION_CHECK: "false"
+  SENTRY_RATE: "0"
+  JSON_LOG: "0"
+
+jobs:
+  frozen-arbitration:
+    name: Frozen classification arbitration bilingual E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # Retain the existing near-limit enterprise journeys and their budgets.
+    services:
+      arbitration-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: arbitration-ci-synthetic-only
+          POSTGRES_DB: classification_arbitration
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d classification_arbitration"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          # DOM assertions alone cannot detect missing Chinese screenshot glyphs.
+          test -n "$(fc-list :lang=zh-cn family)"
+      - name: Install backend dependencies
+        run: poetry install --with test
+      - name: Prepare fresh synthetic database
+        run: |
+          poetry run python label_studio/core/version.py
+          poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py collectstatic --noinput
+          TEST_ENVIRONMENT=1 poetry run python label_studio/manage.py seed_classification_arbitration_e2e
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Install frontend dependencies
+        working-directory: web
+        run: yarn install --frozen-lockfile
+      - name: Build frontend
+        working-directory: web
+        run: yarn ls:build
+      - name: Start isolated Fork server
+        env:
+          ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED: "true"
+          ANNOTATION_CLASSIFICATION_BATCHES_ENABLED: "true"
+          ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED: "true"
+        run: |
+          export ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.classification-arbitrations81-e2e.json"))["modes"]))')"
+          export ANNOTATION_CLASSIFICATION_ARBITRATION_MODES="$ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES"
+          nohup poetry run python label_studio/manage.py runserver 0.0.0.0:8080 --noreload > /tmp/classification-arbitration.log 2>&1 &
+      - name: Wait for Django and same-origin bundles
+        run: |
+          for i in {1..90}; do
+            if curl --fail --silent http://localhost:8080/health/ >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/runtime.js >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/vendor.js >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/main.js >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          tail -200 /tmp/classification-arbitration.log
+          exit 1
+      - name: Run bilingual frozen arbitration journey
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/classification-arbitrations.cy.ts
+      - name: Show failure diagnostics
+        if: failure()
+        run: tail -200 /tmp/classification-arbitration.log || true
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: classification-arbitration-e2e
+          if-no-files-found: ignore
+          path: |
+            web/dist/cypress/apps/labelstudio-e2e/screenshots/**
+            web/dist/cypress/apps/labelstudio-e2e/videos/**
+            /tmp/classification-arbitration.log

@@ -95,3 +95,4 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 .review84-e2e.json
 .classification81-e2e.json
 .classification-batches81-e2e.json
+.classification-arbitrations81-e2e.json
