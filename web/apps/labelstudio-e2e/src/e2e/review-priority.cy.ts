@@ -41,7 +41,7 @@ describe("optional frozen conflict-priority sampling", () => {
       // Hold a real preview response until after blur: no rendered preview or
       // creation intent exists yet, so invalidation must fence the pending read.
       let previewHeld = false;
-      cy.intercept({ method: "POST", pathname: `${base}preview/`, times: 1 }, (req) => {
+      cy.intercept({ method: "POST", pathname: new RegExp(`^${base}preview/?$`), times: 1 }, (req) => {
         req.continue((res) => {
           expect(res.statusCode).to.eq(200);
           previewHeld = true;
