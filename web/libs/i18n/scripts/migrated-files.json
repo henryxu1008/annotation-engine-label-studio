@@ -105,5 +105,6 @@
   "apps/labelstudio/src/pages/DataManager/ClassificationDisagreement.jsx",
   "apps/labelstudio/src/pages/DataManager/ClassificationBatches.jsx",
   "apps/labelstudio/src/pages/DataManager/ClassificationArbitrations.jsx",
-  "apps/labelstudio/src/pages/DataManager/ReviewPriority.jsx"
+  "apps/labelstudio/src/pages/DataManager/ReviewPriority.jsx",
+  "apps/labelstudio/src/pages/DataManager/ReviewArbitrationHandoff.jsx"
 ]

@@ -207,6 +207,32 @@ def assignee(project, identifier, item):
     return user
 
 
+def create_task(context, value, key, request_hash):
+    """Create under the caller's project-first fence; both public entries use this."""
+    if not connection.in_atomic_block:
+        raise RuntimeError('Arbitration creation requires the project write fence')
+    principal, actor, project, role = context
+    batch = get_object_or_404(ClassificationBatch, project=project, pk=value['batch_id'])
+    frozen = origin(project, batch, value['task_id'], value['expected_manifest_hash'])
+    target = assignee(project, value['assignee_id'], frozen['item'])
+    initial = evidence(project, actor, role, frozen, lock=True)
+    require_evidence(initial)
+    semantic_hash = input_hash(project, frozen['item'])
+    if ArbitrationTask.objects.filter(
+        project=project, task_id_frozen=value['task_id'], input_set_hash=semantic_hash,
+        status__in=['pending', 'resolved'],
+    ).exists():
+        error('DUPLICATE_ACTIVE')
+    row = ArbitrationTask.objects.create(
+        project=project, created_by=actor, assignee=target, creator_principal=principal.principal_id,
+        actor_id_frozen=actor.pk, assignee_id_frozen=target.pk, batch_id_frozen=batch.pk,
+        task_id_frozen=value['task_id'], input_set_hash=semantic_hash, origin=frozen,
+        origin_hash=digest(frozen), participant_ids=participants(frozen['item']),
+        idempotency_key=key, request_hash=request_hash,
+    )
+    return row, initial
+
+
 def eligible_assignees(project, item):
     members = ProjectMember.objects.filter(project=project, role='reviewer', enabled=True).values('user_id')
     organization = OrganizationMember.objects.filter(

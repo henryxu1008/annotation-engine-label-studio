@@ -5,6 +5,7 @@ import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { ClassificationResult } from "./ClassificationDisagreement";
+import { handoffContextSchema, handoffDetailSchema, handoffReceiptSchema, handoffScopeMatches } from "./reviewHandoffResponses";
 import "./ReviewBatches.scss";
 import "./ClassificationBatches.scss";
 
@@ -36,7 +37,10 @@ const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status 
 const rejected = { ARBITRATION_INVALID_INPUT: 400, ARBITRATION_INVALID_KEY: 400, ARBITRATION_ORIGIN_CHANGED: 409,
   ARBITRATION_INELIGIBLE: 409, ARBITRATION_ASSIGNEE_UNAVAILABLE: 409, ARBITRATION_DUPLICATE_ACTIVE: 409,
   ARBITRATION_SOURCE_UNAVAILABLE: 409, ARBITRATION_SOURCE_CHANGED: 409, ARBITRATION_BUDGET_EXCEEDED: 422,
-  ARBITRATION_CAS_CONFLICT: 409, ARBITRATION_INPUT_SET_CHANGED: 409, ARBITRATION_TERMINAL: 409 };
+  ARBITRATION_CAS_CONFLICT: 409, ARBITRATION_INPUT_SET_CHANGED: 409, ARBITRATION_TERMINAL: 409,
+  REVIEW_HANDOFF_INVALID_INPUT: 400, REVIEW_HANDOFF_INVALID_KEY: 400, REVIEW_HANDOFF_KEY_CONFLICT: 409,
+  REVIEW_HANDOFF_ALREADY_EXISTS: 409, REVIEW_HANDOFF_CAS_CONFLICT: 409, REVIEW_HANDOFF_INPUT_SET_CHANGED: 409,
+  REVIEW_HANDOFF_SOURCE_CHANGED: 409, REVIEW_HANDOFF_SOURCE_NOT_PENDING: 409, REVIEW_HANDOFF_INELIGIBLE: 409 };
 
 export const ClassificationArbitrationTitle = () => {
   const { t } = useLocaleTranslation("reviewBatches");
@@ -60,16 +64,19 @@ export const ClassificationArbitrationEntry = ({ projectId, onOpen, disabled, di
     {t(dispatch ? "arbitrationDispatch" : "arbitrationTitle")}</Button> : null;
 };
 
-export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) => {
+export const ClassificationArbitrations = ({ projectId, initialOrigin = null, handoffSource = null,
+  initialTaskId = null, initialHandoffId = null, onBackToReview = null }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), selected = useRef(null), heading = useRef(null);
+  const handoffId = useRef(initialHandoffId);
+  const [handoffContext, setHandoffContext] = useState(null), [handoffDetail, setHandoffDetail] = useState(null);
   const [view, setView] = useState(initialOrigin ? "create" : "list"), [busy, setBusy] = useState(false);
   const [unknown, setUnknown] = useState(false), [error, setError] = useState(""), [saved, setSaved] = useState(null);
   const [caps, setCaps] = useState(null), [list, setList] = useState(null), [data, setData] = useState(null), [roster, setRoster] = useState(null);
   const [page, setPage] = useState(1), [filter, setFilter] = useState("pending"), [rosterPage, setRosterPage] = useState(1);
   const [assignee, setAssignee] = useState(""), [winner, setWinner] = useState(""), [reason, setReason] = useState("");
-  const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); };
+  const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); };
   const fetch = async (method, params, schema, body, headers) => {
     const r = await call.current(method, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
     if (failed(r)) {
@@ -102,36 +109,78 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
       const [capability, detail] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
         fetch("classificationArbitrationDetail", { arbitration: identifier }, detailSchema)]);
       if (!capability.can_read || capability.viewer_hash !== detail.viewer_hash || detail.id !== identifier) throw new Error("scope changed");
-      if (current()) { setCaps(capability); setData(detail); }
+      let provenance = null;
+      if (handoffSource) {
+        provenance = await fetch("reviewHandoffDetail", { batch: handoffSource.batch, handoff: handoffId.current }, handoffDetailSchema);
+        if (!handoffScopeMatches(provenance, handoffSource) || provenance.id !== handoffId.current
+          || provenance.viewer_hash !== capability.viewer_hash || provenance.arbitration_id !== identifier
+          || provenance.target.id !== identifier || provenance.target.input_set_hash !== detail.input_set_hash
+          || provenance.target.created_at !== detail.created_at || provenance.target.assignee_id !== detail.assignee_id
+          || provenance.target.batch_id !== detail.batch_id
+          || (provenance.available && (provenance.arbitration_status !== detail.status || provenance.arbitration_version !== detail.version))) throw new Error("handoff changed");
+        if (!provenance.available) Object.assign(detail, { available: false, report: null, texts: [], decision: null, cancellation: null, can_decide: false, can_cancel: false });
+      }
+      if (current()) { setCaps(capability); setData(detail); setHandoffDetail(provenance); }
     });
   };
   const loadOrigin = (targetPage = 1) => {
     setView("create"); setRosterPage(targetPage); setAssignee("");
     return read(async (current) => {
-      const [capability, candidates] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
-        fetch("classificationArbitrationAssignees", { ...initialOrigin, page: targetPage, page_size: 100 }, rosterSchema)]);
-      if (candidates.batch_id !== initialOrigin.batch_id || candidates.task_id !== initialOrigin.task_id
-        || candidates.origin_manifest_hash !== initialOrigin.expected_manifest_hash || !capability.can_read || !capability.can_create
+      const capability = await fetch("classificationArbitrationCapability", {}, capsSchema);
+      let origin = initialOrigin, context = null;
+      if (handoffSource) {
+        context = await fetch("reviewHandoffContext", { batch: handoffSource.batch, source: handoffSource.source }, handoffContextSchema);
+        if (!handoffScopeMatches(context, handoffSource) || !context.can_handoff || capability.viewer_hash !== context.viewer_hash
+          || !capability.can_read || !capability.can_create) throw new Error("handoff scope changed");
+        origin = context.dispatch_origin;
+        if (context.existing_arbitration) {
+          if (context.existing_arbitration.input_set_hash !== context.expected_input_set_hash
+            || context.existing_arbitration.viewer_hash !== context.viewer_hash
+            || context.existing_arbitration.status === "cancelled") throw new Error("target changed");
+          if (current()) { setCaps(capability); setHandoffContext(context); }
+          return;
+        }
+      }
+      const candidates = await fetch("classificationArbitrationAssignees", { ...origin, page: targetPage, page_size: 100 }, rosterSchema);
+      if (candidates.batch_id !== origin.batch_id || candidates.task_id !== origin.task_id
+        || candidates.origin_manifest_hash !== origin.expected_manifest_hash || !capability.can_read || !capability.can_create
+        || (context && candidates.input_set_hash !== context.expected_input_set_hash)
         || capability.viewer_hash !== candidates.viewer_hash) throw new Error("scope changed");
-      if (current()) { setCaps(capability); setRoster(candidates); }
+      if (current()) { setCaps(capability); setRoster(candidates); setHandoffContext(context); }
     });
   };
   useEffect(() => {
     pending.current = null; selected.current = null; setUnknown(false); setSaved(null); setWinner(""); setReason("");
-    initialOrigin ? loadOrigin() : loadList(1, "pending");
+    handoffId.current = initialHandoffId;
+    initialTaskId ? openTask(initialTaskId) : initialOrigin || handoffSource ? loadOrigin() : loadList(1, "pending");
     const blur = () => { generation.current += 1; clear(); setBusy(false); setError("arbitrationReadFailed");
       if (pending.current?.attempted) setUnknown(true);
     };
     window.addEventListener("blur", blur);
     heading.current?.focus();
     return () => { generation.current += 1; window.removeEventListener("blur", blur); };
-  }, [projectId]);
+  }, [projectId, initialOrigin?.batch_id, initialOrigin?.task_id, initialOrigin?.expected_manifest_hash,
+    handoffSource?.batch, handoffSource?.source, initialTaskId, initialHandoffId]);
   const send = async (intent = pending.current) => {
     if (!intent) return;
     const recovering = intent.attempted; intent.attempted = true; pending.current = intent;
     const current = ++generation.current;
     clear(); setBusy(true); setError("");
     try {
+      if (intent.action === "handoff") {
+        const result = await fetch("createReviewHandoff", { batch: handoffSource.batch, source: handoffSource.source },
+          handoffReceiptSchema, intent.body, { "Idempotency-Key": intent.key });
+        if (current !== generation.current) return;
+        if (!handoffScopeMatches(result, handoffSource) || result.viewer_hash !== intent.viewerHash || result.receipt.key !== intent.key
+          || result.receipt.mode !== intent.body.mode || result.receipt.plan_hash !== intent.body.expected_plan_hash
+          || result.input_set_hash !== intent.body.expected_input_set_hash
+          || (intent.body.mode === "dispatch" && (result.receipt.arbitration_status_at_commit !== "pending" || result.receipt.arbitration_version_at_commit !== 1))
+          || (intent.body.mode === "link_existing" && (result.arbitration_id !== intent.body.arbitration_id
+            || result.receipt.arbitration_version_at_commit !== intent.body.expected_arbitration_version))) throw new Error("handoff acknowledgement changed");
+        handoffId.current = result.id; pending.current = null; setUnknown(false); setSaved({ action: "handoff", id: result.arbitration_id });
+        await openTask(result.arbitration_id);
+        return;
+      }
       const methods = { create: "createClassificationArbitration", decision: "resolveClassificationArbitration", cancel: "cancelClassificationArbitration" };
       const result = await fetch(methods[intent.action], intent.identifier ? { arbitration: intent.identifier } : {},
         intent.action === "create" ? createdSchema : commandSchema, intent.body, { "Idempotency-Key": intent.key });
@@ -156,8 +205,10 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
   };
   const begin = (action, body, identifier = null) => {
     if (busy || unknown || pending.current) return;
-    send({ action, body, identifier, key: uuidv4(), attempted: false, inputHash: roster?.input_set_hash });
+    send({ action, body, identifier, key: uuidv4(), attempted: false, inputHash: roster?.input_set_hash, viewerHash: handoffContext?.viewer_hash });
   };
+  const beginHandoff = (binding) => begin("handoff", { mode: binding.arbitration_id ? "link_existing" : "dispatch",
+    expected_plan_hash: handoffContext.expected_plan_hash, expected_input_set_hash: handoffContext.expected_input_set_hash, ...binding });
   const refresh = () => view === "create" ? loadOrigin(rosterPage) : view === "detail" && selected.current ? openTask(selected.current) : loadList(page);
   const report = data?.available ? { ...data.report, manifest_hash: data.input_set_hash, observed_at: data.observed_at,
     manifest: { inputs: data.report.inputs, rule: "classification-exact-sets/v1", calculated_at: data.calculated_at } } : null;
@@ -169,7 +220,8 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
     {saved && <p role="status" data-testid="arbitration-saved">{t(`arbitrationSaved_${saved.action}`, { id: saved.id })}</p>}
     {unknown && <p role="status">{t("arbitrationUnknown")} <Button disabled={busy} onClick={() => send()}>{t("arbitrationRecover")}</Button></p>}
     {!busy && <Button onClick={refresh}>{t("batchRefresh")}</Button>}
-    {view !== "list" && <Button disabled={busy} onClick={() => loadList(page)}>{t("arbitrationBack")}</Button>}
+    {handoffSource ? <Button disabled={busy || unknown || !onBackToReview} onClick={onBackToReview}>{t("handoffBackHistory")}</Button>
+      : view !== "list" && <Button disabled={busy || unknown} onClick={() => loadList(page)}>{t("arbitrationBack")}</Button>}
     {view === "list" && list && <>
       {caps?.can_create && <p>{t("arbitrationStartHint")}</p>}
       <label>{t("arbitrationState")}<select value={filter} disabled={busy} onChange={(e) => loadList(1, e.target.value)}>
@@ -187,9 +239,16 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null }) 
       {!roster.results.length && <p>{t("arbitrationNoAssignees")}</p>}
       <Button disabled={!roster.previous} onClick={() => loadOrigin(rosterPage - 1)}>{t("batchPrevious")}</Button>
       <Button disabled={!roster.next} onClick={() => loadOrigin(rosterPage + 1)}>{t("batchNext")}</Button>
-      <Button disabled={!assignee} onClick={() => begin("create", { ...initialOrigin, assignee_id: Number(assignee) })}>{t("arbitrationConfirmDispatch")}</Button>
+      <Button disabled={!assignee} onClick={() => handoffSource ? beginHandoff({ assignee_id: Number(assignee) })
+        : begin("create", { ...initialOrigin, assignee_id: Number(assignee) })}>{t("arbitrationConfirmDispatch")}</Button>
+    </fieldset>}
+    {view === "create" && handoffContext?.existing_arbitration && <fieldset disabled={busy || unknown}>
+      <legend>{t("handoffLinkTitle")}</legend><p>{t("handoffLinkHint", { id: handoffContext.existing_arbitration.id })}</p>
+      <Button onClick={() => beginHandoff({ arbitration_id: handoffContext.existing_arbitration.id,
+        expected_arbitration_version: handoffContext.existing_arbitration.version })}>{t("handoffConfirmLink")}</Button>
     </fieldset>}
     {view === "detail" && data && <>
+      {handoffDetail && <p data-testid="handoff-source-status">{t("handoffReviewState")}: {t(handoffDetail.source_status === "unavailable" ? "unknownStatus" : handoffDetail.source_status)}</p>}
       <h4>{t("arbitrationTask", { task: data.task_id, batch: data.batch_name })}</h4><p>{t(`arbitrationState_${data.status}`)}</p>
       {data.decision && <p data-testid="arbitration-decision">{t("arbitrationDecision", { source: data.decision.winner_submission_id,
         revision: data.decision.winner_revision, actor: data.decision.actor_id, time: data.decision.created_at })}: {data.decision.reason}</p>}

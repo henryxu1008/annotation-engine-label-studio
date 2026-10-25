@@ -6,6 +6,7 @@ from access_control.project_operations import (
     require_project_operation,
 )
 from core.permissions import all_permissions
+from django.conf import settings
 from django.db import transaction
 from rest_framework import generics
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied
@@ -59,6 +60,18 @@ class CapabilityAPI(BatchAPI):
                 'can_prioritize': can_create and priority.available(project, principal, actor),
                 'can_read_priority': priority.read_available(project, principal, actor),
                 'viewer_hash': priority.viewer_hash(principal, actor, project, role)}
+        if getattr(settings, 'ANNOTATION_REVIEW_ARBITRATION_HANDOFF_ENABLED', False):
+            from . import handoff
+            data['can_read_handoffs'] = False
+            data['can_handoff'] = False
+            try:
+                handoff.guard(pk, principal, actor)
+                data['can_read_handoffs'] = True
+                if role == 'manager':
+                    handoff.guard(pk, principal, actor, create=True)
+                    data['can_handoff'] = True
+            except APIException:
+                pass
         current, current_actor = resolve_actor(request)
         _, current_role, _ = service.guard(pk, current, current_actor)
         if current != principal or current_actor.pk != actor.pk or current_role != role:

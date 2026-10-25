@@ -152,6 +152,91 @@ it("treats a mismatched acknowledgement as unknown", async () => {
 const casRejection = (status = 409) => ({ error: true, $meta: { ok: false, status },
   response: { display_context: { reason: "ARBITRATION_CAS_CONFLICT" } } });
 
+const handoffSource = { batch: 41, source: 11, pending: true };
+const handoffContext = () => ({ schema: "review-arbitration-handoffs/v1", viewer_hash: metadata.viewer_hash,
+  review_batch_id: 41, submission_id: 11, revision: 1, expected_plan_hash: "d".repeat(64),
+  expected_input_set_hash: metadata.input_set_hash, can_handoff: true, dispatch_origin: origin, existing_arbitration: null });
+const handoffDetail = () => ({ schema: "review-arbitration-handoffs/v1", id: 51, review_batch_id: 41, submission_id: 11,
+  revision: 1, arbitration_id: 7, mode: "dispatch", created_at: "handoff", actor_id: 1, viewer_hash: metadata.viewer_hash,
+  available: true, reason: null, source_status: "pending", arbitration_status: state, arbitration_version: state === "pending" ? 1 : 2,
+  target: { id: 7, input_set_hash: metadata.input_set_hash, created_at: metadata.created_at, assignee_id: 30, batch_id: 3 } });
+const handoffRespond = async (method, options) => {
+  if (method === "reviewHandoffContext") return handoffContext();
+  if (method === "reviewHandoffDetail") return handoffDetail();
+  if (method === "createReviewHandoff") return { ...handoffDetail(), replayed: true, input_set_hash: metadata.input_set_hash,
+    receipt: { operation: "handoff", key: options.headers["Idempotency-Key"], mode: options.body.mode,
+      plan_hash: handoffContext().expected_plan_hash, arbitration_status_at_commit: "pending", arbitration_version_at_commit: 1 } };
+  return respond(method, options);
+};
+const mountHandoff = (locale = "en-US", props = {}) => {
+  const runtime = createLocaleRuntime(locale), Provider = runtime.provider;
+  return { ...render(<Provider><ClassificationArbitrations projectId={4} handoffSource={handoffSource} {...props} /></Provider>), runtime, Provider };
+};
+
+it.each(["en-US", "zh-CN"])("recovers the original handoff without implicit linking in %s", async (locale) => {
+  manager = true; let posts = 0;
+  mockCall.mockImplementation((m, o) => m === "createReviewHandoff" && ++posts === 1 ? Promise.reject(new Error("unknown")) : handoffRespond(m, o));
+  const onBackToReview = jest.fn(), { runtime, unmount } = mountHandoff(locale, { onBackToReview });
+  await command("create", locale === "zh-CN");
+  const recovery = await screen.findByRole("button", { name: locale === "zh-CN" ? "恢复原命令" : "Recover original command" });
+  const back = screen.getByRole("button", { name: locale === "zh-CN" ? "返回交接历史" : "Back to handoff history" });
+  expect(back.disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "刷新只读视图" : "Refresh read-only view" }));
+  await waitFor(() => expect(recovery.disabled).toBe(false));
+  expect(posts).toBe(1); fireEvent.click(recovery);
+  await screen.findByTestId("handoff-source-status");
+  const calls = mockCall.mock.calls.filter(([m]) => m === "createReviewHandoff");
+  expect(calls).toHaveLength(2); expect(calls[0][1].headers).toEqual(calls[1][1].headers);
+  expect(calls[0][1].body).toEqual({ mode: "dispatch", expected_plan_hash: "d".repeat(64),
+    expected_input_set_hash: metadata.input_set_hash, assignee_id: 30 });
+  expect(mockCall.mock.calls.some(([m]) => m === "createClassificationArbitration")).toBe(false);
+  unmount(); runtime.destroy();
+});
+
+it("requires explicit association to an existing target without an assignee form", async () => {
+  manager = true;
+  mockCall.mockImplementation((m, o) => m === "reviewHandoffContext"
+    ? Promise.resolve({ ...handoffContext(), existing_arbitration: metadata }) : handoffRespond(m, o));
+  const { runtime, unmount } = mountHandoff();
+  await screen.findByRole("button", { name: "Confirm association" });
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(mockCall.mock.calls.some(([m]) => m === "createReviewHandoff")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm association" }));
+  await screen.findByTestId("handoff-source-status");
+  expect(mockCall.mock.calls.find(([m]) => m === "createReviewHandoff")[1].body).toEqual({ mode: "link_existing",
+    expected_plan_hash: "d".repeat(64), expected_input_set_hash: metadata.input_set_hash, arbitration_id: 7, expected_arbitration_version: 1 });
+  unmount(); runtime.destroy();
+});
+
+it.each(["unavailable", "foreign-source", "foreign-viewer", "foreign-target", "revoked"])("hides native answers when the joint handoff is %s", async (kind) => {
+  manager = false;
+  mockCall.mockImplementation((m, o) => {
+    if (m !== "reviewHandoffDetail") return handoffRespond(m, o);
+    const r = handoffDetail();
+    return Promise.resolve(kind === "unavailable" ? { ...r, available: false, reason: "source_unavailable" }
+      : kind === "foreign-source" ? { ...r, submission_id: 12 } : kind === "foreign-viewer" ? { ...r, viewer_hash: "e".repeat(64) }
+        : kind === "foreign-target" ? { ...r, target: { ...r.target, created_at: "rebound" } } : { error: true });
+  });
+  const { runtime, unmount } = mountHandoff("en-US", { initialTaskId: 7, initialHandoffId: 51 });
+  if (kind === "unavailable") await screen.findByTestId("arbitration-unavailable");
+  else await screen.findByRole("alert");
+  expect(screen.queryByTestId("arbitration-text")).toBeNull(); expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  expect(screen.queryByTestId("arbitration-decision")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
+it("fences late data when the handoff context changes within the same project", async () => {
+  let finish;
+  mockCall.mockImplementation((m, o) => m === "reviewHandoffDetail" && o.params.handoff === 51
+    ? new Promise((resolve) => { finish = resolve; }) : m === "reviewHandoffContext" ? Promise.resolve({ error: true }) : handoffRespond(m, o));
+  const { runtime, unmount, rerender, Provider } = mountHandoff("en-US", { initialTaskId: 7, initialHandoffId: 51 });
+  await waitFor(() => expect(finish).toBeDefined());
+  rerender(<Provider><ClassificationArbitrations projectId={4} handoffSource={{ batch: 42, source: 12 }} /></Provider>);
+  await act(async () => finish(handoffDetail()));
+  await screen.findByRole("alert"); expect(screen.queryByTestId("arbitration-text")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
 it("discards a late queue when current capability denies reading", async () => {
   let resolveQueue;
   mockCall.mockImplementation((method, options) => {

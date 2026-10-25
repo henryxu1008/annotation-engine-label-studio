@@ -1062,3 +1062,17 @@ their original key/body. Check review candidate IDs against the limit before
 loading snapshots and validate accepted sources one row at a time; do not hold
 all review snapshots alongside classification inputs. Stable legacy hashes and
 the existing candidate/classification budgets remain unchanged.
+
+### Review-to-arbitration handoff (#84)
+
+Opt-in review handoffs store an immutable provenance/receipt row and reuse the
+existing frozen-adoption arbitration service. Never patch old batch plans or
+arbitration origins. A new dispatch and its handoff commit atomically under the
+project fence; linking an existing equal input set is explicit and versioned.
+The write requires current READ_WORK and ORGANIZE_ARBITRATION; reads intersect
+review-source visibility and scoped arbitration visibility before pagination.
+Neither operation grants REVIEW or ARBITRATE. Keep old create key/request hashes
+and cancellation/decision semantics unchanged. Same-key handoff recovery precedes
+source availability but still requires current authority and intact provenance.
+Preserve rollback through actual JSON rendering and fresh identity/source checks.
+See review-arbitration-handoff-v1.md. #81/#84 remain open.
