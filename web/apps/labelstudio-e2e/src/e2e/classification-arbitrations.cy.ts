@@ -69,6 +69,8 @@ describe("frozen text classification arbitration", () => {
       } })).then(({ body }) => { activeTask = body; expect(body.id).not.to.eq(firstTask.id); });
 
       visit("reviewer"); openQueue();
+      // Complete the initial list read before the one-shot denial targets detail.
+      cy.then(() => workspace().find(`[data-arbitration="${activeTask.id}"]`).should("be.visible"));
       // A late authorized detail must not override a newer read denial.
       cy.intercept({ method: "GET", pathname: new RegExp(`^${base}capability/?$`), times: 1 }, (req) => {
         req.continue((res) => { res.body.can_read = false; });
