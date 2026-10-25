@@ -56,6 +56,35 @@ const openQueue = async (zh = false) => {
   await screen.findByTestId("review-approve");
 };
 
+it.each([{ pin: "b", allowed: true }, { pin: "a", allowed: false }])("rejects denied or mixed-viewer priority detail: %p", async ({ pin, allowed }) => {
+  batch.algorithm = "classification-conflict-ranked/v1"; batch.viewer_hash = "a".repeat(64);
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => method === "reviewBatchCapability"
+    ? Promise.resolve({ enabled: true, can_create: false, can_read_priority: allowed, viewer_hash: pin.repeat(64) }) : original(method, args));
+  const runtime = createLocaleRuntime("en-US"); const Provider = runtime.provider;
+  const { unmount } = render(<Provider><ReviewBatches projectId={4} /></Provider>);
+  fireEvent.click(await screen.findByRole("button", { name: "Batch seven" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("review-batch-progress")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
+it("rejects priority queue snapshots from a different viewer", async () => {
+  batch.algorithm = "classification-conflict-ranked/v1"; batch.viewer_hash = "a".repeat(64);
+  const original = mockCallApi.getMockImplementation();
+  mockCallApi.mockImplementation((method, args) => {
+    if (method === "reviewBatchCapability") return Promise.resolve({ enabled: true, can_create: false, can_read_priority: true, viewer_hash: "a".repeat(64) });
+    if (method === "reviewBatchQueue") return Promise.resolve({ results: sources, viewer_hash: "b".repeat(64) });
+    return original(method, args);
+  });
+  const { unmount, runtime } = await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Review this sample" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("review-submission-11")).toBeNull();
+  expect(screen.queryByTestId("review-approve")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
 describe.each(["en-US", "zh-CN"])("invalid progress responses in %s", (locale) => {
   const zh = locale === "zh-CN";
   it("rejects an object-valued list label before rendering batch navigation", async () => {

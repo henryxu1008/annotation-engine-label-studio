@@ -18,6 +18,8 @@
   th, td { text-align: start; padding: 8px; border-bottom: 1px solid var(--color-neutral-border); vertical-align: top; }
   code { overflow-wrap: anywhere; }
   pre { overflow: auto; max-height: 280px; }
+  [data-testid="review-priority-selector"] { grid-column: 1 / -1; display: grid; gap: 8px; }
+  [data-testid="review-priority-selector"] select { min-width: 0; max-width: 100%; padding: 8px; }
   @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } }
 }
 

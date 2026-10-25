@@ -10,7 +10,7 @@ const failed = (r) => !r || r.error || r.$meta?.ok === false || !r.results?.sour
 // jsdiff provides canonical JSON key ordering and bounded line comparison.
 export const snapshotDiff = (left, right) => diffJson(left, right, { timeout: 100, maxEditLength: 2000 });
 
-export const ReworkComparison = ({ projectId, batchId, sourceId, onClose }) => {
+export const ReworkComparison = ({ projectId, batchId, sourceId, onClose, viewerHash = null }) => {
   const { t } = useLocaleTranslation("reviewBatches");
   const api = useAPI();
   const call = useRef(api.callApi);
@@ -30,7 +30,7 @@ export const ReworkComparison = ({ projectId, batchId, sourceId, onClose }) => {
         params: { pk: projectId, batch: batchId, source: sourceId, page: targetPage }, errorFilter: () => true,
       });
       if (request !== generation.current) return;
-      if (failed(result)) throw new Error("comparison unavailable");
+      if (failed(result) || (viewerHash !== null && result.viewer_hash !== viewerHash)) throw new Error("comparison unavailable");
       setData(result); setSelected(result.results.revisions[0]?.id ?? null); setPage(targetPage);
     } catch { if (request === generation.current) setError(true); }
     finally { if (request === generation.current) setBusy(false); }
@@ -38,7 +38,7 @@ export const ReworkComparison = ({ projectId, batchId, sourceId, onClose }) => {
   useEffect(() => {
     load(); heading.current?.focus();
     return () => { generation.current += 1; };
-  }, [projectId, batchId, sourceId]);
+  }, [projectId, batchId, sourceId, viewerHash]);
   // No cached answers survive a failed read, scope change, refresh or tab blur.
   useEffect(() => {
     const clear = () => { generation.current += 1; setData(null); setSelected(null); setBusy(false); };

@@ -6,6 +6,7 @@ import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReworkComparison } from "./ReworkComparison";
+import { ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview } from "./ReviewPriority";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import { validBatchCapability, validBatchDetail, validBatchList } from "./reviewBatchResponses";
 import "./ReviewBatches.scss";
@@ -14,7 +15,15 @@ import "./ReviewBatches.scss";
 // These endpoints return JSON projections, never a numeric HTTP status field.
 const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
 const failedDetail = (r, id) => failed(r) || !validBatchDetail(r, id);
+const priorityViewMatches = (r, capability) => r?.algorithm !== "classification-conflict-ranked/v1"
+  || (capability?.can_read_priority === true && typeof r.viewer_hash === "string" && r.viewer_hash === capability.viewer_hash);
 const code = (r) => r?.response?.display_context?.reason ?? r?.display_context?.reason;
+const priorityRejection = (r) => ({
+  REVIEW_BATCH_PREVIEW_CHANGED: 409, REVIEW_PRIORITY_MANIFEST_CHANGED: 409,
+  REVIEW_PRIORITY_SOURCE_UNAVAILABLE: 409, CLASSIFICATION_BATCH_SOURCE_INVALID: 409,
+  CLASSIFICATION_BATCH_MANIFEST_INVALID: 409, REVIEW_BATCH_TOO_LARGE: 422,
+  REVIEW_PRIORITY_TOO_LARGE: 422, CLASSIFICATION_BATCH_TOO_LARGE: 422,
+}[code(r)] === r?.$meta?.status && r?.$meta?.status !== undefined);
 
 export const ReviewBatchTitle = () => {
   const { t } = useLocaleTranslation("reviewBatches");
@@ -53,6 +62,10 @@ export const ReviewBatches = ({ projectId }) => {
   const [batches, setBatches] = useState([]);
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
+  const [canPrioritize, setCanPrioritize] = useState(false);
+  const [priorityChoice, setPriorityChoice] = useState(null);
+  const [creationUnknown, setCreationUnknown] = useState(false);
+  const [createdNotice, setCreatedNotice] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
@@ -82,15 +95,18 @@ export const ReviewBatches = ({ projectId }) => {
       ]);
       if (current !== generation.current) return;
       if (failed(list) || !validBatchList(list) || failed(capability) || !validBatchCapability(capability)
-        || (id !== null && failedDetail(selected, id))) {
-        setCanCreate(false); setPreview(null); creation.current = null;
+        || (id !== null && (failedDetail(selected, id) || !priorityViewMatches(selected, capability)))) {
+        setCanCreate(false); setCanPrioritize(false); setPreview(null);
+        if (!creation.current?.unknown) creation.current = null;
         setError("loadFailed"); return;
       }
       setBatches(list.results?.batches ?? []);
       setCanCreate(capability.can_create === true);
+      setCanPrioritize(capability.can_prioritize === true);
       setPage(targetPage); setNext(Boolean(list.next)); setDetail(selected);
     } catch {
-      if (current === generation.current) { setError("loadFailed"); setCanCreate(false); setPreview(null); creation.current = null; }
+      if (current === generation.current) { setError("loadFailed"); setCanCreate(false); setCanPrioritize(false); setPreview(null);
+        if (!creation.current?.unknown) creation.current = null; }
     } finally { if (current === generation.current) setBusy(false); }
   }, [projectId]);
 
@@ -108,36 +124,48 @@ export const ReviewBatches = ({ projectId }) => {
         call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }),
       ]);
       if (!isCurrent()) return;
-      if (failedDetail(result, id) || failed(capability) || !validBatchCapability(capability)) throw new Error("detail unavailable");
+      if (failedDetail(result, id) || failed(capability) || !validBatchCapability(capability)
+        || !priorityViewMatches(result, capability)) throw new Error("detail unavailable");
       setDetail(result);
       setCanCreate(capability.can_create === true);
+      setCanPrioritize(capability.can_prioritize === true);
     } catch {
       if (!isCurrent()) return;
       // A failed read cannot establish current authority. Keep only the retry context.
       setDetail(null); setReviewing(false); setBatches([]);
-      setCanCreate(false); setPreview(null); creation.current = null;
+      setCanCreate(false); setCanPrioritize(false); setPreview(null);
+      if (!creation.current?.unknown) creation.current = null;
       setError(reviewSaved ? "savedRefreshFailed" : "progressRefreshFailed");
     } finally { if (isCurrent()) setProgressBusy(false); }
   };
 
   useEffect(() => {
-    setPreview(null); creation.current = null; load();
+    setPreview(null); creation.current = null; setCreationUnknown(false); setCreatedNotice(null); setPriorityChoice(null); load();
     return () => { generation.current += 1; selection.current = null; };
   }, [load]);
 
   const change = (key, value) => {
+    if (creation.current?.unknown) return;
     setForm((prev) => ({ ...prev, [key]: value }));
     setPreview(null); creation.current = null; setError("");
   };
+  useEffect(() => {
+    if (canPrioritize || creation.current?.unknown || priorityChoice === null) return;
+    setPriorityChoice(null); setPreview(null); creation.current = null;
+  }, [canPrioritize, priorityChoice]);
   const requestPreview = async () => {
+    if (creation.current?.unknown) return;
+    if (priorityChoice !== null && (!canPrioritize || !validPriorityChoice(priorityChoice))) { setError("priorityChoose"); return; }
     setBusy(true); setError(""); setPreview(null); creation.current = null;
     const current = ++generation.current;
     try {
       const ids = (value) => value.trim() ? value.split(/[\s,]+/).map(Number) : [];
       const body = { ...form, rate: Number(form.rate), package_ids: ids(form.package_ids), submitter_ids: ids(form.submitter_ids) };
+      if (priorityChoice !== null) body.priority = priorityChoice;
       const result = await call.current("reviewBatchPreview", { params: { pk: projectId }, body, errorFilter: () => true });
       if (current !== generation.current) return;
       if (failed(result)) { setError(code(result) === "REVIEW_BATCH_TOO_LARGE" ? "tooLarge" : "previewFailed"); return; }
+      if (body.priority && !validPriorityPreview(result, body.priority)) { setError("previewFailed"); return; }
       creation.current = { body: { ...body, expected_plan_hash: result.plan_hash }, key: uuidv4() };
       setPreview(result);
     } catch { if (current === generation.current) setError("previewFailed"); }
@@ -145,29 +173,76 @@ export const ReviewBatches = ({ projectId }) => {
   };
   const create = async () => {
     if (!creation.current) return;
+    const intent = creation.current;
+    intent.inFlight = true;
     const current = ++generation.current;
     setBusy(true); setError("");
     try {
       const result = await call.current("reviewBatchCreate", { params: { pk: projectId },
-        body: creation.current.body, headers: { "Idempotency-Key": creation.current.key }, errorFilter: () => true });
+        body: intent.body, headers: { "Idempotency-Key": intent.key }, errorFilter: () => true });
       if (current !== generation.current) return;
       if (failed(result)) {
-        if (code(result) === "REVIEW_BATCH_PREVIEW_CHANGED") {
+        const status = result?.$meta?.status ?? (typeof result?.status === "number" ? result.status : null);
+        if (!status || status < 400 || status >= 500) intent.uncertain = true;
+        if (!intent.unknown && (intent.body.priority ? priorityRejection(result) : code(result) === "REVIEW_BATCH_PREVIEW_CHANGED")) {
           setPreview(null); creation.current = null; setError("changed");
-        } else setError("createFailed");
+        } else {
+          if (intent.body.priority) { intent.unknown = true; setCreationUnknown(true); }
+          setError(intent.body.priority ? "priorityUnknownWrite" : "createFailed");
+        }
         return;
       }
+      if (intent.body.priority && (!Number.isSafeInteger(result.id) || result.id < 1
+        || result.idempotency_key !== intent.key || result.plan_hash !== intent.body.expected_plan_hash)) {
+        intent.unknown = true; setCreationUnknown(true); setError("priorityUnknownWrite"); return;
+      }
+      if (intent.body.priority) setCreatedNotice(result.id);
+      setCreationUnknown(false);
       setPreview(null); creation.current = null;
       await load(result.id);
-    } catch { if (current === generation.current) setError("createFailed"); }
-    finally { if (current === generation.current) setBusy(false); }
+    } catch { if (current === generation.current) {
+      intent.uncertain = true;
+      if (intent.body.priority) { intent.unknown = true; setCreationUnknown(true); }
+      setError(intent.body.priority ? "priorityUnknownWrite" : "createFailed");
+    } }
+    finally { intent.inFlight = false; if (current === generation.current) setBusy(false); }
   };
+
+  useEffect(() => {
+    const blur = () => {
+      const intent = creation.current;
+      // Pending reads have no rendered detail/creation intent yet. Revoke their
+      // generations too, so a late response cannot republish evidence after blur.
+      if (intent?.inFlight || intent?.unknown || intent?.uncertain) { intent.unknown = true; setCreationUnknown(true); }
+      generation.current += 1; progressGeneration.current += 1;
+      returnFocus.current = false; setComparison(null);
+      setBusy(false); setProgressBusy(false); setDetail(null); setBatches([]); setReviewing(false);
+      setCanCreate(false); setCanPrioritize(false); setPreview(null);
+      if (!intent?.unknown) creation.current = null;
+      setError(intent?.unknown ? "priorityUnknownWrite" : "loadFailed");
+    };
+    window.addEventListener("blur", blur);
+    return () => window.removeEventListener("blur", blur);
+  }, [projectId]);
 
   const progress = detail ? batchProgress(detail.items) : null;
   const visibleItems = detail ? filterBatchItems(detail.items, filter) : [];
   const controlsBusy = busy || progressBusy;
+  useEffect(() => {
+    if (!creationUnknown || controlsBusy) return;
+    const recovery = root.current?.querySelector('[data-testid="review-priority-recover"]');
+    recovery?.scrollIntoView?.({ block: "nearest" });
+    recovery?.focus({ preventScroll: true });
+  }, [creationUnknown, controlsBusy]);
   const reviewEnabled = detail?.items.some((i) => i.can_review) ?? false;
   const detailContext = selection.current;
+  const previewPriority = preview?.plan?.priority;
+  const previewSummary = previewPriority ? {
+    conflict_candidates: previewPriority.evidence.filter((e) => e.state === "conflict").length,
+    selected_conflicts: preview.plan.candidates.filter((c) => c.selected
+      && previewPriority.evidence.some((e) => e.submission_id === c.submission_id && e.state === "conflict")).length,
+    unknown_candidates: previewPriority.evidence.filter((e) => e.state === "unknown").length,
+  } : null;
   useEffect(() => {
     if (comparison !== null || controlsBusy || !returnFocus.current) return;
     returnFocus.current = false;
@@ -179,14 +254,16 @@ export const ReviewBatches = ({ projectId }) => {
     {comparison !== null && detail && <ReworkComparison key={`${projectId}:${detail.id}:${comparison}`}
       projectId={projectId} batchId={detail.id} sourceId={comparison} onClose={() => {
         returnFocus.current = true; setComparison(null); refreshProgress(detail.id);
-      }} />}
+      }} viewerHash={detail.viewer_hash} />}
     <div hidden={comparison !== null}>
     <p>{t("boundary")}</p>
     {error && <p role="alert">{t(error)}</p>}
+    {createdNotice && <p role="status">{t("prioritySaved", { id: createdNotice })}</p>}
+    {creationUnknown && <Button data-testid="review-priority-recover" disabled={controlsBusy} onClick={create}>{t("priorityRecover")}</Button>}
     {savedReview && <p role="status">{t("reviewSaved")}</p>}
     {progressBusy && <p role="status">{t("refreshingProgress")}</p>}
     <Button data-testid="review-batch-refresh" disabled={controlsBusy} onClick={() => selectedBatchId === null ? load(null, page) : refreshProgress(selectedBatchId)}>{t("refresh")}</Button>
-    {canCreate && <fieldset disabled={controlsBusy}>
+    {canCreate && <fieldset disabled={controlsBusy || creationUnknown}>
       <legend>{t("newBatch")}</legend>
       <label>{t("name")}<input value={form.name} onChange={(e) => change("name", e.target.value)} /></label>
       <label>{t("rate")}<input type="number" min="1" max="100" value={form.rate} onChange={(e) => change("rate", e.target.value)} /></label>
@@ -194,10 +271,15 @@ export const ReviewBatches = ({ projectId }) => {
       <label>{t("seed")}<input value={form.seed} onChange={(e) => change("seed", e.target.value)} /></label>
       <label>{t("packages")}<input value={form.package_ids} onChange={(e) => change("package_ids", e.target.value)} /></label>
       <label>{t("submitters")}<input value={form.submitter_ids} onChange={(e) => change("submitter_ids", e.target.value)} /></label>
-      <Button onClick={requestPreview}>{t("preview")}</Button>
+      {canPrioritize && <ReviewPrioritySelector projectId={projectId} value={priorityChoice} onChange={(value) => {
+        if (creation.current?.unknown) return;
+        setPriorityChoice(value); setPreview(null); creation.current = null; setError("");
+      }} />}
+      <Button disabled={priorityChoice !== null && !validPriorityChoice(priorityChoice)} onClick={requestPreview}>{t("preview")}</Button>
       {preview && <div data-testid="review-batch-preview">
         <p>{t("sampleCount", { selected: preview.plan.candidates.filter((i) => i.selected).length, total: preview.plan.candidates.length })}</p>
         <code>{preview.plan_hash}</code>
+        <ReviewPrioritySummary summary={previewSummary} />
         <Button onClick={create}>{t("create")}</Button>
       </div>}
     </fieldset>}
@@ -211,11 +293,14 @@ export const ReviewBatches = ({ projectId }) => {
     {detail && <section>
       <h3>{detail.name}</h3>
       {detail.role === "reviewer" && <p>{t("visibleScope")}</p>}
+      {detail.role === "reviewer" && detail.algorithm === "classification-conflict-ranked/v1" && <p>{t("priorityReviewerScope")}</p>}
       <p>{t("sampleCount", { selected: detail.selected_count, total: detail.candidate_count })}
         {" · "}{t("actualRate", { rate: detail.candidate_count ? (100 * detail.selected_count / detail.candidate_count).toFixed(1) : "—" })}</p>
       <code>{detail.plan_hash}</code>
       <p>{t("asOf", { time: detail.as_of })}</p>
       <p>{t("rule", { rate: detail.rule.rate, seed: detail.rule.seed, algorithm: detail.algorithm })}</p>
+      <ReviewPrioritySummary summary={detail.priority_summary} />
+      {detail.priority_source && <p>{t("priorityProvenance", { id: detail.priority_source.batch_id })} <code>{detail.priority_source.manifest_hash}</code></p>}
       <dl className={cn("review-batches").elem("progress").toClassName()} data-testid="review-batch-progress">
         <div><dt>{t("selectedTotal")}</dt><dd>{progress.selected}</dd></div>
         <div><dt>{t("uncheckedTotal")}</dt><dd>{progress.unchecked}</dd></div>
@@ -231,6 +316,7 @@ export const ReviewBatches = ({ projectId }) => {
       {detail.role === "reviewer" && !reviewEnabled &&
         <p>{t(progress.pending ? "reviewUnavailable" : "noReviewableItems")}</p>}
       {reviewing && <ReviewerWorkspace projectId={projectId} batchId={detail.id}
+        viewerHash={detail.viewer_hash}
         reviewEnabled={reviewEnabled} onReviewSettled={(saved) => refreshProgress(detail.id, saved, detailContext)} />}
       <div role="group" aria-label={t("filters")} className={cn("review-batches").elem("filters").toClassName()}>
         <Button disabled={controlsBusy} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{t("allItems")}</Button>
@@ -244,7 +330,7 @@ export const ReviewBatches = ({ projectId }) => {
         <thead><tr><th>{t("revision")}</th><th>{t("selection")}</th><th>{t("status")}</th><th>{t("rework")}</th></tr></thead>
         <tbody>{visibleItems.map((i) => <tr key={i.submission_id}>
           <td>#{i.submission_id} / {i.revision}</td>
-          <td>{t(i.selected ? "selected" : "unchecked")}</td>
+          <td>{t(i.selected ? "selected" : "unchecked")}{i.priority_reason && <p>{t(`priority_${i.priority_reason}`)}</p>}</td>
           <td>{t(i.status)}{i.review_reason && <p>{i.review_reason}</p>}</td>
           <td>{i.successor ? <><p>{t("successor", { id: i.successor.id, revision: i.successor.revision })}</p>
             <p>{t("successorStatus")}: {t(["pending", "approved", "rejected", "superseded"].includes(i.successor.status) ? i.successor.status : "unknownStatus")}</p>

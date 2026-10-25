@@ -23,6 +23,15 @@ const mount = (locale = "en-US", props = {}) => {
 };
 beforeEach(() => mockCallApi.mockReset().mockImplementation(async () => response()));
 
+it("rejects priority comparison evidence from a different viewer", async () => {
+  mockCallApi.mockResolvedValue({ ...response(), viewer_hash: "b".repeat(64) });
+  const { unmount, runtime } = mount("en-US", { viewerHash: "a".repeat(64) });
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("rework-original")).toBeNull();
+  expect(screen.queryByTestId("rework-selected")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
 it.each(["en-US", "zh-CN"])("compares multiple reworks and explicitly marks unchanged answers in %s", async (locale) => {
   const zh = locale === "zh-CN";
   const { unmount, runtime } = mount(locale);
