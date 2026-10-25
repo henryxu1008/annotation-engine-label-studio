@@ -4,6 +4,7 @@ declare global {
   namespace Cypress {
     interface Chainable {
       loginAs(email: string, password: string, nextPath?: string): Chainable<void>;
+      setUserLocale(locale: 'en-US' | 'zh-CN'): Chainable<void>;
     }
   }
 }
@@ -64,6 +65,25 @@ Cypress.Commands.add('loginAs', (email: string, password: string, nextPath = '/'
     cy.get('html').should('have.attr', 'lang', loginLocale);
     cy.get('[data-testid="user-menu-trigger"]').click();
   }
+});
+
+Cypress.Commands.add('setUserLocale', (locale: 'en-US' | 'zh-CN') => {
+  // Feature journeys need a persisted language before their next document load.
+  // A still-hydrating selector can show the last actor's value, and navigating
+  // after select() alone can abort its save. Locale UI behavior has its own spec.
+  cy.getCookie('csrftoken', { log: false }).then((cookie) => {
+    expect(cookie?.value, 'authenticated session CSRF cookie').to.be.a('string').and.not.be.empty;
+    cy.request({
+      method: 'PATCH', url: '/api/current-user/locale/', log: false,
+      headers: { 'X-CSRFToken': cookie!.value }, body: { preference: locale },
+    }).then(({ status, body }) => {
+      expect(status).to.eq(200);
+      expect(body).to.include({ preference: locale, resolvedLocale: locale, source: 'user' });
+    });
+  });
+  cy.request('/api/current-user/locale/').its('body').should('include', {
+    preference: locale, resolvedLocale: locale, source: 'user',
+  });
 });
 
 export {};

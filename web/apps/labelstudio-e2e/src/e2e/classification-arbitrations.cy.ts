@@ -14,13 +14,7 @@ describe("frozen text classification arbitration", () => {
       const workspace = () => cy.get('[data-testid="classification-arbitrations"]').last();
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, "/user/account/personal-info");
-        cy.get('[data-testid="language-preference-select"]').should("be.enabled").then(($select) => {
-          if ($select.val() !== locale) {
-            cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("arbitrationLocaleSaved");
-            cy.get('[data-testid="language-preference-select"]').select(locale);
-            cy.wait("@arbitrationLocaleSaved").its("response.statusCode").should("eq", 200);
-          }
-        });
+        cy.setUserLocale(locale);
         cy.visit(`/projects/${project.id}/data`);
         cy.get("html").should("have.attr", "lang", locale);
       };
