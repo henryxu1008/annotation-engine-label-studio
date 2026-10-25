@@ -2,7 +2,9 @@
 
 This slice organizes existing Fork reviews. It is not a new decision ledger,
 platform review policy, release rule, dataset version or scheduler. #84 remains
-open for conflict/risk priority, second review and arbitration with #81.
+open for remaining risk strategies, second review and review/arbitration handoff
+with #81. Optional frozen classification conflict priority is documented in
+[review-priority-v1.md](review-priority-v1.md).
 
 ## Product workflow
 
@@ -236,4 +238,6 @@ Unchanged answers are explicitly labeled and never imply successful correction.
 This is a transient read projection, not a new frozen Manifest, audit ledger,
 quality metric, approval policy or rework scheduler. Core-only mode denies the
 new endpoint; #79/#80 exports and Host contracts are unchanged. #84 remains open.
-Risk/conflict priority and second review/arbitration remain deferred to #81.
+Frozen classification conflict priority now reuses this workflow. The independent
+#81 arbitration ledger can adopt a frozen revision, but second review and explicit
+review/arbitration handoff remain deferred. See review-priority-v1.md.

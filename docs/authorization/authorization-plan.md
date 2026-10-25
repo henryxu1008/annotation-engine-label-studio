@@ -1038,3 +1038,20 @@ Keep live project-role predicates in the membership SQL and personal/reviewer
 predicates on the counted facts. Intersect that scope once per aggregate;
 re-nesting the full visibility query can stall thousand-item progress reads.
 Package visibility still guards metadata before and after materialization.
+
+### Optional frozen conflict-priority sampling (#81 / #84)
+
+New review batches may explicitly reference a same-project frozen classification
+analysis. Preserve the old algorithm/request shape; freeze the new algorithm,
+source manifest/hash, exact candidate pins, reason/calculation hashes and seed.
+Task ID alone cannot transfer conflict onto another revision. Missing coverage or
+incomparable inputs are unknown, not low risk. Keep existing sample quotas and
+budgets. New creation retains the project/source fence through rendered evidence
+and current-identity checks; original-key recovery precedes source availability.
+Reviewer scope excludes whole frozen tasks containing the actor, before counts,
+queue pagination, batch-context reviews and rework reads. Bind read materialization
+to the same current principal/actor/role. Old batch/ordinary review contracts are
+unchanged. Reviewer responses do not expose classification manifests
+or other annotators' answers. Priority does not grant REVIEW, approve work or
+change release policy. Recheck these boundaries, JSON DTOs, legacy hashes and
+unknown-write recovery on upgrades. See review-priority-v1.md. #81/#84 remain open.

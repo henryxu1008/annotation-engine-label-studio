@@ -270,7 +270,7 @@ def metadata(batch, actor, role):
     return data
 
 
-def _project_items(batch, actor, role, *, task_id=None, lock=False):
+def _project_items(batch, actor, role, *, task_id=None, lock=False, strict=False):
     items = visible_items(batch, actor, role)
     if task_id is not None:
         items = [item for item in items if item['task_id'] == task_id]
@@ -292,7 +292,7 @@ def _project_items(batch, actor, role, *, task_id=None, lock=False):
             .order_by('pk')
             .values_list('pk', flat=True)
         )
-    sources = load_sources(source_ids)
+    sources = load_sources(source_ids, strict=strict)
     projected = []
     for item in items:
         rows, reason = [], None
@@ -337,8 +337,8 @@ def _project_items(batch, actor, role, *, task_id=None, lock=False):
     return projected, sources
 
 
-def project_items(batch, actor, role):
-    return _project_items(batch, actor, role)[0]
+def project_items(batch, actor, role, *, strict=False, lock=False):
+    return _project_items(batch, actor, role, strict=strict, lock=lock)[0]
 
 
 def project_item_sources(batch, actor, role, task_id, *, lock=False):

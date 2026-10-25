@@ -106,6 +106,8 @@ separate fixture and enables only its exact project IDs.
 
 The opt-in durable project batch is documented in classification-batches-v1.md;
 it does not change the transient manual comparison contract above.
-NER, bbox, field comparison, confidence/risk ordering, cross-batch metric history,
-arbitration tasks/commands and second review remain deferred. #81 and #84 remain
-open. Merge, deployment and Core integration are separate approvals.
+NER, bbox, field comparison, confidence rules, metric aggregation and second review
+remain deferred. Durable batches and frozen-adoption arbitration are implemented
+in classification-batches-v1.md and classification-arbitration-v1.md. Optional
+conflict-priority sampling reuses frozen batches; see review-priority-v1.md.
+#81 and #84 remain open. Merge, deployment and Core integration are separate approvals.

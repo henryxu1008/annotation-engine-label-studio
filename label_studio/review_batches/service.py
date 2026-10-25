@@ -68,6 +68,12 @@ class StrictInput(serializers.Serializer):
         return super().to_internal_value(data)
 
 
+class PriorityInput(StrictInput):
+    kind = serializers.ChoiceField(choices=['classification_conflict'])
+    batch_id = serializers.IntegerField(min_value=1, max_value=2**53 - 1)
+    manifest_hash = serializers.RegexField(r'^[0-9a-f]{64}$')
+
+
 class PlanInput(StrictInput):
     name = serializers.CharField(max_length=160)
     rate = serializers.IntegerField(min_value=1, max_value=100)
@@ -76,6 +82,7 @@ class PlanInput(StrictInput):
     package_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), max_length=100, default=list)
     submitter_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), max_length=100, default=list)
     expected_plan_hash = serializers.RegexField(r"^[0-9a-f]{64}$", required=False)
+    priority = PriorityInput(required=False)
 
     def validate(self, attrs):
         for key in ("package_ids", "submitter_ids"):
@@ -159,21 +166,29 @@ def build_plan(project, args):
     if any(not valid_source(row, project.pk) for row in sources):
         fail("REVIEW_BATCH_SOURCE_INVALID")
     candidates = [identity(row) for row in sources]
+    priority_plan, states, algorithm = None, {}, ALGORITHM
+    if 'priority' in args:
+        from . import priority
+        priority_plan = priority.freeze(project, candidates, args['priority'])
+        states = {e['submission_id']: e['state'] for e in priority_plan['evidence']}
+        algorithm = priority.ALGORITHM
     groups = {}
     for item in candidates:
         groups.setdefault(item["submitter_id"] if args["per_submitter"] else "all", []).append(item)
     selected = set()
     for group in groups.values():
         ranked = sorted(
-            group, key=lambda item: (digest([ALGORITHM, project.pk, args["seed"], item]), item["submission_id"])
+            group, key=lambda item: (0 if states.get(item['submission_id']) == 'conflict' else 1,
+                                    digest([algorithm, project.pk, args["seed"], item]), item["submission_id"])
         )
         count = (len(group) * args["rate"] + 99) // 100
         selected.update(item["submission_id"] for item in ranked[:count])
     return {
-        "algorithm": ALGORITHM,
+        "algorithm": algorithm,
         "project_id": project.pk,
         "rule": {key: args[key] for key in ("rate", "per_submitter", "seed", "package_ids", "submitter_ids")},
         "candidates": [{**item, "selected": item["submission_id"] in selected} for item in candidates],
+        **({'priority': priority_plan} if priority_plan is not None else {}),
     }
 
 
@@ -181,6 +196,9 @@ def checked_batch(project, batch_id):
     batch = get_object_or_404(ReviewBatch, project=project, pk=batch_id)
     if digest(batch.plan) != batch.plan_hash or batch.plan.get("project_id") != project.pk:
         fail("REVIEW_BATCH_PLAN_INVALID")
+    if batch.plan.get('algorithm') != ALGORITHM or 'priority' in batch.plan:
+        from . import priority
+        priority.validate(batch.plan)
     return batch
 
 
@@ -203,8 +221,11 @@ def require_selected(project, batch_id, submission, actor, *, principal):
         raise PermissionDenied()
     require_project_operation(project, REVIEW)
     batch = checked_batch(project, batch_id)
+    if 'priority' in batch.plan:
+        from . import priority
+        priority.read_guard(project.pk, principal, actor)
     rows = checked_sources(batch)
-    selected = any(item["selected"] and item["submission_id"] == submission.pk for item in batch.plan["candidates"])
+    selected = any(item["selected"] and item["submission_id"] == submission.pk for item in visible_candidates(batch, actor, role))
     if not selected or submission.pk not in rows or submission.submitted_by_id == actor.pk:
         raise PermissionDenied()
     return rows[submission.pk]
@@ -235,7 +256,7 @@ def check_representation(data, source):
 
 
 def rework_source(batch, source_id, actor, role):
-    item = next((item for item in batch.plan['candidates'] if item['submission_id'] == source_id), None)
+    item = next((item for item in visible_candidates(batch, actor, role) if item['submission_id'] == source_id), None)
     if item is None or (role == 'reviewer' and item['submitter_id'] == actor.pk):
         raise NotFound()
     source = checked_sources(batch).get(source_id)
@@ -261,11 +282,19 @@ def metadata(batch):
     return {"id": batch.pk, "name": batch.name, "created_at": batch.created_at, "plan_hash": batch.plan_hash}
 
 
-def projection(batch, actor, role):
-    rows = checked_sources(batch)
+def visible_candidates(batch, actor, role):
     candidates = batch.plan["candidates"]
     if role == "reviewer":
         candidates = [item for item in candidates if item["submitter_id"] != actor.pk]
+        if 'priority' in batch.plan:
+            hidden = {t['task_id'] for t in batch.plan['priority']['participants'] if actor.pk in t['actor_ids']}
+            candidates = [item for item in candidates if item['task_id'] not in hidden]
+    return candidates
+
+
+def projection(batch, actor, role):
+    rows = checked_sources(batch)
+    candidates = visible_candidates(batch, actor, role)
     # Minimal successor metadata only: never copy answers into a plan.
     newest = Submission.objects.filter(assignment_id=OuterRef("assignment_id")).order_by("-revision")
     successors = {
@@ -295,6 +324,16 @@ def projection(batch, actor, role):
                 ),
             }
         )
+    extra = {}
+    if 'priority' in batch.plan:
+        from . import priority
+        evidence = {e['submission_id']: e for e in batch.plan['priority']['evidence']}
+        for item in items:
+            item['priority_reason'] = evidence[item['submission_id']]['reason']
+        extra['priority_summary'] = priority.summary(batch.plan, candidates)
+        if role == 'manager':
+            extra['priority_source'] = {k: batch.plan['priority'][k] for k in
+                                        ('schema', 'batch_id', 'manifest_hash', 'metric_rule', 'selection')}
     return {
         **metadata(batch),
         "rule": batch.plan["rule"],
@@ -303,4 +342,5 @@ def projection(batch, actor, role):
         "selected_count": sum(item["selected"] for item in items),
         "items": items,
         "as_of": timezone.now(),
+        **extra,
     }

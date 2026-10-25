@@ -12,9 +12,9 @@ const displayIdentity = (user, t) =>
 
 // A scope change must discard all queue, command and notice state together.
 export const ReviewerWorkspace = (props) => <ScopedReviewerWorkspace
-  key={JSON.stringify([props.projectId, props.packageId ?? null, props.batchId ?? null])} {...props} />;
+  key={JSON.stringify([props.projectId, props.packageId ?? null, props.batchId ?? null, props.viewerHash ?? null])} {...props} />;
 
-const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, onReviewSettled, reviewEnabled = true }) => {
+const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, onReviewSettled, reviewEnabled = true, viewerHash = null }) => {
   const { locale, t } = useLocaleTranslation("collaboration");
   const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();
@@ -88,6 +88,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
       !reviewableResult ||
       reviewableResult?.error ||
       reviewableResult?.$meta?.ok === false ||
+      (viewerHash !== null && reviewableResult?.viewer_hash !== viewerHash) ||
       !historyResult ||
       historyResult?.error ||
       historyResult?.$meta?.ok === false
@@ -123,7 +124,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
       return pendingItems[0]?.id ?? historyItems[0]?.id ?? null;
     });
     setLoading(false);
-  }, [historyPage, loadPages, pendingPage, projectId]);
+  }, [historyPage, loadPages, pendingPage, projectId, viewerHash]);
 
   useEffect(() => {
     refresh(pendingPage, historyPage);
