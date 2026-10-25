@@ -20,8 +20,9 @@ describe("optional frozen conflict-priority sampling", () => {
       let selectedSources: number[] = [];
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, "/user/account/personal-info");
-        cy.get('[data-testid="language-preference-select"]').select(locale);
+        cy.setUserLocale(locale);
         cy.visit(`/projects/${scope.id}/data`);
+        cy.get("html").should("have.attr", "lang", locale);
       };
       visit("manager");
       // Create a real legacy batch, without the optional strategy.
