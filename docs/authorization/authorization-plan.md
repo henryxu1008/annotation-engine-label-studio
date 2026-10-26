@@ -1087,3 +1087,21 @@ on those exact contracts. Keep empty/missing inputs unavailable, complete cohort
 current READ_WORK/self-source boundaries and response-time revalidation. Bound
 pairwise output separately from snapshot input size. See
 classification-partial-match-v1.md. #81/#84 remain open; no Host/Core/runtime change.
+
+### Single frozen-batch quality overview (#81)
+
+The independently default-off quality overview reuses current READ_WORK, exact
+Fork mode and batch source verification. Filter Reviewer self-cohorts before
+source loading, all denominators, person rows, hashes and pagination. Task-macro
+and person-task-macro statistics use exact rational values; agreement is not
+correctness. Any visible source loss masks the whole new score projection,
+without dropping a task/person or shrinking its frozen denominator.
+
+Independent signed read receipts bind the viewer, visible origin, metric versions,
+all logical rows and first summary time. Replay never selects latest revisions,
+updates the old Manifest or changes arbitration/sampling identity. Revalidate
+actual rendered responses against current authority and sources; GETs write no
+business records. Keep the bounded old snapshot loader and a separate complete
+logical output/token budget before pagination. See
+classification-quality-overview-v1-design.md. #81/#84 remain open; Host, Core,
+review/release authority and retained Docker environments are unchanged.

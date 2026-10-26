@@ -100,6 +100,8 @@ class CapabilityAPI(BatchAPI):
             return {
                 "enabled": True,
                 "can_create": role == "manager" and project_operation_policy(project).allows(ORGANIZE_CLASSIFICATION),
+                "can_view_quality_overview": (settings.ANNOTATION_CLASSIFICATION_QUALITY_OVERVIEW_ENABLED
+                                              and settings.ANNOTATION_CLASSIFICATION_PARTIAL_MATCH_ENABLED),
                 "schema": batches.SCHEMA,
                 "rule": service.RULE,
                 "selection": batches.SELECTION,

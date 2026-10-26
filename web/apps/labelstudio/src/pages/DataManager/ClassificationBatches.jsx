@@ -6,6 +6,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { ClassificationResult } from "./ClassificationDisagreement";
 import { ClassificationPartial } from "./ClassificationPartial";
+import { ClassificationOverview } from "./ClassificationOverview";
 import { ClassificationArbitrationEntry } from "./ClassificationArbitrations";
 import "./ReviewBatches.scss";
 import "./ClassificationBatches.scss";
@@ -18,7 +19,7 @@ const metadata = z.object({ id, name: z.string(), schema: z.literal("classificat
   created_at: z.string(), calculated_at: z.string(), scope_enumerated_at: z.string(), visible_task_count: count,
   visibility: z.enum(["project", "visible_subset"]), manifest_hash: z.string().optional(), projection_hash: z.string().optional(),
 });
-const capability = z.object({ enabled: z.literal(true), can_create: z.boolean() });
+const capability = z.object({ enabled: z.literal(true), can_create: z.boolean(), can_view_quality_overview: z.boolean().optional() });
 const previewSchema = z.object({ schema: z.literal("classification-batches/v1"), preview_token: z.string(), plan_hash: z.string(),
   task_ids: z.array(id).min(1).max(100), display_counts: counts, scope_enumerated_at: z.string() });
 const listSchema = z.object({ count, next: z.string().nullable(), previous: z.string().nullable(), results: z.array(metadata) });
@@ -69,6 +70,8 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), focusTask = useRef(null), root = useRef(null);
+  const overviewNavigation = useRef({});
+  const [canOverview, setCanOverview] = useState(false);
   const [view, setView] = useState("list"), [busy, setBusy] = useState(false), [error, setError] = useState(false);
   const [canCreate, setCanCreate] = useState(false), [unknown, setUnknown] = useState(false);
   const [saved, setSaved] = useState(null);
@@ -76,7 +79,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
   const [queue, setQueue] = useState(null), [answer, setAnswer] = useState(null);
   const [batchId, setBatchId] = useState(null), [page, setPage] = useState(1), [state, setState] = useState("disagreement");
   const [form, setForm] = useState({ name: "", scope: "project", tasks: "" });
-  const clear = () => { setList(null); setDetail(null); setQueue(null); setAnswer(null); setCanCreate(false); };
+  const clear = () => { setList(null); setDetail(null); setQueue(null); setAnswer(null); setCanCreate(false); setCanOverview(false); };
   const fetch = async (method, params, schema, body, headers) => {
     const result = await call.current(method, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
     if (failed(result)) {
@@ -113,7 +116,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
         fetch("classificationBatchItems", { batch: id, page: targetPage, state: filter }, queueSchema),
       ]);
       if (data.id !== id || items.batch_id !== id) throw new Error("scope changed");
-      if (current()) { setCanCreate(caps.can_create); setDetail(data); setQueue(items); }
+      if (current()) { setCanCreate(caps.can_create); setCanOverview(caps.can_view_quality_overview === true); setDetail(data); setQueue(items); }
     });
   };
   const showItem = (task) => {
@@ -235,6 +238,8 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
         {detail.visibility === "visible_subset" && <p>{t("batchVisibleSubset")}</p>}
         <p>{t("classificationRule", { rule: detail.rule, time: detail.calculated_at })}</p>
         <p>{t("batchCounts", queue.display_counts)}</p>
+        {canOverview && <ClassificationOverview key={`${projectId}:${batchId}`} projectId={projectId} batch={detail}
+          navigation={overviewNavigation} onOpenTask={showItem} />}
         <label>{t("batchFilter")}<select value={state} disabled={busy} onChange={(e) => openBatch(batchId, 1, e.target.value)}>
           {states.map((value) => <option key={value} value={value}>{t(`batchState_${value}`)}</option>)}
         </select></label>

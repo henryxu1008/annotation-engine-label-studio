@@ -55,6 +55,7 @@ export const API_CONFIG = {
     classificationBatchDetail: "GET:/projects/:pk/classification-disagreements/batches/:batch/",
     classificationBatchItems: "GET:/projects/:pk/classification-disagreements/batches/:batch/items/",
     classificationBatchItem: "GET:/projects/:pk/classification-disagreements/batches/:batch/items/:task/",
+    classificationQualityOverview: "GET:/projects/:pk/classification-disagreements/batches/:batch/quality-overview/",
     classificationSources: "GET:/projects/:pk/classification-disagreements/tasks/:task/sources/",
     classificationReport: "GET:/projects/:pk/classification-disagreements/tasks/:task/",
     classificationPartial: "GET:/projects/:pk/classification-disagreements/tasks/:task/partial-match/",
