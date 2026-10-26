@@ -109,3 +109,29 @@ it("rounds only presentation with safe exact integers", () => {
   expect(partialPercent({ numerator: "1", denominator: "32" })).toBe("3.13%");
   expect(partialPercent({ numerator: "100000000000000000000", denominator: "300000000000000000000" })).toBe("33.33%");
 });
+
+it.each(["mean", "difference", "pair identity"])("rejects inconsistent %s instead of displaying it", async (kind) => {
+  const data = response();
+  if (kind === "mean") data.partial.score = { numerator: "1", denominator: "2" };
+  if (kind === "difference") data.partial.controls[0].pairs[0].only_left = ["Other"];
+  if (kind === "pair identity") data.partial.controls[0].pairs[0].right_submission_id = 99;
+  mockCallApi.mockResolvedValue(data);
+  const view = mount();
+  fireEvent.click(screen.getByTestId("classification-partial-load"));
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("classification-partial-result")).toBeNull();
+  view.unmount(); view.runtime.destroy();
+});
+
+it("drops a late same-task response after project navigation", async () => {
+  let finish;
+  mockCallApi.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const view = mount(), Provider = view.Provider;
+  fireEvent.click(screen.getByTestId("classification-partial-load"));
+  view.rerender(<Provider><ClassificationPartial {...view.props} projectId={5}>
+    {(value) => <ClassificationResult report={value} />}
+  </ClassificationPartial></Provider>);
+  await act(async () => finish(response()));
+  expect(screen.queryByTestId("classification-partial-result")).toBeNull();
+  view.unmount(); view.runtime.destroy();
+});

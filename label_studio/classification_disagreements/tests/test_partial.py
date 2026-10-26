@@ -170,6 +170,7 @@ class TestPartial(APITestCase):
 
     def test_feature_modes_annotator_self_and_revocation_deny(self):
         source = self.source_receipt()['frozen']
+        receipt = self.explain(source=source).data['frozen']
         batch = self.new_batch()
         for actor in (self.worker, self.reviewer):
             self.client.force_authenticate(actor)
@@ -182,6 +183,50 @@ class TestPartial(APITestCase):
             assert self.explain(source=source).status_code == 404
         OrganizationMember.objects.filter(user=self.manager, organization=self.org).update(deleted_at=timezone.now())
         assert self.explain(source=source).status_code in (403, 404)
+        assert self.explain(frozen=receipt).status_code in (403, 404)
+
+    def test_independent_reviewer_sees_only_one_task_and_read_policy_is_authoritative(self):
+        from projects.models import ProjectMember
+        from users.tests.factories import UserFactory
+        reader = UserFactory(active_organization=self.org)
+        ProjectMember.objects.create(project=self.project, user=reader, role='reviewer')
+        batch = self.new_batch()
+        source = self.source_receipt()['frozen']
+        self.client.force_authenticate(reader)
+        for url, query in ((self.url, {'source_frozen': source}), (self.batch_url(batch), {})):
+            response = self.client.get(url, query)
+            assert response.status_code == 200, response.data
+            assert response.data['partial']['score'] == partial.fraction(Fraction(1, 3))
+            assert batch.manifest_hash not in str(response.data)
+            assert 'display_counts' not in response.data and 'visible_task_count' not in response.data
+            with self.settings(ANNOTATION_PROJECT_OPERATION_PROVIDER='review_batches.tests.test_batches.ReviewWithoutReadPolicy'):
+                denied = self.client.get(url, query)
+                assert denied.status_code == 403 and 'partial' not in denied.data
+        self.client.logout()
+        assert self.client.get(self.url, {'source_frozen': source}).status_code in (401, 403)
+
+    def test_read_targets_one_task_not_other_batch_answers(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        batch = self.new_batch()
+        # A foreign task's snapshot is deliberately not loaded by this endpoint.
+        other = self.make_source()
+        self.set_answer(other, 'Positive')
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(self.batch_url(batch))
+        assert response.status_code == 200
+        answer_queries = [q['sql'] for q in captured if 'result_snapshot' in q['sql'] and 'SELECT' in q['sql']]
+        assert answer_queries
+        assert all(' IN ' in sql and str(self.first.pk) in sql and str(self.second.pk) in sql for sql in answer_queries)
+
+    def test_twenty_participants_and_twenty_controls_are_not_truncated(self):
+        report = {'status': 'comparable', 'locations': [
+            {'from_name': f'c{i}', 'to_name': 'text', 'values': [
+                {'submission_id': n + 1, 'choices': ['A']} for n in range(20)]} for i in range(20)]}
+        result = partial.calculate(report)
+        assert result['score'] == partial.fraction(Fraction(1))
+        assert len(result['controls']) == 20
+        assert all(len(c['pairs']) == 190 for c in result['controls'])
 
     def test_budget_boundaries_and_strict_queries(self):
         from rest_framework.exceptions import APIException

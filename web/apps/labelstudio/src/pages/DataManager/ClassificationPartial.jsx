@@ -35,6 +35,8 @@ export const partialPercent = (v) => {
   const n = BigInt(v.numerator), d = BigInt(v.denominator), rounded = (n * 20000n + d) / (2n * d);
   return `${rounded / 100n}.${String(rounded % 100n).padStart(2, "0")}%`;
 };
+const add = (a, b) => [a[0] * b[1] + b[0] * a[1], a[1] * b[1]];
+const equalsRatio = (a, b) => a[0] * BigInt(b.denominator) === BigInt(b.numerator) * a[1];
 
 export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen, enabled, report, onFailure, children }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
@@ -62,19 +64,26 @@ export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen
         || origin.batch_id !== batchId || frozenOrigin.project_id !== projectId || frozenOrigin.task_id !== taskId
         || frozenOrigin.kind !== origin.kind || frozenOrigin.batch_id !== batchId || frozenOrigin.origin_hash !== origin.origin_hash
         || origin.calculated_at !== report.manifest.calculated_at || data.base.manifest.rule !== origin.rule
-        || data.base.manifest.calculated_at !== origin.calculated_at) throw new Error("scope changed");
+        || data.base.manifest.calculated_at !== origin.calculated_at || data.base.manifest_hash !== origin.origin_hash
+        || (!batchId && origin.origin_hash !== report.manifest_hash)
+        || (receipt.current && data.frozen !== receipt.current)) throw new Error("scope changed");
       const result = data.partial;
       if (result.status !== data.base.status || (result.status === "unavailable"
         ? result.score !== null || result.controls.length !== 0 || data.base.agreement !== null || data.base.locations.length !== 0
+          || data.base.matching_pairs !== null || data.base.total_pairs !== null || result.reason !== data.base.reason
         : result.score === null || !result.controls.length || data.base.agreement === null || data.base.total_pairs < 1)) throw new Error("invalid result");
       if (result.status === "comparable") {
         const pins = data.base.manifest.inputs.map((v) => v.submission_id).sort((a, b) => a - b);
         if (JSON.stringify(data.base.manifest.inputs) !== JSON.stringify(report.manifest.inputs.map((v) => pin.parse(v)))
           || result.controls.length !== data.base.locations.length) throw new Error("inputs changed");
+        let mean = [0n, 1n];
+        const names = new Set();
         for (const control of result.controls) {
           const location = data.base.locations.find((v) => v.from_name === control.from_name && v.to_name === control.to_name);
-          if (!location || control.pairs.length !== pins.length * (pins.length - 1) / 2) throw new Error("invalid pairs");
+          if (!location || names.has(control.from_name) || control.pairs.length !== pins.length * (pins.length - 1) / 2) throw new Error("invalid pairs");
+          names.add(control.from_name);
           const seen = new Set();
+          let sum = [0n, 1n];
           for (const pair of control.pairs) {
             const key = `${pair.left_submission_id}:${pair.right_submission_id}`;
             if (pair.left_submission_id >= pair.right_submission_id || !pins.includes(pair.left_submission_id)
@@ -82,8 +91,20 @@ export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen
               || pair.intersection_count !== pair.shared.length
               || pair.union_count !== pair.shared.length + pair.only_left.length + pair.only_right.length) throw new Error("invalid pair");
             seen.add(key);
+            const left = location.values.find((v) => v.submission_id === pair.left_submission_id)?.choices;
+            const right = location.values.find((v) => v.submission_id === pair.right_submission_id)?.choices;
+            if (!left || !right || JSON.stringify([...pair.shared, ...pair.only_left].sort()) !== JSON.stringify([...left].sort())
+              || JSON.stringify([...pair.shared, ...pair.only_right].sort()) !== JSON.stringify([...right].sort())
+              || pair.shared.some((v) => pair.only_left.includes(v) || pair.only_right.includes(v))
+              || pair.only_left.some((v) => pair.only_right.includes(v))) throw new Error("invalid differences");
+            sum = add(sum, [BigInt(pair.intersection_count), BigInt(pair.union_count)]);
           }
+          sum[1] *= BigInt(control.pairs.length);
+          if (!equalsRatio(sum, control.score)) throw new Error("invalid mean");
+          mean = add(mean, [BigInt(control.score.numerator), BigInt(control.score.denominator)]);
         }
+        mean[1] *= BigInt(result.controls.length);
+        if (!equalsRatio(mean, result.score)) throw new Error("invalid mean");
       }
       receipt.current = data.frozen; setJoint(data); setPhase("ready");
     } catch {
@@ -97,7 +118,7 @@ export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen
       {t(receipt.current ? "partialRecheck" : "partialLoad")}</Button>}
     {phase === "busy" && <p role="status">{t("classificationLoading")}</p>}
     {phase === "failed" && <p role="alert">{t("partialReadFailed")}</p>}
-    {joint && <section data-testid="classification-partial-result">
+    {joint && <section data-testid="classification-partial-result" style={{ overflowWrap: "anywhere" }}>
       <h4>{t("partialTitle")}</h4><p>{t("partialBoundary")}</p><p>{t("partialFormula")}</p>
       <p>{t("partialRule", { rule: joint.rule, time: joint.receipt.explained_at })}</p>
       {joint.partial.status === "unavailable" ? <p role="status">{t("classificationUnavailable")}</p> : <>

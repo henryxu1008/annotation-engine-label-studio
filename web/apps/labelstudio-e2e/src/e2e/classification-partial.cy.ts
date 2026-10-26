@@ -62,20 +62,25 @@ describe("frozen classification partial matching", () => {
       cy.contains("button", zh ? "返回队列" : "Back to queue").click();
       cy.get('[data-testid="classification-batches"] select').should("have.value", "disagreement").select("unavailable");
       cy.get(`[data-task="${scope.cases.empty.task}"]`).click(); explain();
-      cy.get('[data-testid="classification-partial-result"]').should("contain.text", zh ? "不可比较" : "Unavailable");
+      cy.get('[data-testid="classification-partial-result"]').should("contain.text", zh ? "不可比较" : "Not comparable");
       cy.get('[data-testid="classification-partial-score"]').should("not.exist");
       cy.contains("button", zh ? "返回队列" : "Back to queue").click();
       cy.get('[data-testid="classification-batches"] select').should("have.value", "unavailable").select("disagreement");
+      cy.intercept({ method: "GET", pathname: new RegExp(`${base}batches/${scope.batch.id}/items/${scope.cases.budget.task}/partial-match/?$`) }).as("partialBudget");
       cy.get(`[data-task="${scope.cases.budget.task}"]`).click(); explain();
+      cy.wait("@partialBudget").then(({ response }) => {
+        expect(response?.statusCode).to.eq(422);
+        expect(response!.body.display_context.reason).to.eq("CLASSIFICATION_PARTIAL_TOO_LARGE");
+      });
       cy.get('[data-testid="classification-batches"] [role="alert"]').should("be.visible");
       cy.get('[data-testid="classification-report"]').should("not.exist");
       cy.request(`${base}batches/${scope.batch.id}/`).its("body.manifest_hash").should("eq", scope.batch.manifest_hash);
 
       visit("a");
-      cy.request({ url: `${base}tasks/${task}/partial-match/`, qs: { frozen: partialFrozen }, failOnStatusCode: false })
+      cy.then(() => cy.request({ url: `${base}tasks/${task}/partial-match/`, qs: { frozen: partialFrozen }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);
       visit("reviewer");
-      cy.request(`${base}tasks/${task}/partial-match/?frozen=${encodeURIComponent(partialFrozen)}`).its("body.partial.score")
+      cy.then(() => cy.request(`${base}tasks/${task}/partial-match/?frozen=${encodeURIComponent(partialFrozen)}`)).its("body.partial.score")
         .should("deep.eq", { numerator: "4", denominator: "9" });
       cy.request({ url: `${base}batches/${scope.batch.id}/items/${scope.cases.self.task}/partial-match/`, failOnStatusCode: false })
         .its("status").should("eq", 404);
@@ -85,11 +90,11 @@ describe("frozen classification partial matching", () => {
         cy.request("DELETE", `/api/projects/${scope.id}/members/${member.id}/`);
       });
       visit("reviewer");
-      cy.request({ url: `${base}tasks/${task}/partial-match/`, qs: { frozen: partialFrozen }, failOnStatusCode: false })
+      cy.then(() => cy.request({ url: `${base}tasks/${task}/partial-match/`, qs: { frozen: partialFrozen }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);
       visit("manager");
       cy.request("DELETE", `/api/tasks/${task}/`);
-      cy.request(`${base}tasks/${task}/partial-match/?frozen=${encodeURIComponent(partialFrozen)}`)
+      cy.then(() => cy.request(`${base}tasks/${task}/partial-match/?frozen=${encodeURIComponent(partialFrozen)}`))
         .then(({ body }) => { expect(body.partial.status).to.eq("unavailable"); expect(body.base.locations).to.deep.eq([]); });
       cy.request(`${base}batches/${scope.batch.id}/`).its("body.manifest_hash").should("eq", scope.batch.manifest_hash);
     });
