@@ -3,7 +3,9 @@ import { z } from "zod";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
+import { cn } from "../../utils/bem";
 import { partialPercent } from "./ClassificationPartial";
+import "./ClassificationOverview.scss";
 
 const id = z.number().int().positive().safe(), count = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -105,10 +107,12 @@ export const ClassificationOverview = ({ projectId, batch, navigation, onOpenTas
   }, [data]);
   const shown = data && data.scope.project_id === projectId && data.scope.batch_id === batch.id && data.scope.reference_hash === reference ? data : null;
   const percent = (value) => value ? partialPercent(value) : t("classificationUnavailable");
-  return <section ref={root} data-testid="classification-quality-overview" style={{ overflowWrap: "anywhere", overflowX: "auto" }}>
-    <Button disabled={phase === "busy"} onClick={() => read(navigation.current.page ?? 1)} data-testid="quality-read">
+  return <section ref={root} className={cn("classification-quality-overview").toClassName()} data-testid="classification-quality-overview">
+    <div className={cn("classification-quality-overview").elem("actions").toClassName()}>
+      <Button disabled={phase === "busy"} onClick={() => read(navigation.current.page ?? 1)} data-testid="quality-read">
       {t(navigation.current.frozen ? "qualityRefresh" : "qualityLoad")}</Button>
-    {navigation.current.frozen && <Button disabled={phase === "busy"} onClick={() => read(1, true)}>{t("qualityRegenerate")}</Button>}
+      {navigation.current.frozen && <Button disabled={phase === "busy"} onClick={() => read(1, true)}>{t("qualityRegenerate")}</Button>}
+    </div>
     {phase === "busy" && <p role="status">{t("classificationLoading")}</p>}
     {phase === "failed" && <p role="alert">{t("qualityFailed")}</p>}
     {shown && <>
@@ -124,12 +128,14 @@ export const ClassificationOverview = ({ projectId, batch, navigation, onOpenTas
           <tbody>{shown.annotators.map((r) => <tr key={r.actor_id} data-quality-actor={r.actor_id}>
             <td>{t("qualityActorId", { id: r.actor_id })}</td><td>{r.tasks} / {r.comparable_tasks} / {r.unavailable_tasks}</td>
             <td>{percent(r.coverage)}</td><td>{percent(r.exact_agreement)}</td><td>{percent(r.partial_match)}</td>
-            <td>{r.task_ids.map((task) => <Button key={task} data-quality-task={task} onClick={() => {
+            <td><div className={cn("classification-quality-overview").elem("tasks").toClassName()}>{r.task_ids.map((task) => <Button key={task} data-quality-task={task} onClick={() => {
               navigation.current.focusTask = task; onOpenTask(task);
-            }}>{t("qualityTaskId", { id: task })}</Button>)}</td>
+            }}>{t("qualityTaskId", { id: task })}</Button>)}</div></td>
           </tr>)}</tbody></table>
-        <Button data-testid="quality-previous" disabled={!shown.pagination.previous_page} onClick={() => read(shown.pagination.previous_page)}>{t("batchPrevious")}</Button>
-        <Button data-testid="quality-next" disabled={!shown.pagination.next_page} onClick={() => read(shown.pagination.next_page)}>{t("batchNext")}</Button>
+        <div className={cn("classification-quality-overview").elem("actions").toClassName()}>
+          <Button data-testid="quality-previous" disabled={!shown.pagination.previous_page} onClick={() => read(shown.pagination.previous_page)}>{t("batchPrevious")}</Button>
+          <Button data-testid="quality-next" disabled={!shown.pagination.next_page} onClick={() => read(shown.pagination.next_page)}>{t("batchNext")}</Button>
+        </div>
       </>}
     </>}
   </section>;
