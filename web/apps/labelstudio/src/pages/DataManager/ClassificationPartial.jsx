@@ -111,14 +111,17 @@ export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen
       if (current === generation.current) { setJoint(null); setPhase("failed"); failure.current?.(); }
     }
   };
-  const shown = phase === "idle" ? report : phase === "ready" ? { ...joint.base, observed_at: joint.observed_at } : null;
+  const jointCurrent = enabled && joint && joint.origin.project_id === projectId && joint.origin.task_id === taskId
+    && joint.origin.batch_id === batchId && joint.origin.calculated_at === report.manifest.calculated_at
+    && (batchId || joint.origin.origin_hash === report.manifest_hash);
+  const shown = phase === "idle" ? report : phase === "ready" && jointCurrent ? { ...joint.base, observed_at: joint.observed_at } : null;
   return <>
     {shown && children(shown)}
     {enabled && <Button disabled={phase === "busy"} onClick={read} data-testid="classification-partial-load">
       {t(receipt.current ? "partialRecheck" : "partialLoad")}</Button>}
     {phase === "busy" && <p role="status">{t("classificationLoading")}</p>}
     {phase === "failed" && <p role="alert">{t("partialReadFailed")}</p>}
-    {joint && <section data-testid="classification-partial-result" style={{ overflowWrap: "anywhere" }}>
+    {jointCurrent && <section data-testid="classification-partial-result" style={{ overflowWrap: "anywhere" }}>
       <h4>{t("partialTitle")}</h4><p>{t("partialBoundary")}</p><p>{t("partialFormula")}</p>
       <p>{t("partialRule", { rule: joint.rule, time: joint.receipt.explained_at })}</p>
       {joint.partial.status === "unavailable" ? <p role="status">{t("classificationUnavailable")}</p> : <>

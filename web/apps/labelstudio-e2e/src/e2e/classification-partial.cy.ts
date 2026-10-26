@@ -11,13 +11,9 @@ describe("frozen classification partial matching", () => {
       let sourceFrozen: string, partialFrozen: string, initial: any;
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, "/user/account/personal-info");
-        cy.get('[data-testid="language-preference-select"]').should("be.enabled").then(($select) => {
-          if ($select.val() !== locale) {
-            cy.intercept({ method: "PATCH", pathname: /^\/api\/current-user\/locale\/?$/ }).as("partialLocale");
-            cy.get('[data-testid="language-preference-select"]').select(locale);
-            cy.wait("@partialLocale").its("response.statusCode").should("eq", 200);
-          }
-        });
+        // Reuse the persisted-locale prerequisite: a hydrating selector can
+        // briefly display the previous actor's preference after login.
+        cy.setUserLocale(locale);
         cy.visit(`/projects/${scope.id}/data`);
         cy.get("html").should("have.attr", "lang", locale);
       };
