@@ -152,8 +152,9 @@ class TestPartial(APITestCase):
         assert input_hash(self.project, batch.manifest['tasks'][0]) == origin
         assert ClassificationBatch.objects.count() == 1
         assert list(Submission.objects.order_by('pk').values()) == rows_before
-        item, _ = batches.project_item_sources(batch, self.manager, 'manager', self.first.assignment.task_id)
-        assert batches.frozen_result(item) == before['tasks'][0]['result']
+        _, sources = batches.project_item_sources(batch, self.manager, 'manager', self.first.assignment.task_id)
+        rows = [sources[e['source']['submission_id']] for e in before['tasks'][0]['cohort']]
+        assert batches.frozen_result(service.calculate(rows, self.project.pk)) == before['tasks'][0]['result']
 
     def test_batch_missing_participant_never_upgrades_after_completion(self):
         from tasks.models import TaskAssignment
@@ -189,6 +190,11 @@ class TestPartial(APITestCase):
         assert partial.bounded_size(value, size) == size
         with self.assertRaises(APIException):
             partial.bounded_size(value, size - 1)
+        exact = {'x': '界' * ((partial.MAX_BYTES - 8) // 3)}
+        exact['x'] += 'x' * (partial.MAX_BYTES - len(batches.canonical(exact)))
+        assert partial.bounded_size(exact) == partial.MAX_BYTES
+        with self.assertRaises(APIException):
+            partial.bounded_size({'x': exact['x'] + 'x'})
         source = self.source_receipt()['frozen']
         valid = self.explain(source=source)
         business = {k: valid.data[k] for k in ('origin', 'base', 'partial', 'viewer')}
@@ -196,6 +202,11 @@ class TestPartial(APITestCase):
         with patch.object(partial, 'MAX_BYTES', size):
             assert self.explain(source=source).status_code == 200
         with patch.object(partial, 'MAX_BYTES', size - 1):
+            assert self.explain(source=source).status_code == 422
+        token_size = len(valid.data['frozen'].encode())
+        with patch.object(partial, 'MAX_TOKEN', token_size):
+            assert self.explain(source=source).status_code == 200
+        with patch.object(partial, 'MAX_TOKEN', token_size - 1):
             assert self.explain(source=source).status_code == 422
         for query in ({}, {'submissions': '1,2'}, {'source_frozen': source, 'threshold': '0.5'},
                       {'source_frozen': source, 'frozen': 'other'}):

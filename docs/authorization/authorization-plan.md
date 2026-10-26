@@ -1076,3 +1076,14 @@ and cancellation/decision semantics unchanged. Same-key handoff recovery precede
 source availability but still requires current authority and intact provenance.
 Preserve rollback through actual JSON rendering and fresh identity/source checks.
 See review-arbitration-handoff-v1.md. #81/#84 remain open.
+
+### Partial classification explanations (#81)
+
+The default-off classification-jaccard-nonempty/v1 supplement reuses exact frozen
+source validation and existing comparison UI, with separate read endpoints and
+signed receipts. Do not add fields to service.calculate(), change its RULE, or
+rewrite old manifests/calculation hashes: arbitration and conflict priority depend
+on those exact contracts. Keep empty/missing inputs unavailable, complete cohorts,
+current READ_WORK/self-source boundaries and response-time revalidation. Bound
+pairwise output separately from snapshot input size. See
+classification-partial-match-v1.md. #81/#84 remain open; no Host/Core/runtime change.
