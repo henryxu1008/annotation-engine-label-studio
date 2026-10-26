@@ -35,9 +35,11 @@ describe("single frozen classification batch quality overview", () => {
       cy.contains("button", zh ? "返回队列" : "Back to queue").click();
       cy.get('[data-testid="quality-summary"]').should("contain.text", "72.22%");
       cy.get('[data-testid="classification-batches"] select').should("have.value", "disagreement");
-      cy.intercept({ method: "GET", pathname: `${base}${scope.batch.id}/quality-overview/`, times: 1 },
-        (request) => request.continue((response) => response.setDelay(400))).as("lateOverview");
+      let lateEntered = false;
+      cy.intercept({ method: "GET", pathname: new RegExp(`${base}${scope.batch.id}/quality-overview/?$`), times: 1 },
+        (request) => { lateEntered = true; request.continue((response) => response.setDelay(1000)); }).as("lateOverview");
       cy.get('[data-testid="quality-read"]').click();
+      cy.wrap(null).should(() => expect(lateEntered).to.eq(true));
       cy.window().then((win) => win.dispatchEvent(new win.Event("blur")));
       cy.wait("@lateOverview");
       cy.get('[data-testid="quality-summary"]').should("not.exist"); cy.get('[data-quality-task]').should("not.exist");
@@ -46,7 +48,7 @@ describe("single frozen classification batch quality overview", () => {
       cy.screenshot(`classification-quality-overview-${locale}`, { capture: "fullPage" });
       cy.request(`${base}${scope.batch.id}/`).its("body.manifest_hash").should("eq", scope.batch.manifest_hash);
       login("manager");
-      cy.intercept({ method: "GET", pathname: `${base}${scope.page_batch.id}/quality-overview/` }).as("pagedOverview");
+      cy.intercept({ method: "GET", pathname: new RegExp(`${base}${scope.page_batch.id}/quality-overview/?$`) }).as("pagedOverview");
       open(scope.page_batch);
       let pageFrozen: string;
       cy.wait("@pagedOverview").then(({ response }) => { pageFrozen = response!.body.frozen; expect(response!.body.pagination.count).to.eq(51); });
