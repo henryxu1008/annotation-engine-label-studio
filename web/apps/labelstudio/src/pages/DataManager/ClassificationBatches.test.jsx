@@ -30,9 +30,9 @@ const respond = async (method, options) => {
     default: throw new Error(method);
   }
 };
-const mount = (locale = "en-US", entry = false) => {
+const mount = (locale = "en-US", entry = false, onOpenArbitration) => {
   const runtime = createLocaleRuntime(locale), Provider = runtime.provider;
-  return { ...render(<Provider>{entry ? <ClassificationBatchEntry projectId={4} /> : <ClassificationBatches projectId={4} />}</Provider>),
+  return { ...render(<Provider>{entry ? <ClassificationBatchEntry projectId={4} /> : <ClassificationBatches projectId={4} onOpenArbitration={onOpenArbitration} />}</Provider>),
     runtime, Provider };
 };
 beforeEach(() => mockCallApi.mockReset().mockImplementation(respond));
@@ -225,5 +225,47 @@ it("shows source unavailability without stale frozen labels", async () => {
   await screen.findByTestId("classification-unavailable");
   expect(screen.queryByTestId("classification-agreement")).toBeNull();
   expect(screen.queryByText("Negative")).toBeNull();
+  unmount(); runtime.destroy();
+});
+
+it.each(["en-US", "zh-CN"])("binds arbitration dispatch to the joint source read in %s", async (locale) => {
+  let finish;
+  const onOpen = jest.fn(), zh = locale === "zh-CN";
+  const origin = { kind: "batch", project_id: 4, task_id: 8, batch_id: 7, origin_hash: "item-origin",
+    rule: meta.rule, calculated_at: meta.calculated_at };
+  const unavailable = { ...item, status: "unavailable", reason: "source_unavailable", agreement: null,
+    matching_pairs: null, total_pairs: null, inputs: [], locations: [] };
+  const joint = { schema: "classification-partial-match/v1", rule: "classification-jaccard-nonempty/v1",
+    viewer: "a".repeat(64), origin, frozen: "read-receipt", observed_at: "fresh-read",
+    receipt: { schema: "classification-partial-match/v1", rule: "classification-jaccard-nonempty/v1",
+      origin, explained_at: "first-read", result_hash: "unavailable-hash" },
+    base: { ...unavailable, manifest_hash: meta.manifest_hash,
+      manifest: { rule: meta.rule, calculated_at: meta.calculated_at, inputs: [] } },
+    partial: { status: "unavailable", reason: "source_unavailable", score: null, controls: [] } };
+  mockCallApi.mockImplementation((method, options) => {
+    if (method === "classificationArbitrationCapability") return Promise.resolve({ enabled: true, viewer_hash: "a".repeat(64),
+      can_read: true, can_create: true, can_decide: false, can_cancel: true });
+    if (method === "classificationBatchItem") return Promise.resolve({ ...meta, observed_at: "now", can_explain_partial: true, item });
+    if (method === "classificationBatchPartial") return new Promise((resolve) => { finish = resolve; });
+    return respond(method, options);
+  });
+  const { runtime, unmount } = mount(locale, false, onOpen);
+  fireEvent.click(await screen.findByRole("button", { name: "Synthetic batch" }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "查看冻结对照" : "View frozen comparison" }));
+  await screen.findByTestId("dispatch-classification-arbitration");
+  fireEvent.click(screen.getByTestId("classification-partial-load"));
+  expect(screen.queryByTestId("dispatch-classification-arbitration")).toBeNull();
+  await act(async () => finish(joint));
+  await screen.findByTestId("classification-partial-result");
+  expect(screen.queryByTestId("dispatch-classification-arbitration")).toBeNull();
+  expect(screen.queryByTestId("classification-agreement")).toBeNull();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(mockCallApi.mock.calls.some(([method]) => method.startsWith("create"))).toBe(false);
+  // A separate fresh original read can restore an intact comparable source.
+  fireEvent.click(screen.getByRole("button", { name: zh ? "返回队列" : "Back to queue" }));
+  fireEvent.click(await screen.findByRole("button", { name: zh ? "查看冻结对照" : "View frozen comparison" }));
+  await screen.findByTestId("dispatch-classification-arbitration");
+  fireEvent.click(screen.getByTestId("dispatch-classification-arbitration"));
+  expect(onOpen).toHaveBeenCalledWith({ batch_id: 7, task_id: 8, expected_manifest_hash: meta.manifest_hash });
   unmount(); runtime.destroy();
 });

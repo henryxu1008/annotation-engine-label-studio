@@ -2,8 +2,11 @@ from django.urls import path
 
 from . import batch_api
 from .api import CapabilityAPI, ReportAPI, SourcesAPI
+from .partial_api import PartialAPI
 
 urlpatterns = [
+    path('tasks/<int:task_id>/partial-match/', PartialAPI.as_view()),
+    path('batches/<int:batch_id>/items/<int:task_id>/partial-match/', PartialAPI.as_view()),
     path('batches/capability/', batch_api.CapabilityAPI.as_view()),
     path('batches/preview/', batch_api.PreviewAPI.as_view()),
     path('batches/', batch_api.ListAPI.as_view()),

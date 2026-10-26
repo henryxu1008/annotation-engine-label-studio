@@ -98,3 +98,4 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 .classification-arbitrations81-e2e.json
 .review-priority-e2e.json
 .review-handoff-e2e.json
+.classification-partial-e2e.json

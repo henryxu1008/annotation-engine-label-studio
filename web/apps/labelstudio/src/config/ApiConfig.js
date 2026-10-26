@@ -57,6 +57,8 @@ export const API_CONFIG = {
     classificationBatchItem: "GET:/projects/:pk/classification-disagreements/batches/:batch/items/:task/",
     classificationSources: "GET:/projects/:pk/classification-disagreements/tasks/:task/sources/",
     classificationReport: "GET:/projects/:pk/classification-disagreements/tasks/:task/",
+    classificationPartial: "GET:/projects/:pk/classification-disagreements/tasks/:task/partial-match/",
+    classificationBatchPartial: "GET:/projects/:pk/classification-disagreements/batches/:batch/items/:task/partial-match/",
     taskPackageCapability: "GET:/projects/:pk/task-packages/capability/",
     taskPackages: "GET:/projects/:pk/task-packages/",
     createTaskPackage: "POST:/projects/:pk/task-packages/",

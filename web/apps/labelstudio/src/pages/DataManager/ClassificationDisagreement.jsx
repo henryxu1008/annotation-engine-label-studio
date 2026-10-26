@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
+import { ClassificationPartial } from "./ClassificationPartial";
 
 const id = z.number().int().positive().safe();
 const pin = z.object({ submission_id: id, revision: id, assignment_id: id, task_id: id,
@@ -83,6 +84,7 @@ export const ClassificationDisagreement = ({ projectId, initialTaskId = "" }) =>
   const [task, setTask] = useState(String(initialTaskId));
   const [rows, setRows] = useState(null), [selected, setSelected] = useState([]);
   const [report, setReport] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(false);
+  const [canExplain, setCanExplain] = useState(false);
   const clear = () => { generation.current += 1; setReport(null); setBusy(false); };
   useEffect(() => {
     receipt.current = null; setRows(null); setSelected([]); setError(false); clear(); heading.current?.focus();
@@ -101,8 +103,8 @@ export const ClassificationDisagreement = ({ projectId, initialTaskId = "" }) =>
     finally { if (current === generation.current) setBusy(false); }
   };
   const load = () => {
-    receipt.current = null; setRows(null); setSelected([]);
-    request("classificationSources", {}, sourceResponse, (r) => setRows(r.sources));
+    receipt.current = null; setRows(null); setSelected([]); setCanExplain(false);
+    request("classificationSources", {}, sourceResponse, (r) => { setRows(r.sources); setCanExplain(r.can_explain_partial === true); });
   };
   const compare = (frozen = null) => request("classificationReport", frozen ? { frozen } : { submissions: selected.join(",") },
     reportResponse, (r) => {
@@ -130,6 +132,9 @@ export const ClassificationDisagreement = ({ projectId, initialTaskId = "" }) =>
       <Button disabled={!selected.length || selected.length > 20} onClick={() => compare()}>{t("classificationCompare")}</Button>
     </fieldset>}
     {receipt.current && <Button disabled={busy} onClick={() => compare(receipt.current)}>{t("classificationRefreshFrozen")}</Button>}
-    {report && <ClassificationResult report={report} />}
+    {report && <ClassificationPartial projectId={projectId} taskId={Number(task)} sourceFrozen={receipt.current}
+      enabled={canExplain} report={report} onFailure={() => { clear(); setRows(null); setSelected([]); setError(true); }}>
+      {(current) => <ClassificationResult report={current} />}
+    </ClassificationPartial>}
   </section>;
 };
