@@ -3,8 +3,10 @@ from django.urls import path
 from . import batch_api
 from .api import CapabilityAPI, ReportAPI, SourcesAPI
 from .partial_api import PartialAPI
+from .overview_api import OverviewAPI
 
 urlpatterns = [
+    path('batches/<int:batch_id>/quality-overview/', OverviewAPI.as_view()),
     path('tasks/<int:task_id>/partial-match/', PartialAPI.as_view()),
     path('batches/<int:batch_id>/items/<int:task_id>/partial-match/', PartialAPI.as_view()),
     path('batches/capability/', batch_api.CapabilityAPI.as_view()),

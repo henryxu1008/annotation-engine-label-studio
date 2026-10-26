@@ -107,5 +107,6 @@
   "apps/labelstudio/src/pages/DataManager/ClassificationArbitrations.jsx",
   "apps/labelstudio/src/pages/DataManager/ReviewPriority.jsx",
   "apps/labelstudio/src/pages/DataManager/ReviewArbitrationHandoff.jsx",
-  "apps/labelstudio/src/pages/DataManager/ClassificationPartial.jsx"
+  "apps/labelstudio/src/pages/DataManager/ClassificationPartial.jsx",
+  "apps/labelstudio/src/pages/DataManager/ClassificationOverview.jsx"
 ]

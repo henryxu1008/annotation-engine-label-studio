@@ -1,0 +1,15 @@
+.classification-quality-overview {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
+  &__actions, &__tasks { display: flex; flex-wrap: wrap; gap: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    padding: 8px;
+    text-align: start;
+    vertical-align: top;
+    border-bottom: 1px solid var(--color-neutral-border, #ddd);
+  }
+}
