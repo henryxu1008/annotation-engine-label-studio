@@ -323,6 +323,7 @@ class ItemAPI(BatchAPI):
             )
             if item is None:
                 raise NotFound()
-            return {**batches.metadata(batch, context[1], context[3]), "item": item}
+            return {**batches.metadata(batch, context[1], context[3]), "item": item,
+                    "can_explain_partial": settings.ANNOTATION_CLASSIFICATION_PARTIAL_MATCH_ENABLED}
 
         return self.read(request, pk, materialize)

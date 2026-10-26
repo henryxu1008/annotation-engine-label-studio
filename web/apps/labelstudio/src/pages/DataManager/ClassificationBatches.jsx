@@ -5,6 +5,7 @@ import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { ClassificationResult } from "./ClassificationDisagreement";
+import { ClassificationPartial } from "./ClassificationPartial";
 import { ClassificationArbitrationEntry } from "./ClassificationArbitrations";
 import "./ReviewBatches.scss";
 import "./ClassificationBatches.scss";
@@ -26,7 +27,7 @@ const summary = z.object({ task_id: id, outcome: z.enum(["agreement", "disagreem
   agreement: z.number().min(0).max(1).nullable(), matching_pairs: count.nullable(), total_pairs: count.nullable() });
 const queueSchema = z.object({ batch_id: id, count, next: z.string().nullable(), previous: z.string().nullable(), display_counts: counts,
   results: z.array(summary) });
-const itemSchema = metadata.extend({ observed_at: z.string(), item: summary.extend({
+const itemSchema = metadata.extend({ observed_at: z.string(), can_explain_partial: z.boolean().optional(), item: summary.extend({
   status: z.enum(["comparable", "unavailable"]), inputs: z.array(z.object({ submission_id: id, revision: id,
     submitter_id: id.nullable(), result_hash: z.string(), config_hash: z.string() })),
   locations: z.array(z.object({ from_name: z.string(), to_name: z.string(), matching_pairs: count, total_pairs: count,
@@ -220,7 +221,11 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
         <Button onClick={() => openBatch(batchId, page, state)}>{t("batchBackQueue")}</Button>
         {answer.item.outcome === "disagreement" && answer.manifest_hash && <ClassificationArbitrationEntry projectId={projectId} dispatch
           onOpen={onOpenArbitration ? () => onOpenArbitration({ batch_id: answer.id, task_id: answer.item.task_id, expected_manifest_hash: answer.manifest_hash }) : undefined} />}
-        <ClassificationResult report={report} durable />
+        <ClassificationPartial projectId={projectId} taskId={answer.item.task_id} batchId={answer.id}
+          enabled={answer.can_explain_partial === true} report={report}
+          onFailure={() => { generation.current += 1; clear(); setBusy(false); setError(true); }}>
+          {(current) => <ClassificationResult report={current} durable />}
+        </ClassificationPartial>
       </> : detail && queue && <>
         <h3>{detail.name}</h3>
         <p>{t("batchScopeFrozen", { count: detail.visible_task_count, time: detail.scope_enumerated_at })}</p>

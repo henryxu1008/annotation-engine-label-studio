@@ -1,6 +1,7 @@
 from access_control.identity import resolve_actor
 from core.permissions import all_permissions
 from django.core import signing
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.exceptions import NotFound, ValidationError
@@ -38,7 +39,7 @@ class CapabilityAPI(ComparisonAPI):
         if request.query_params:
             raise ValidationError('Unexpected query parameters.')
         self.context(request, pk)
-        return Response({'enabled': True})
+        return Response({'enabled': True, 'can_explain_partial': settings.ANNOTATION_CLASSIFICATION_PARTIAL_MATCH_ENABLED})
 
 
 class SourcesAPI(ComparisonAPI):
@@ -61,7 +62,8 @@ class SourcesAPI(ComparisonAPI):
         if data != [{**service.pin(row), 'status': row.status} for row in current]:
             fail('CLASSIFICATION_SOURCES_CHANGED')
         self.recheck_context(request, pk, task_id, principal, actor, role)
-        return Response({'sources': data, 'max_inputs': service.MAX_INPUTS})
+        return Response({'sources': data, 'max_inputs': service.MAX_INPUTS,
+                         'can_explain_partial': settings.ANNOTATION_CLASSIFICATION_PARTIAL_MATCH_ENABLED})
 
 
 class ReportAPI(ComparisonAPI):
