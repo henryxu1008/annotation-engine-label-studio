@@ -9,10 +9,11 @@ from classification_disagreements import batches
 from classification_disagreements.models import ClassificationBatch
 from django.db import transaction
 from django.utils import timezone
-from projects.models import Project
+from projects.models import Project, ProjectMember
 from review_batches.service import digest
-from tasks.models import Submission
-from tasks.submissions import _snapshot_hash
+from tasks.models import Annotation, Submission, Task, TaskAssignment
+from tasks.submissions import _canonical_snapshot, _snapshot_hash
+from users.models import User
 
 from .seed_classification_e2e import Command as Fixture
 
@@ -58,6 +59,30 @@ class Command(Fixture):
             scope['self_batch'] = batch('Reviewer subset overview', ('agreement', 'split', 'self'))
             scope['empty_batch'] = batch('No comparable overview', ('empty',))
             scope['budget_batch'] = batch('Synthetic oversized source', ('budget',))
+            page_cases = []
+            for group in range(3):
+                task = Task.objects.create(project=project, data={'text': f'Synthetic pagination {group}'})
+                ids = []
+                for index in range(17):
+                    actor = User.objects.create_user(f'page-{project.pk}-{group}-{index}@{self.domain}',
+                        data['password'], username=f'overview-page-{project.pk}-{group}-{index}',
+                        active_organization=project.organization)
+                    project.organization.add_user(actor)
+                    ProjectMember.objects.create(project=project, user=actor, role='annotator')
+                    assignment = TaskAssignment.objects.create(project=project, task=task, assignee=actor, assigned_by=project.created_by)
+                    annotation = Annotation.objects.create(project=project, task=task, completed_by=actor, result=[{
+                        'from_name': 'sentiment', 'to_name': 'text', 'type': 'choices', 'value': {'choices': ['A' if index % 2 else 'B']}}])
+                    assignment.annotation = annotation
+                    assignment.save()
+                    snapshot = _canonical_snapshot(annotation, assignment)
+                    snapshot['project']['label_config'] = config
+                    source = Submission.objects.create(assignment=assignment, annotation=annotation, revision=1,
+                        submitted_by=actor, result_snapshot=snapshot, result_hash=_snapshot_hash(snapshot))
+                    ids.append(source.pk)
+                name = f'page_{group}'
+                scope['cases'][name] = {'task': task.pk, 'sources': ids}
+                page_cases.append(name)
+            scope['page_batch'] = batch('Frozen 51 annotator pagination', page_cases)
             source = Submission.objects.get(pk=scope['cases']['split']['sources'][0])
             snapshot = copy.deepcopy(source.result_snapshot)
             snapshot['annotation']['result'][0]['value']['choices'] = ['C']

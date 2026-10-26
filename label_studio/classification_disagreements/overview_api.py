@@ -30,14 +30,15 @@ class OverviewAPI(BatchAPI):
 
         def materialize(current):
             batch = self.batch(current, batch_id)
+            viewer = receipt['origin'].get('viewer') if receipt else None
             if receipt:
-                origin = overview.origin(batch, current)
+                origin = overview.origin(batch, current, expected_viewer=viewer)
                 if receipt['origin'] != origin:
                     scope = receipt['origin'].get('scope', {})
                     if not isinstance(scope, dict) or scope.get('project_id') != pk or scope.get('batch_id') != batch_id:
                         raise NotFound()
                     overview.reject('CONTEXT_CHANGED')
-            data = overview.project(batch, current)
+            data = overview.project(batch, current, expected_viewer=viewer)
             if receipt and data['source_status'] == 'verified' and digest(data) != receipt['result_hash']:
                 overview.reject('RESULT_CHANGED')
             return data

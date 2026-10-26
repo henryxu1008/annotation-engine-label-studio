@@ -9,6 +9,7 @@ from django.db import close_old_connections, connection
 from django.test import override_settings
 from django.utils import timezone
 from organizations.models import OrganizationMember
+from projects.models import ProjectMember
 from rest_framework.response import Response
 from rest_framework.test import APIClient
 
@@ -43,21 +44,35 @@ class TestOverviewConcurrency(fixtures.TestComparisonConcurrency):
         response = self.interleave(append, (200,))
         assert response.data['summary']['exact_agreement'] == partial.fraction(1)
 
-    def test_revocation_commits_after_actual_json_render(self):
+    def after_render_change(self, change, expected):
         render = Response.render
-        def revoke():
+        def mutate():
             close_old_connections()
             try:
-                OrganizationMember.objects.filter(organization=self.org, user=self.manager).update(deleted_at=timezone.now())
+                change()
             finally:
                 connection.close()
         def after_render(response):
             result = render(response)
             if isinstance(response.data, dict) and response.data.get('schema') == 'classification-quality-overview/v1':
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    pool.submit(revoke).result(20)
+                    pool.submit(mutate).result(20)
             return result
         with patch.object(Response, 'render', after_render):
             response = self.client.get(self.url)
-        assert response.status_code in (403, 404), response.data
+        assert response.status_code in expected, response.data
         assert 'summary' not in response.data
+
+    def test_revocation_commits_after_actual_json_render(self):
+        self.after_render_change(lambda: OrganizationMember.objects.filter(
+            organization=self.org, user=self.manager).update(deleted_at=timezone.now()), (403, 404))
+
+    def test_role_change_commits_after_actual_json_render(self):
+        self.member.role = 'manager'
+        self.member.save()
+        self.client.force_authenticate(self.worker)
+        self.after_render_change(lambda: ProjectMember.objects.filter(pk=self.member.pk).update(role='reviewer'), (409,))
+
+    def test_source_hash_change_commits_after_actual_json_render(self):
+        from tasks.models import Submission
+        self.after_render_change(lambda: Submission.objects.filter(pk=self.first.pk).update(result_hash='0' * 64), (409,))

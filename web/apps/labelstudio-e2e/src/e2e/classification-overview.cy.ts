@@ -35,8 +35,30 @@ describe("single frozen classification batch quality overview", () => {
       cy.contains("button", zh ? "返回队列" : "Back to queue").click();
       cy.get('[data-testid="quality-summary"]').should("contain.text", "72.22%");
       cy.get('[data-testid="classification-batches"] select').should("have.value", "disagreement");
+      cy.intercept({ method: "GET", pathname: `${base}${scope.batch.id}/quality-overview/`, times: 1 },
+        (request) => request.continue((response) => response.setDelay(400))).as("lateOverview");
+      cy.get('[data-testid="quality-read"]').click();
+      cy.window().then((win) => win.dispatchEvent(new win.Event("blur")));
+      cy.wait("@lateOverview");
+      cy.get('[data-testid="quality-summary"]').should("not.exist"); cy.get('[data-quality-task]').should("not.exist");
+      cy.get('[data-testid="classification-batch-refresh"]').click();
+      cy.get('[data-testid="quality-summary"]').should("contain.text", "72.22%");
       cy.screenshot(`classification-quality-overview-${locale}`, { capture: "fullPage" });
       cy.request(`${base}${scope.batch.id}/`).its("body.manifest_hash").should("eq", scope.batch.manifest_hash);
+      login("manager");
+      cy.intercept({ method: "GET", pathname: `${base}${scope.page_batch.id}/quality-overview/` }).as("pagedOverview");
+      open(scope.page_batch);
+      let pageFrozen: string;
+      cy.wait("@pagedOverview").then(({ response }) => { pageFrozen = response!.body.frozen; expect(response!.body.pagination.count).to.eq(51); });
+      cy.get('[data-quality-actor]').should("have.length", 50);
+      cy.get('[data-testid="quality-next"]').click();
+      cy.wait("@pagedOverview").then(({ response }) => { expect(response!.body.frozen).to.eq(pageFrozen); expect(response!.body.pagination.page).to.eq(2); });
+      cy.get('[data-quality-actor]').should("have.length", 1);
+      cy.get('[data-quality-task]').first().click();
+      cy.get('[data-testid="classification-report"]').should("be.visible");
+      cy.contains("button", zh ? "返回队列" : "Back to queue").click();
+      cy.wait("@pagedOverview").then(({ response }) => expect(response!.body.frozen).to.eq(pageFrozen));
+      cy.get('[data-quality-actor]').should("have.length", 1); cy.get('[data-testid="quality-next"]').should("be.disabled");
       login("a");
       cy.then(() => cy.request({ url: `${base}${scope.batch.id}/quality-overview/`, qs: { frozen }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);

@@ -189,7 +189,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     {error && <p role="alert">{t(typeof error === "string" ? error : "batchReadFailed")}</p>}
     {saved && <p role="status">{t(saved.replayed ? "batchRecovered" : "batchSaved", { id: saved.id })}</p>}
     {unknown && <p role="status">{t("batchUnknown")} <Button disabled={busy} onClick={create}>{t("batchRecover")}</Button></p>}
-    {!busy && view !== "create" && <Button onClick={refresh}>{t("batchRefresh")}</Button>}
+    {!busy && view !== "create" && <Button onClick={refresh} data-testid="classification-batch-refresh">{t("batchRefresh")}</Button>}
     {view === "list" && <>
       {canCreate && !unknown && <Button disabled={busy} onClick={() => { setView("create"); setList(null); setError(false); }}>{t("batchNew")}</Button>}
       {list && <>

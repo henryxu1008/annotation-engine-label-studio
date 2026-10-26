@@ -4,8 +4,9 @@ import itertools
 from collections import Counter
 from fractions import Fraction
 
+from django.conf import settings
 from django.core import signing
-from django.utils.crypto import salted_hmac
+from django.utils.crypto import constant_time_compare, salted_hmac
 from rest_framework.exceptions import APIException
 from review_batches.service import digest, fail
 
@@ -34,20 +35,23 @@ def bounded(value):
         reject('INVALID_RESULT')
 
 
-def origin(batch, context):
+def origin(batch, context, *, expected_viewer=None):
     principal, actor, project, role = context
     batches.checked(batch, project)
     visible = batches.visible_items(batch, actor, role)
     metadata = batches.metadata(batch, actor, role)
     kind = 'manifest_hash' if role == 'manager' else 'projection_hash'
+    identity = digest({'principal': principal.principal_id, 'source': principal.source, 'actor': actor.pk,
+                       'project': project.pk, 'organization': project.organization_id, 'role': role})
+    viewers = [salted_hmac(SCHEMA + '/viewer', identity, secret=key, algorithm='sha256').hexdigest()
+               for key in (settings.SECRET_KEY, *settings.SECRET_KEY_FALLBACKS)]
+    viewer = (expected_viewer if isinstance(expected_viewer, str)
+              and any(constant_time_compare(expected_viewer, candidate) for candidate in viewers) else viewers[0])
     return {
         'scope': {'kind': 'batch', 'project_id': project.pk, 'batch_id': batch.pk,
                   'visibility': metadata['visibility'], 'reference_kind': kind, 'reference_hash': metadata[kind]},
         'source_set_hash': digest(visible),
-        'viewer': salted_hmac(SCHEMA + '/viewer', digest({
-            'principal': principal.principal_id, 'source': principal.source, 'actor': actor.pk,
-            'project': project.pk, 'organization': project.organization_id, 'role': role,
-        }), algorithm='sha256').hexdigest(),
+        'viewer': viewer,
     }
 
 
@@ -81,15 +85,15 @@ def task_scores(report):
             sum(jaccard.values()) / (len(ids) * peers), per_source)
 
 
-def project(batch, context):
+def project(batch, context, *, expected_viewer=None):
     try:
-        return _project(batch, context)
+        return _project(batch, context, expected_viewer=expected_viewer)
     except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
         reject('MANIFEST_INVALID')
 
 
-def _project(batch, context):
-    reference = origin(batch, context)
+def _project(batch, context, *, expected_viewer=None):
+    reference = origin(batch, context, expected_viewer=expected_viewer)
     _, actor, _, role = context
     visible = batches.visible_items(batch, actor, role)
     if len(visible) > batches.MAX_TASKS:

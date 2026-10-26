@@ -2,9 +2,11 @@ import copy
 from fractions import Fraction
 from unittest.mock import patch
 
+from access_control.identity import get_identity_provider
 from classification_disagreements import batches, overview, partial
 from classification_disagreements.tests import test_partial as fixtures
 from classification_disagreements.tests import test_batches as batch_fixtures
+from django.conf import settings
 from django.core import signing
 from django.db import connection
 from django.test import override_settings
@@ -148,7 +150,7 @@ class TestOverview(APITestCase):
         assert self.batch.manifest_hash not in str(data)
         assert self.read_overview(frozen=manager_receipt).status_code == 409
 
-    def test_roles_modes_operations_actor_fields_and_token_revocation(self):
+    def test_roles_modes_operations_actor_fields_and_membership_revocation(self):
         receipt = self.read_overview().data['frozen']
         self.client.force_authenticate(self.worker)
         assert self.read_overview(frozen=receipt).status_code in (403, 404)
@@ -176,6 +178,11 @@ class TestOverview(APITestCase):
         assert self.read_overview(frozen=signing.dumps(payload, salt=overview.SCHEMA)).status_code == 404
         with override_settings(SECRET_KEY='overview-test-rotation', SECRET_KEY_FALLBACKS=[]):
             assert self.read_overview(frozen=data['frozen']).status_code == 400
+        with override_settings(SECRET_KEY='overview-test-rotation', SECRET_KEY_FALLBACKS=[settings.SECRET_KEY]):
+            replay = self.read_overview(frozen=data['frozen'])
+            assert replay.status_code == 200, replay.data
+            for key in ('frozen', 'viewer', 'result_hash', 'summarized_at', 'summary'):
+                assert replay.data[key] == data[key]
 
     def test_hidden_broken_task_never_enters_reviewer_loader_or_denominator(self):
         first = self.make_source()
@@ -203,6 +210,28 @@ class TestOverview(APITestCase):
     def test_read_work_is_independent_of_review_permission(self):
         with override_settings(ANNOTATION_PROJECT_OPERATION_PROVIDER='review_batches.tests.test_batches.ReviewWithoutReadPolicy'):
             assert self.read_overview().status_code == 403
+
+    def test_same_role_actor_remapping_after_render_discards_projection(self):
+        from review_batches.tests.test_batches import MappedIdentity
+        self.member.role = 'manager'
+        self.member.save()
+        render = Response.render
+        def remap(response):
+            result = render(response)
+            if isinstance(response.data, dict) and response.data.get('schema') == overview.SCHEMA:
+                MappedIdentity.actor = self.worker
+            return result
+        with override_settings(ANNOTATION_IDENTITY_PROVIDER='review_batches.tests.test_batches.MappedIdentity'):
+            get_identity_provider.cache_clear()
+            try:
+                MappedIdentity.actor = self.manager
+                with patch.object(Response, 'render', remap):
+                    response = self.read_overview()
+                assert response.status_code == 409, response.data
+                assert 'summary' not in response.data
+            finally:
+                MappedIdentity.actor = None
+                get_identity_provider.cache_clear()
 
     def test_input_limits_and_utf8_snapshot_bytes_include_the_boundary(self):
         self.mixed()
@@ -251,6 +280,7 @@ class TestOverview(APITestCase):
             assert self.read_overview().status_code == 200
         with patch.object(overview, 'MAX_BYTES', exact - 1):
             assert self.read_overview().status_code == 422
+            assert self.read_overview(page_size=1).status_code == 422
         token = self.read_overview().data['frozen']
         with patch.object(overview, 'MAX_TOKEN', len(token.encode()) - 1):
             assert self.read_overview().status_code == 422

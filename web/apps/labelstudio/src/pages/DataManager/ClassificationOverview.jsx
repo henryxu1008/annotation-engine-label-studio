@@ -128,8 +128,8 @@ export const ClassificationOverview = ({ projectId, batch, navigation, onOpenTas
               navigation.current.focusTask = task; onOpenTask(task);
             }}>{t("qualityTaskId", { id: task })}</Button>)}</td>
           </tr>)}</tbody></table>
-        <Button disabled={!shown.pagination.previous_page} onClick={() => read(shown.pagination.previous_page)}>{t("batchPrevious")}</Button>
-        <Button disabled={!shown.pagination.next_page} onClick={() => read(shown.pagination.next_page)}>{t("batchNext")}</Button>
+        <Button data-testid="quality-previous" disabled={!shown.pagination.previous_page} onClick={() => read(shown.pagination.previous_page)}>{t("batchPrevious")}</Button>
+        <Button data-testid="quality-next" disabled={!shown.pagination.next_page} onClick={() => read(shown.pagination.next_page)}>{t("batchNext")}</Button>
       </>}
     </>}
   </section>;
