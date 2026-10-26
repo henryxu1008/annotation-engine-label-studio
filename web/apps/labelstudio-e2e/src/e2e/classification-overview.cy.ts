@@ -35,12 +35,16 @@ describe("single frozen classification batch quality overview", () => {
       cy.contains("button", zh ? "返回队列" : "Back to queue").click();
       cy.get('[data-testid="quality-summary"]').should("contain.text", "72.22%");
       cy.get('[data-testid="classification-batches"] select').should("have.value", "disagreement");
-      let lateEntered = false;
+      let lateEntered = false, releaseLate: (() => void) | undefined;
       cy.intercept({ method: "GET", pathname: new RegExp(`${base}${scope.batch.id}/quality-overview/?$`), times: 1 },
-        (request) => { lateEntered = true; request.continue((response) => response.setDelay(1000)); }).as("lateOverview");
+        (request) => request.continue(() => {
+          lateEntered = true;
+          return new Cypress.Promise<void>((resolve) => { releaseLate = resolve; });
+        })).as("lateOverview");
       cy.get('[data-testid="quality-read"]').click();
       cy.wrap(null).should(() => expect(lateEntered).to.eq(true));
       cy.window().then((win) => win.dispatchEvent(new win.Event("blur")));
+      cy.then(() => { expect(releaseLate).to.be.a("function"); releaseLate!(); });
       cy.wait("@lateOverview");
       cy.get('[data-testid="quality-summary"]').should("not.exist"); cy.get('[data-quality-task]').should("not.exist");
       cy.get('[data-testid="classification-batch-refresh"]').click();
