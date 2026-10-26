@@ -94,6 +94,13 @@ page/filter/focus. Scope changes, blur and failures clear evidence; generations
 discard late responses. Explicit frozen refresh is GET, never a creation/recovery
 POST. No separate workflow, decision or approval authority is introduced.
 
+The batch's arbitration entry is rendered inside the same verified joint source
+projection as the answers. A pending/failed supplement read removes that entry;
+an unavailable result cannot retain a dispatch action from the older parent
+projection. A fresh comparable read can restore the existing independently
+authorized entry. Server-side arbitration eligibility and write semantics remain
+unchanged.
+
 Regression requirements: exact rational means, single/multiple/multi-control
 cases, empty/missing/unsupported cases, frozen replay/source tampering/loss, old
 batch/calculation/arbitration identity, modes/permission withdrawal, UTF-8 bounds,

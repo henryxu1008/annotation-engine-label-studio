@@ -89,7 +89,20 @@ describe("frozen classification partial matching", () => {
       cy.then(() => cy.request({ url: `${base}tasks/${task}/partial-match/`, qs: { frozen: partialFrozen }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);
       visit("manager");
+      cy.get('[data-testid="open-classification-batches"]', { timeout: 30000 }).click();
+      cy.contains("button", scope.batch.name).click();
+      cy.get(`[data-task="${task}"]`).click();
+      cy.get('[data-testid="dispatch-classification-arbitration"]').scrollIntoView().should("be.visible");
       cy.request("DELETE", `/api/tasks/${task}/`);
+      cy.intercept({ method: "GET", pathname: new RegExp(`${base}batches/${scope.batch.id}/items/${task}/partial-match/?$`) }).as("partialLostSource");
+      explain();
+      cy.wait("@partialLostSource").then(({ response }) => {
+        expect(response?.statusCode).to.eq(200);
+        expect(response!.body.partial.status).to.eq("unavailable");
+      });
+      cy.get('[data-testid="classification-unavailable"]').should("be.visible");
+      cy.get('[data-testid="dispatch-classification-arbitration"]').should("not.exist");
+      cy.get('[data-testid="classification-partial-score"]').should("not.exist");
       cy.then(() => cy.request(`${base}tasks/${task}/partial-match/?frozen=${encodeURIComponent(partialFrozen)}`))
         .then(({ body }) => { expect(body.partial.status).to.eq("unavailable"); expect(body.base.locations).to.deep.eq([]); });
       cy.request(`${base}batches/${scope.batch.id}/`).its("body.manifest_hash").should("eq", scope.batch.manifest_hash);

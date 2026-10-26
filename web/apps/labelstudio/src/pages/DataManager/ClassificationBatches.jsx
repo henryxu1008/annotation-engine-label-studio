@@ -219,12 +219,15 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
       <Button disabled={busy} onClick={() => loadList()}>{t("batchBackList")}</Button>
       {answer ? <>
         <Button onClick={() => openBatch(batchId, page, state)}>{t("batchBackQueue")}</Button>
-        {answer.item.outcome === "disagreement" && answer.manifest_hash && <ClassificationArbitrationEntry projectId={projectId} dispatch
-          onOpen={onOpenArbitration ? () => onOpenArbitration({ batch_id: answer.id, task_id: answer.item.task_id, expected_manifest_hash: answer.manifest_hash }) : undefined} />}
         <ClassificationPartial projectId={projectId} taskId={answer.item.task_id} batchId={answer.id}
           enabled={answer.can_explain_partial === true} report={report}
           onFailure={() => { generation.current += 1; clear(); setBusy(false); setError(true); }}>
-          {(current) => <ClassificationResult report={current} durable />}
+          {(current) => <>
+            {current.status === "comparable" && answer.item.outcome === "disagreement" && answer.manifest_hash
+              && <ClassificationArbitrationEntry projectId={projectId} dispatch
+                onOpen={onOpenArbitration ? () => onOpenArbitration({ batch_id: answer.id, task_id: answer.item.task_id, expected_manifest_hash: answer.manifest_hash }) : undefined} />}
+            <ClassificationResult report={current} durable />
+          </>}
         </ClassificationPartial>
       </> : detail && queue && <>
         <h3>{detail.name}</h3>
