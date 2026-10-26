@@ -134,9 +134,12 @@ def batch_base(batch, context, task_id):
     origin = {'kind': 'batch', 'project_id': project.pk, 'task_id': task_id, 'batch_id': batch.pk,
               'rule': service.RULE, 'selection': batches.SELECTION,
               'calculated_at': batch.manifest['calculated_at'], 'origin_hash': digest(frozen_item)}
-    # No full batch manifest/hash, hidden totals or other task identities.
+    # Keep the original displayed reference: Manager batch hash or Reviewer
+    # visible projection hash. The receipt itself pins only this task's origin.
+    metadata = batches.metadata(batch, actor, role)
+    reference = metadata.get('manifest_hash', metadata.get('projection_hash'))
     return origin, {'manifest': {'rule': service.RULE, 'calculated_at': batch.manifest['calculated_at'],
-                                'inputs': report['inputs']}, 'manifest_hash': origin['origin_hash'], **report}
+                                'inputs': report['inputs']}, 'manifest_hash': reference, **report}
 
 
 def seal(origin, base, result, explained_at):

@@ -64,7 +64,7 @@ export const ClassificationPartial = ({ projectId, taskId, batchId, sourceFrozen
         || origin.batch_id !== batchId || frozenOrigin.project_id !== projectId || frozenOrigin.task_id !== taskId
         || frozenOrigin.kind !== origin.kind || frozenOrigin.batch_id !== batchId || frozenOrigin.origin_hash !== origin.origin_hash
         || origin.calculated_at !== report.manifest.calculated_at || data.base.manifest.rule !== origin.rule
-        || data.base.manifest.calculated_at !== origin.calculated_at || data.base.manifest_hash !== origin.origin_hash
+        || data.base.manifest.calculated_at !== origin.calculated_at || data.base.manifest_hash !== report.manifest_hash
         || (!batchId && origin.origin_hash !== report.manifest_hash)
         || (receipt.current && data.frozen !== receipt.current)) throw new Error("scope changed");
       const result = data.partial;

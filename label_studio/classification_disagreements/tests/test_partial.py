@@ -145,6 +145,7 @@ class TestPartial(APITestCase):
         assert response.status_code == 200, response.data
         assert response.data['partial']['score'] == partial.fraction(Fraction(1, 3))
         assert 'manifest_hash' not in response.data['origin']
+        assert response.data['base']['manifest_hash'] == batch.manifest_hash
         replay = self.client.get(self.batch_url(batch), {'frozen': response.data['frozen']})
         assert replay.data['receipt'] == response.data['receipt']
         batch.refresh_from_db()
@@ -199,6 +200,9 @@ class TestPartial(APITestCase):
             assert response.data['partial']['score'] == partial.fraction(Fraction(1, 3))
             assert batch.manifest_hash not in str(response.data)
             assert 'display_counts' not in response.data and 'visible_task_count' not in response.data
+            if url == self.batch_url(batch):
+                original = self.client.get(url.removesuffix('partial-match/'))
+                assert response.data['base']['manifest_hash'] == original.data['projection_hash']
             with self.settings(ANNOTATION_PROJECT_OPERATION_PROVIDER='review_batches.tests.test_batches.ReviewWithoutReadPolicy'):
                 denied = self.client.get(url, query)
                 assert denied.status_code == 403 and 'partial' not in denied.data
