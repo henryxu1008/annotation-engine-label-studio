@@ -60,11 +60,19 @@ describe("single frozen classification batch quality overview", () => {
       cy.get('[data-testid="quality-next"]').click();
       cy.wait("@pagedOverview").then(({ response }) => { expect(response!.body.frozen).to.eq(pageFrozen); expect(response!.body.pagination.page).to.eq(2); });
       cy.get('[data-quality-actor]').should("have.length", 1);
-      cy.get('[data-quality-task]').first().click();
-      cy.get('[data-testid="classification-report"]').should("be.visible");
-      cy.contains("button", zh ? "返回队列" : "Back to queue").click();
+      cy.get('[data-quality-task]').first().should("have.attr", "data-quality-task", String(scope.cases.page_2.task)).click();
+      // Seventeen source receipts make this report taller than the fixed dialog.
+      // Scroll to the actual result, as a user does, without forcing interaction.
+      cy.get('[data-testid="classification-agreement"]').scrollIntoView().should("be.visible").and("contain.text", "47.06%");
+      cy.get('[data-testid="classification-location"]').first().scrollIntoView().should("be.visible");
+      cy.request(`${base}${scope.page_batch.id}/items/${scope.cases.page_2.task}/`).then(({ body }) => {
+        expect(body.item.inputs.map((v: any) => v.submission_id).sort((a: number, b: number) => a - b))
+          .to.deep.eq([...scope.cases.page_2.sources].sort((a: number, b: number) => a - b));
+      });
+      cy.contains("button", zh ? "返回队列" : "Back to queue").scrollIntoView().click();
       cy.wait("@pagedOverview").then(({ response }) => expect(response!.body.frozen).to.eq(pageFrozen));
       cy.get('[data-quality-actor]').should("have.length", 1); cy.get('[data-testid="quality-next"]').should("be.disabled");
+      cy.get('[data-quality-task]').first().should("be.focused");
       login("a");
       cy.then(() => cy.request({ url: `${base}${scope.batch.id}/quality-overview/`, qs: { frozen }, failOnStatusCode: false }))
         .its("status").should("be.oneOf", [403, 404]);
