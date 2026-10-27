@@ -66,8 +66,11 @@ export const ClassificationBatchEntry = ({ projectId, onOpen, disabled }) => {
     data-testid="open-classification-batches">{t("batchTitle")}</Button> : null;
 };
 
-export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
-  const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
+export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) => {
+  const { t: translate } = useLocaleTranslation("reviewBatches"), api = useAPI();
+  const t = (key, args) => translate(adapter?.messages?.[key] ?? key, args);
+  const types = adapter?.schemas ?? { capability, preview: previewSchema, list: listSchema, detail: detailSchema, queue: queueSchema, item: itemSchema, created: createdSchema };
+  const basis = useRef(null);
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), focusTask = useRef(null), root = useRef(null);
   const overviewNavigation = useRef({});
@@ -81,16 +84,20 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
   const [form, setForm] = useState({ name: "", scope: "project", tasks: "" });
   const clear = () => { setList(null); setDetail(null); setQueue(null); setAnswer(null); setCanCreate(false); setCanOverview(false); };
   const fetch = async (method, params, schema, body, headers) => {
-    const result = await call.current(method, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
+    const transport = adapter ? adapter.methods[method] : method;
+    if (!transport) throw new Error("Unsupported batch transport");
+    const result = await call.current(transport, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
     if (failed(result)) {
       const error = new Error("unavailable");
       const reason = result?.response?.display_context?.reason;
       error.previewRejected = method === "createClassificationBatch" && result?.$meta?.ok === false
-        && typeof reason === "string" && Object.prototype.hasOwnProperty.call(previewRejections, reason)
-        && previewRejections[reason] === result.$meta.status;
+        && typeof reason === "string" && Object.prototype.hasOwnProperty.call(adapter?.previewRejections ?? previewRejections, reason)
+        && (adapter?.previewRejections ?? previewRejections)[reason] === result.$meta.status;
       throw error;
     }
-    return schema.parse(result);
+    const data = schema.parse(result);
+    adapter?.validate?.(data, { projectId, ...params, method, body });
+    return data;
   };
   const read = async (work) => {
     const current = ++generation.current;
@@ -103,8 +110,9 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     setView("list"); setPage(targetPage);
     return read(async (current) => {
       const [caps, rows] = await Promise.all([
-        fetch("classificationBatchCapability", {}, capability), fetch("classificationBatches", { page: targetPage }, listSchema),
+        fetch("classificationBatchCapability", {}, types.capability), fetch("classificationBatches", { page: targetPage }, types.list),
       ]);
+      adapter?.match?.(caps, rows);
       if (current()) { setCanCreate(caps.can_create); setList(rows); }
     });
   };
@@ -112,23 +120,25 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     setView("detail"); setBatchId(id); setPage(targetPage); setState(filter);
     return read(async (current) => {
       const [caps, data, items] = await Promise.all([
-        fetch("classificationBatchCapability", {}, capability), fetch("classificationBatchDetail", { batch: id }, detailSchema),
-        fetch("classificationBatchItems", { batch: id, page: targetPage, state: filter }, queueSchema),
+        fetch("classificationBatchCapability", {}, types.capability), fetch("classificationBatchDetail", { batch: id }, types.detail),
+        fetch("classificationBatchItems", { batch: id, page: targetPage, state: filter }, types.queue),
       ]);
       if (data.id !== id || items.batch_id !== id) throw new Error("scope changed");
-      if (current()) { setCanCreate(caps.can_create); setCanOverview(caps.can_view_quality_overview === true); setDetail(data); setQueue(items); }
+      adapter?.match?.(caps, data); adapter?.match?.(data, items);
+      if (current()) { basis.current = data; setCanCreate(caps.can_create); setCanOverview(caps.can_view_quality_overview === true); setDetail(data); setQueue(items); }
     });
   };
-  const showItem = (task) => {
+  const showItem = (task, pair = {}) => {
     focusTask.current = task;
     return read(async (current) => {
-      const result = await fetch("classificationBatchItem", { batch: batchId, task }, itemSchema);
+      const result = await fetch("classificationBatchItem", { batch: batchId, task, ...pair }, types.item);
       if (result.id !== batchId || result.item.task_id !== task) throw new Error("scope changed");
+      adapter?.match?.(basis.current, result);
       if (current()) setAnswer(result);
     });
   };
   useEffect(() => {
-    pending.current = null; setUnknown(false); setSaved(null); setPreview(null); setBatchId(null); loadList();
+    basis.current = null; pending.current = null; setUnknown(false); setSaved(null); setPreview(null); setBatchId(null); loadList();
     const blur = () => { generation.current += 1; clear(); setPreview(null); setBusy(false); setError(true);
       if (pending.current?.attempted) setUnknown(true);
     };
@@ -150,7 +160,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     try {
       const scope = form.scope === "project" ? { kind: "project" }
         : { kind: "tasks", task_ids: form.tasks.trim().split(/[\s,]+/).map(Number) };
-      const result = await fetch("classificationBatchPreview", {}, previewSchema, { name: form.name, scope });
+      const result = await fetch("classificationBatchPreview", {}, types.preview, { name: form.name, scope });
       if (current !== generation.current) return;
       pending.current = { body: { preview_token: result.preview_token, expected_plan_hash: result.plan_hash }, key: uuidv4(), attempted: false };
       setPreview(result);
@@ -165,7 +175,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     const current = ++generation.current;
     setBusy(true); setError(false); clear();
     try {
-      const result = await fetch("createClassificationBatch", {}, createdSchema, intent.body, { "Idempotency-Key": intent.key });
+      const result = await fetch("createClassificationBatch", {}, types.created, intent.body, { "Idempotency-Key": intent.key });
       if (current !== generation.current) return;
       if (result.idempotency_key !== intent.key) throw new Error("acknowledgement changed");
       pending.current = null; setUnknown(false); setPreview(null);
@@ -183,13 +193,13 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
   const refresh = () => view === "detail" && batchId ? openBatch(batchId, page, state) : loadList(page);
   const report = answer ? { ...answer.item, manifest_hash: answer.manifest_hash ?? answer.projection_hash,
     observed_at: answer.observed_at, manifest: { inputs: answer.item.inputs, rule: answer.rule, calculated_at: answer.calculated_at } } : null;
-  return <section ref={root} className="review-batches classification-batches" data-testid="classification-batches" aria-busy={busy}>
+  return <section ref={root} className="review-batches classification-batches" data-testid={adapter?.testId ?? "classification-batches"} aria-busy={busy}>
     <p>{t("batchBoundary")}</p>
     {busy && <p role="status">{t("classificationLoading")}</p>}
     {error && <p role="alert">{t(typeof error === "string" ? error : "batchReadFailed")}</p>}
     {saved && <p role="status">{t(saved.replayed ? "batchRecovered" : "batchSaved", { id: saved.id })}</p>}
     {unknown && <p role="status">{t("batchUnknown")} <Button disabled={busy} onClick={create}>{t("batchRecover")}</Button></p>}
-    {!busy && view !== "create" && <Button onClick={refresh} data-testid="classification-batch-refresh">{t("batchRefresh")}</Button>}
+    {!busy && view !== "create" && <Button onClick={refresh} data-testid={adapter ? "ner-batch-refresh" : "classification-batch-refresh"}>{t("batchRefresh")}</Button>}
     {view === "list" && <>
       {canCreate && !unknown && <Button disabled={busy} onClick={() => { setView("create"); setList(null); setError(false); }}>{t("batchNew")}</Button>}
       {list && <>
@@ -209,7 +219,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
         {form.scope === "tasks" && <label>{t("batchTasks")}<input value={form.tasks} onChange={(e) => change("tasks", e.target.value)} /></label>}
         <p>{t("batchLimits")}</p>
         <Button disabled={!form.name.trim()} onClick={plan}>{t("batchPreview")}</Button>
-        {preview && <div data-testid="classification-batch-preview">
+        {preview && <div data-testid={adapter ? "ner-batch-preview" : "classification-batch-preview"}>
           <p>{t("batchScopeFrozen", { count: preview.task_ids.length, time: preview.scope_enumerated_at })}</p>
           <p>{preview.task_ids.join(", ")}</p>
           <p>{t("batchCounts", preview.display_counts)}</p>
@@ -222,6 +232,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
       <Button disabled={busy} onClick={() => loadList()}>{t("batchBackList")}</Button>
       {answer ? <>
         <Button onClick={() => openBatch(batchId, page, state)}>{t("batchBackQueue")}</Button>
+        {adapter ? adapter.renderItem({ answer, busy, onSelectPair: (pair) => showItem(answer.item.task_id, { left: pair[0], right: pair[1] }) }) : <>
         <ClassificationPartial projectId={projectId} taskId={answer.item.task_id} batchId={answer.id}
           enabled={answer.can_explain_partial === true} report={report}
           onFailure={() => { generation.current += 1; clear(); setBusy(false); setError(true); }}>
@@ -232,6 +243,7 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
             <ClassificationResult report={current} durable />
           </>}
         </ClassificationPartial>
+        </>}
       </> : detail && queue && <>
         <h3>{detail.name}</h3>
         <p>{t("batchScopeFrozen", { count: detail.visible_task_count, time: detail.scope_enumerated_at })}</p>
@@ -255,3 +267,6 @@ export const ClassificationBatches = ({ projectId, onOpenArbitration }) => {
     </>}
   </section>;
 };
+
+// Preserve the established classification entry and its transport by default.
+export const ClassificationBatches = (props) => <FrozenBatchWorkspace {...props} />;
