@@ -1,4 +1,5 @@
 import copy
+from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -438,10 +439,12 @@ class TestReviewBatches(APITestCase):
 
     def test_frozen_plan_database_guard(self):
         batch = self.create().data["id"]
+        # A coarse clock may equal auto_now_add: test an actual field change.
+        changed_time = ReviewBatch.objects.get(pk=batch).created_at + timedelta(seconds=1)
         for field, value in (
             ("plan", {}), ("name", "changed"), ("plan_hash", "0" * 64),
             ("project_id", self.other.pk), ("actor_id_frozen", self.manager.pk + 100),
-            ("creator_principal", "changed"), ("created_at", timezone.now()),
+            ("creator_principal", "changed"), ("created_at", changed_time),
             ("idempotency_key", uuid4()), ("request_hash", "f" * 64),
         ):
             with self.assertRaises(DatabaseError), transaction.atomic():

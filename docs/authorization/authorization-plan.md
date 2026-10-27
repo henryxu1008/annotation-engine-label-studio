@@ -1105,3 +1105,29 @@ business records. Keep the bounded old snapshot loader and a separate complete
 logical output/token budget before pagination. See
 classification-quality-overview-v1-design.md. #81/#84 remain open; Host, Core,
 review/release authority and retained Docker environments are unchanged.
+
+### Frozen single-task NER comparison (#81)
+
+The independent, default-off NER read path selects explicit trusted revisions,
+filters Reviewer self-inputs before enumeration/loading and requires current
+READ_WORK plus exact fork_review mode. Its own signed receipt pins identities,
+codepoint/configuration/content rules, engine version, first time and result;
+classification, arbitration and sampling identities remain unchanged. Revalidate
+actual JSON bytes, authority and sources after rendering. Source loss masks all
+answers/scores without reducing the frozen denominator. Storage byte preflight,
+canonical input and scorer-work limits precede metric calls. No DB writes,
+migrations, delivery or Core authority are added. See ner-disagreement-v1.md.
+
+The hydrating SQL statement repeats the total stored-byte budget with a window
+sum and CASE-projected JSON; the original JSON field stays deferred. This closes
+the gap between byte preflight and decoding. Reject source-set changes during
+loading before any receipt or scorer. Text bindings accept only a simple
+top-level ASCII variable, never a literal-key substitute for editor templates
+or nested paths. These guards stay local to NER and do not change the legacy
+classification loader, producer data, review decisions or sampling.
+
+NER GET receipts keep their 16KiB application cap. The repository Nginx config
+allows 32KiB request lines (four demand-allocated 32KiB header buffers), since a
+valid 20-participant receipt exceeds the default 8KiB line limit. NER CI adapts
+that production config and runs bilingual replay through real Nginx, including
+an 8KiB negative control; it does not deploy or touch retained local runtimes.
