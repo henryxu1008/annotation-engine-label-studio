@@ -101,7 +101,9 @@ describe('read-only frozen NER comparison', () => {
         const result = win.Htx.annotationStore.selected.serializeAnnotation();
         expect(result).to.have.length(1); expect(result[0].value).to.include({ start: 1, end: 2, text: '😀' });
       });
-      selectText('尾');
+      // The editor defaults to non-continuous labeling: each new region needs
+      // an explicit label choice, just as in the normal annotator workflow.
+      cy.get('.lsf-label').contains('PER').click(); selectText('尾');
       const check = (rows: any[]) => {
         expect(rows).to.have.length(2);
         expect(rows.map(r => r.value).sort((a, b) => a.start - b.start)).to.deep.eq([
