@@ -1144,3 +1144,9 @@ rendering and original-key recovery are mandatory. Reviewer self-cohorts are
 excluded before counts/paging/source loading. Only analysis creation writes;
 Submission/review/arbitration/sampling/release remain unchanged. #81/#84 stay open;
 Host/Core/deployment and retained runtime activation are not included.
+
+NER batch JSON text uses DRF's NUL/surrogate validation before UTF-8 encoding,
+source scoring and PostgreSQL persistence. Recheck names inside older signed
+previews before processing, without changing the original-key recovery order or
+normalizing a signed intent. Invalid input returns 400 and leaves the key unused;
+valid Chinese/non-BMP names and existing whitespace/length semantics remain.

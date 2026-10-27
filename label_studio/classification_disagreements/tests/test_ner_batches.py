@@ -9,6 +9,7 @@ from classification_disagreements import ner_batches as b
 from classification_disagreements.models import ArbitrationTask, NerBatch
 from classification_disagreements.tests import test_ner_api as fixtures
 from classification_disagreements.tests.test_ner_metrics import snapshot
+from django.core import signing
 from django.db import DatabaseError, connection, transaction
 from django.db.models import JSONField
 from django.db.models.query import QuerySet
@@ -396,3 +397,49 @@ class TestNerBatches(APITestCase):
             response = self.client.post(self.base, body, format='json', HTTP_IDEMPOTENCY_KEY=key)
         self.assertIn(response.status_code, (403,404,409), response.data)
         self.assertEqual(NerBatch.objects.count(), 1)
+
+    def test_preview_names_reject_database_unsafe_json_text_before_scoring(self):
+        # These are legal JSON escape sequences, even though PostgreSQL text/
+        # JSONB and UTF-8 serialization cannot store their decoded values.
+        self.client.raise_request_exception = False
+        for name in ('bad\x00name', 'bad\ud800name'):
+            with self.subTest(name=ascii(name)), patch.object(ner, 'Evaluator', wraps=ner.Evaluator) as engine:
+                response = self.client.post(self.base + 'preview/', json.dumps({
+                    'name': name, 'scope': {'kind': 'tasks', 'task_ids': [self.task_id]},
+                }, ensure_ascii=True), content_type='application/json')
+                self.assertEqual(response.status_code, 400)
+                engine.assert_not_called()
+        self.assertEqual(NerBatch.objects.count(), 0)
+        preview = self.preview(name='  NER 冻结 😀  ')
+        self.assertEqual(preview.status_code, 200, preview.data)
+        created, _, _ = self.create(preview.data)
+        self.assertEqual(created.data['name'], 'NER 冻结 😀')
+
+    def test_preview_tokens_reject_unpaired_surrogates_before_utf8_encoding(self):
+        self.client.raise_request_exception = False
+        for token in ('bad\ud800token', 'bad\x00token'):
+            with self.subTest(token=ascii(token)), patch.object(ner, 'Evaluator') as engine:
+                response = self.client.post(self.base, json.dumps({
+                    'preview_token': token, 'expected_plan_hash': '0' * 64,
+                }, ensure_ascii=True), content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid4()))
+                self.assertEqual(response.status_code, 400)
+                engine.assert_not_called()
+        self.assertEqual(NerBatch.objects.count(), 0)
+
+    def test_legacy_signed_preview_invalid_text_does_not_consume_original_key(self):
+        self.client.raise_request_exception = False
+        preview = self.preview().data
+        for name in ('bad\ud800name', 'bad\x00name'):
+            with self.subTest(name=ascii(name)):
+                payload = signing.loads(preview['preview_token'], salt=b.PREVIEW_SALT)
+                payload['name'] = name
+                key, before = str(uuid4()), NerBatch.objects.count()
+                body = {'preview_token': signing.dumps(payload, salt=b.PREVIEW_SALT, compress=False),
+                        'expected_plan_hash': preview['plan_hash']}
+                with patch.object(ner, 'Evaluator', wraps=ner.Evaluator) as engine:
+                    response = self.client.post(self.base, body, format='json', HTTP_IDEMPOTENCY_KEY=key)
+                self.assertEqual(response.status_code, 400)
+                engine.assert_not_called()
+                self.assertEqual(NerBatch.objects.count(), before)
+                self.create(preview, key=key)
+                self.assertEqual(NerBatch.objects.count(), before + 1)

@@ -4,7 +4,8 @@ import itertools
 from django.db import connection, models
 from django.db.models import Case, F, JSONField, OuterRef, Subquery, Value, When
 from django.db.models.expressions import RawSQL
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.fields import CharField
 from review_batches.service import valid_source
 from tasks.models import Submission, Task, TaskAssignment
 
@@ -29,6 +30,17 @@ def fail(code, status=409):
     raise ner.Error('NER_BATCH_' + code, status)
 
 
+def validated_text(value, maximum, *, trim=False, code='INVALID_INPUT'):
+    # JSON permits escaped NUL/unpaired surrogates. Reuse DRF's validators
+    # before signing, UTF-8 encoding, scoring or writing PostgreSQL text/JSONB.
+    if not isinstance(value, str):
+        fail(code, 400)
+    try:
+        return CharField(max_length=maximum, trim_whitespace=trim).run_validation(value)
+    except ValidationError:
+        fail(code, 400)
+
+
 def positive_ids(value):
     if not isinstance(value, list) or not value or any(not ner_api.positive(v) for v in value):
         fail('INVALID_INPUT', 400)
@@ -43,15 +55,16 @@ def preview_args(data, project):
     if not isinstance(data, dict) or set(data) != {'name', 'scope'}:
         fail('INVALID_INPUT', 400)
     name, scope = data['name'], data['scope']
-    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 160 or not isinstance(scope, dict):
+    if not isinstance(scope, dict):
         fail('INVALID_INPUT', 400)
+    name = validated_text(name, 160, trim=True)
     if scope == {'kind': 'project'}:
         ids = list(Task.objects.filter(project=project).order_by('pk').values_list('pk', flat=True)[:MAX_TASKS + 1])
     elif set(scope) == {'kind', 'task_ids'} and scope['kind'] == 'tasks':
         ids = scope['task_ids']
     else:
         fail('INVALID_INPUT', 400)
-    return name.strip(), positive_ids(ids)
+    return name, positive_ids(ids)
 
 
 def unavailable(count, reason):

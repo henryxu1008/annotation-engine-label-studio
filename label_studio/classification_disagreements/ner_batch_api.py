@@ -133,9 +133,10 @@ class ListAPI(BatchAPI):
         initial = self.context(request, pk, create=True)
         body = request.data
         if (not isinstance(body, dict) or set(body) != {'preview_token', 'expected_plan_hash'}
-                or not isinstance(body['preview_token'], str) or body['preview_token'].startswith('.')
-                or not 1 <= len(body['preview_token'].encode()) <= ner.MAX_TOKEN
                 or not isinstance(body['expected_plan_hash'], str) or not ner_api.HEX.fullmatch(body['expected_plan_hash'])):
+            b.fail('INVALID_INPUT', 400)
+        token = b.validated_text(body['preview_token'], ner.MAX_TOKEN)
+        if token.startswith('.') or len(token.encode()) > ner.MAX_TOKEN:
             b.fail('INVALID_INPUT', 400)
         try:
             key = UUID(request.headers.get('Idempotency-Key', ''))
@@ -158,7 +159,7 @@ class ListAPI(BatchAPI):
                     b.fail('KEY_CONFLICT')
             else:
                 try:
-                    payload = signing.loads(body['preview_token'], salt=b.PREVIEW_SALT, max_age=b.PREVIEW_AGE)
+                    payload = signing.loads(token, salt=b.PREVIEW_SALT, max_age=b.PREVIEW_AGE)
                 except (signing.BadSignature, ValueError, TypeError):
                     b.fail('PREVIEW_INVALID', 400)
                 keys = {'schema', 'project_id', 'organization_id', 'creator_principal', 'creator_source', 'actor_id_frozen', 'role',
@@ -171,6 +172,10 @@ class ListAPI(BatchAPI):
                         or payload['explanation'] != ner.EXPLANATION or payload['engine'] != ner.ENGINE
                         or payload['plan_hash'] != body['expected_plan_hash']
                         or not isinstance(payload['name'], str) or not 1 <= len(payload['name']) <= 160):
+                    b.fail('PREVIEW_INVALID', 400)
+                # Older previews can have a valid signature but contain text
+                # unsafe for UTF-8/PostgreSQL. Preserve the exact signed intent.
+                if b.validated_text(payload['name'], 160, trim=True, code='PREVIEW_INVALID') != payload['name']:
                     b.fail('PREVIEW_INVALID', 400)
                 plan, prepared = b.build_plan(project, payload['task_ids'], lock=True)
                 if ner.digest(plan) != payload['plan_hash']:

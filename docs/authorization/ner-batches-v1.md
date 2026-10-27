@@ -59,6 +59,13 @@ Under /api/projects/{P}/ner-disagreements/batches/:
   only from the same frozen task.
 - No PUT/PATCH/DELETE or editable admin.
 
+Validate names and preview-token text with DRF's NUL/surrogate validators before
+UTF-8 encoding, scoring or persistence. Names retain the existing trim/160-character
+contract and valid Chinese/non-BMP text. Revalidate names inside signed previews
+issued by older code before source processing; invalid text returns 400 without
+creating a batch or consuming the UUID. An intact original-key recovery still
+precedes preview decoding and does not normalize or replace its original intent.
+
 Require the independent default-off ANNOTATION_NER_BATCHES_ENABLED, existing
 NER flag, exact organization/project fork_review mode and supported DB. Current
 trusted Manager/Reviewer plus READ_WORK governs reads. Manager creation also
