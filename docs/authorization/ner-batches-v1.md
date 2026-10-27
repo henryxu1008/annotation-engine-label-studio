@@ -65,6 +65,9 @@ trusted Manager/Reviewer plus READ_WORK governs reads. Manager creation also
 requires independent ORGANIZE_NER; review/classification/arbitration permission
 does not grant it. Custom operation providers must explicitly allow it. Core-only,
 unknown modes, annotators and revoked/cross-project scopes deny.
+Existing project-creator Manager semantics remain unchanged: editing only that
+creator's membership role is not revocation. Current organization/account or
+operation withdrawal remains authoritative and is exercised by negative tests.
 
 Reviewer self-cohorts are excluded as whole tasks before counts, SQL pagination
 and source loading. Return only visible-subset counts and projection_hash, never

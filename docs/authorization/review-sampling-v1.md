@@ -2,9 +2,10 @@
 
 This slice organizes existing Fork reviews. It is not a new decision ledger,
 platform review policy, release rule, dataset version or scheduler. #84 remains
-open for remaining risk strategies, second review and review/arbitration handoff
-with #81. Optional frozen classification conflict priority is documented in
-[review-priority-v1.md](review-priority-v1.md).
+open for remaining confidence strategies and second review. Optional frozen
+classification conflict priority is documented in [review-priority-v1.md](review-priority-v1.md);
+the implemented exact review/arbitration handoff is documented in
+[review-arbitration-handoff-v1.md](review-arbitration-handoff-v1.md).
 
 ## Product workflow
 

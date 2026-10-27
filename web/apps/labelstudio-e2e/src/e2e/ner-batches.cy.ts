@@ -6,6 +6,8 @@ describe('durable frozen NER queue', () => {
     it(`freezes, recovers, filters and protects original revisions in ${locale}`, () => {
       const zh = locale === 'zh-CN', scope = fixture.projects[locale];
       const base = `/api/projects/${scope.id}/ner-disagreements/batches/`;
+      // ApiProvider trims the terminal slash; cy.request may retain it.
+      const collectionPath = new RegExp(`${base.replace(/\/$/, '')}/?$`);
       const ids = ['differences','new_revision','source_loss','empty','self'].map(k => scope.cases[k].task);
       const login = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, '/user/account/personal-info');
@@ -24,7 +26,7 @@ describe('durable frozen NER queue', () => {
       root().find('input').last().type(ids.join(','));
       button('Preview comparison','预览比较').click();
       cy.get('[data-testid="ner-batch-preview"]').should('contain.text',ids[0]);
-      cy.intercept({method:'POST',pathname:base,times:1},req=>{
+      cy.intercept({method:'POST',pathname:collectionPath,times:1},req=>{
         createRequests.push({body:req.body,key:req.headers['idempotency-key']});
         req.continue(res=>{
           expect(res.statusCode).to.eq(201);batch=res.body;
@@ -38,7 +40,7 @@ describe('durable frozen NER queue', () => {
       cy.get('[data-testid="ner-batch-refresh"]').click();
       root().contains('button','NER queue ' + locale).should('be.visible');
       cy.then(()=>expect(createRequests).to.have.length(1));
-      cy.intercept({method:'POST',pathname:base,times:1},req=>{
+      cy.intercept({method:'POST',pathname:collectionPath,times:1},req=>{
         createRequests.push({body:req.body,key:req.headers['idempotency-key']});
         req.continue(res=>{ expect(res.statusCode).to.eq(200);expect(res.body.replayed).to.eq(true);expect(res.body.id).to.eq(batch.id); });
       }).as('recoverNerBatch');
@@ -81,7 +83,7 @@ describe('durable frozen NER queue', () => {
       cy.request({method:'POST',url:base+'preview/',body:{name:'Too large',scope:{kind:'tasks',task_ids:[scope.cases.budget.task]}},
         failOnStatusCode:false}).its('status').should('eq',422);
       let entered=false, release:(()=>void)|undefined;
-      cy.then(()=>{ cy.intercept({method:'GET',pathname:`${base}${batch.id}/items/${scope.cases.differences.task}/`,times:1},
+      cy.then(()=>{ cy.intercept({method:'GET',pathname:new RegExp(`${base}${batch.id}/items/${scope.cases.differences.task}/?$`),times:1},
         req=>req.continue(()=>{entered=true;return new Cypress.Promise<void>(done=>{release=done;});})).as('lateNerBatchRead'); });
       root().find(`[data-task="${scope.cases.differences.task}"]`).click();
       cy.wrap(null).should(()=>expect(entered).to.eq(true));

@@ -131,8 +131,11 @@ selection coverage, real commit with lost acknowledgement, exact recovery,
 unchanged historical Submissions and legacy plans, plus Reviewer/Annotator scope.
 The separate review-priority workflow retains existing enterprise journey budgets.
 
-#81 still needs partial-label comparison, NER/bbox/field rules and project/annotator
-metric aggregation. #84 still needs low-confidence contracts, second review and
-explicit review/arbitration handoff with auditable exact-revision associations.
+Classification partial matching and single-batch project/annotator summaries are
+implemented in classification-partial-match-v1.md and classification-quality-overview-v1-design.md.
+Manual NER and independent durable NER queues are documented in ner-disagreement-v1.md
+and ner-batches-v1.md. #81 still needs NER aggregation/arbitration and bbox/field
+contracts and workflows. #84 still needs low-confidence contracts and second review;
+its implemented exact review/arbitration handoff is in review-arbitration-handoff-v1.md.
 Arbitration already exists as a separate frozen-adoption ledger; it is not an
 approval decision. Neither issue is closed by this slice.
