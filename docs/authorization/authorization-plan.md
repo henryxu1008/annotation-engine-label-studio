@@ -1105,3 +1105,15 @@ business records. Keep the bounded old snapshot loader and a separate complete
 logical output/token budget before pagination. See
 classification-quality-overview-v1-design.md. #81/#84 remain open; Host, Core,
 review/release authority and retained Docker environments are unchanged.
+
+### Frozen single-task NER comparison (#81)
+
+The independent, default-off NER read path selects explicit trusted revisions,
+filters Reviewer self-inputs before enumeration/loading and requires current
+READ_WORK plus exact fork_review mode. Its own signed receipt pins identities,
+codepoint/configuration/content rules, engine version, first time and result;
+classification, arbitration and sampling identities remain unchanged. Revalidate
+actual JSON bytes, authority and sources after rendering. Source loss masks all
+answers/scores without reducing the frozen denominator. Storage byte preflight,
+canonical input and scorer-work limits precede metric calls. No DB writes,
+migrations, delivery or Core authority are added. See ner-disagreement-v1.md.
