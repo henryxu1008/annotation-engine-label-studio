@@ -144,10 +144,10 @@ class NerAPI(ComparisonAPI):
                                           submitted_by_id=F('assignment__assignee_id'))
         return query.exclude(submitted_by_id=actor.pk) if role == 'reviewer' else query
 
-    def respond(self, request, body, verify, validate=None):
+    def respond(self, request, body, verify, validate=None, *, status=200):
         ner.bounded(body)
         before = ner.digest(body)
-        response = self.finalize_response(request, Response(body))
+        response = self.finalize_response(request, Response(body, status=status))
         response.render()
         if len(response.content) > ner.MAX_OUTPUT:
             raise ner.Error('NER_TOO_LARGE')
@@ -204,7 +204,7 @@ class SourcesAPI(NerAPI):
         return self.respond(request, body, verify)
 
 
-def load(query):
+def load(query, *, validate_source=True):
     # Scope first; count bytes in SQL before hydrating a JSONField or live task body.
     column = connection.ops.quote_name(Submission._meta.db_table) + '.' + connection.ops.quote_name('result_snapshot')
     expression = f'OCTET_LENGTH(CAST({column} AS TEXT))' if connection.vendor == 'postgresql' else f'LENGTH(CAST({column} AS BLOB))'
@@ -230,7 +230,7 @@ def load(query):
             used += ner.bounded(row.result_snapshot, ner.MAX_SNAPSHOT_BYTES)
             if used > ner.MAX_SNAPSHOT_BYTES:
                 raise ner.Error('NER_TOO_LARGE')
-            if not valid_source(row, row.assignment.project_id):
+            if validate_source and not valid_source(row, row.assignment.project_id):
                 raise ner.Error('NER_SOURCE_INTEGRITY_FAILED', 409)
         except (ValueError, TypeError, KeyError, AttributeError):
             raise ner.Error('NER_SOURCE_INTEGRITY_FAILED', 409)

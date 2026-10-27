@@ -1,5 +1,6 @@
 .classification-batches {
   > button { justify-self: start; }
   fieldset > p,
-  fieldset > [data-testid="classification-batch-preview"] { grid-column: 1 / -1; }
+  fieldset > [data-testid="classification-batch-preview"],
+  fieldset > [data-testid="ner-batch-preview"] { grid-column: 1 / -1; }
 }

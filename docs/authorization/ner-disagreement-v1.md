@@ -5,6 +5,9 @@ revisions. It adds no analysis batch, annotation/review/arbitration write, sampl
 rule, project aggregate, delivery authority or Host/Core integration. #81 and #84
 remain open. Existing classification manifests, metrics and key recovery are unchanged.
 
+The independent [durable NER queue](ner-batches-v1.md) adds opt-in analysis
+creation under a separate flag/operation; it does not change this manual GET API.
+
 ## Inputs and formula
 
 Only one static Labels control on one inline, unencoded Text field is supported.

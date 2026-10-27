@@ -279,5 +279,10 @@
   "nerReason_source_unavailable": "固定来源当前不可用",
   "nerReason_unknown": "当前冻结输入无法比较",
   "nerFrozenScope": "冻结输入：{{inputs}}；两两比较分母：{{total}}。来源不可用时不推断可比较数量。",
-  "nerFrozenInputs": "冻结修订身份"
+  "nerFrozenInputs": "冻结修订身份",
+  "nerBatchTitle": "NER 冻结分歧队列",
+  "nerBatchBoundary": "在明确的任务范围内冻结每份有效分配的最新修订。仅创建分析批次，不批准、不仲裁，也不改变抽样。",
+  "nerBatchLimits": "最多选择 100 个任务、每任务 20 位独立参与者。整批须满足对比预算；超限时请明确缩小任务范围。",
+  "nerReason_missing_submission": "冻结参与者尚无提交。",
+  "nerReason_latest_revision_unusable": "选中的最新修订不可用；不会替换成较旧修订。"
 }

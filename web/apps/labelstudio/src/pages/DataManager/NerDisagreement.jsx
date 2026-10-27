@@ -16,7 +16,7 @@ const entity = z.object({ start: z.number().int().nonnegative(), end: id, label:
 const kinds = ["label_difference", "boundary_difference", "boundary_and_label_difference", "left_only", "right_only", "ambiguous_overlap"];
 const reasons = ["unsupported_config", "config_mismatch", "task_data_mismatch", "empty_or_missing_text", "cancelled_or_missing",
   "missing_or_malformed", "missing_span_text_or_malformed", "invalid_span", "overlapping_or_duplicate_spans",
-  "insufficient_inputs", "no_entities", "source_unavailable"];
+  "insufficient_inputs", "no_entities", "source_unavailable", "missing_submission", "latest_revision_unusable"];
 const pair = z.object({ left: id, right: id, left_entities: count, right_entities: count, matching_entities: count,
   f1: ratio.nullable(), availability: z.enum(["available", "unavailable"]), reason: z.string().nullable() });
 const details = z.object({ left: id, right: id, text: z.string(), control: z.object({ from_name: z.string(),
@@ -34,6 +34,8 @@ const reportSchema = z.object({ schema: z.literal(SCHEMA), rule: z.literal(RULE)
   availability: z.enum(["available", "unavailable"]), reason: z.string().nullable(), input_count: id,
   total_pairs: z.number().int().min(0).max(190), comparable_pairs: z.number().int().nonnegative().optional(),
   unavailable_pairs: z.number().int().nonnegative().optional(), pairs: z.array(pair).max(190).nullable(), selected_pair: details.nullable() });
+export const nerComparisonSchema = reportSchema.pick({ availability: true, reason: true, input_count: true, total_pairs: true,
+  comparable_pairs: true, unavailable_pairs: true, pairs: true, selected_pair: true }).extend({ input_count: z.number().int().min(0).max(20) });
 const sourceSchema = z.object({ schema: z.literal(SCHEMA), viewer: hash, max_inputs: z.literal(20),
   scope: z.object({ project_id: id, task_id: id }), sources: z.array(z.object({ id, assignment_id: id,
     assignment__assignee_id: id, assignment__task_id: id, submitted_by_id: id, revision: id, result_hash: hash,
@@ -61,6 +63,11 @@ export const validateNerReport = (data, expected) => {
     return r;
   }
   requireValid(r.receipt_verified && r.result_hash === r.manifest.result_hash);
+  return validateNerComparison(r, expected);
+};
+
+export const validateNerComparison = (r, expected) => {
+  const ids = expected.ids;
   if (r.pairs === null) {
     requireValid(r.availability === "unavailable" && Boolean(r.reason) && r.selected_pair === null);
     return r;
@@ -139,6 +146,44 @@ const NerText = ({ text, entities, side }) => {
   return <pre data-testid={`ner-${side}-text`} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{parts}</pre>;
 };
 
+export const NerResult = ({ report, busy, detail, onSelectPair, onBack, matrixRefs, detailHeading }) => {
+  const { t } = useLocaleTranslation("reviewBatches"), p = report.selected_pair;
+  return <>
+      <p>{t("nerFormula")}</p><p>{report.source_status === "verified" && report.pairs
+        ? t("nerPairCoverage", { comparable: report.comparable_pairs, total: report.total_pairs })
+        : t("nerFrozenScope", { inputs: report.input_count, total: report.total_pairs })}</p>
+      <p>{t("classificationRule", { rule: report.rule, time: report.calculated_at })}</p>
+      <code style={{ display: "block", overflowWrap: "anywhere" }}>{report.manifest_hash}</code>
+      <details><summary>{t("nerFrozenInputs")}</summary><ul>{report.manifest.inputs.map((p) => <li key={p.submission_id}>
+        {t("classificationSource", { id: p.submission_id, revision: p.revision, actor: p.submitter_id })}
+        <code style={{ display: "block", overflowWrap: "anywhere" }}>{p.result_hash}</code>
+      </li>)}</ul></details>
+      <p>{t("classificationObserved", { time: report.observed_at })}</p>
+      {report.availability === "unavailable" && <p role="status" data-testid="ner-unavailable">{t("nerUnavailable", {
+        reason: t(`nerReason_${reasons.includes(report.reason) ? report.reason : "unknown"}`) })}</p>}
+      {report.pairs && <div data-testid="ner-matrix" aria-label={t("nerMatrix")}>
+        {report.pairs.map((pair) => <Button key={`${pair.left}-${pair.right}`} look="outlined" disabled={busy}
+          ref={(node) => { matrixRefs.current[`${pair.left}-${pair.right}`] = node; }}
+          data-testid={`ner-pair-${pair.left}-${pair.right}`} onClick={() => onSelectPair([pair.left, pair.right])}>
+          {t("nerPair", { left: pair.left, right: pair.right, rate: pair.f1
+            ? `${(Number(pair.f1.numerator) / Number(pair.f1.denominator) * 100).toFixed(2)}%` : t("nerNoEntities") })}
+        </Button>)}
+      </div>}
+      {detail && p && <section data-testid="ner-detail">
+        <h4 ref={detailHeading} tabIndex={-1}>{t("nerDetail", { left: p.left, right: p.right })}</h4>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
+          {["left", "right"].map((side) => <section key={side}><h5>{t("nerSide", { id: p[side] })}</h5>
+            <NerText text={p.text} entities={p[`${side}_entities`]} side={side} />
+            <ul>{p[`${side}_entities`].map((e, i) => <li key={i}>{e.start}–{e.end}: {e.label}</li>)}</ul>
+          </section>)}
+        </div>
+        <p>{t("nerMatched", { count: p.matches.length })}</p>
+        <ul>{p.groups.map((g, i) => <li key={i} data-testid="ner-difference">{t(`nerDifference_${g.kind}`)}: {g.start}–{g.end}</li>)}</ul>
+        <Button data-testid="ner-back-matrix" look="outlined" onClick={() => onBack()}>{t("nerBackMatrix")}</Button>
+      </section>}
+  </>;
+};
+
 export const NerDisagreement = ({ projectId, initialTaskId = "" }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI(), call = useRef(api.callApi);
   call.current = api.callApi;
@@ -193,7 +238,6 @@ export const NerDisagreement = ({ projectId, initialTaskId = "" }) => {
       setReport(r); setDetail(Boolean(r.selected_pair)); returnPair.current = pair.join("-");
     });
   };
-  const p = report?.selected_pair;
   return <section data-testid="ner-workspace" aria-busy={busy}>
     <h3 ref={heading} tabIndex={-1}>{t("nerTitle")}</h3>
     <p>{t("nerBoundary")}</p>
@@ -219,38 +263,8 @@ export const NerDisagreement = ({ projectId, initialTaskId = "" }) => {
     {frozen.current && <Button data-testid="ner-read" look="outlined" disabled={busy} onClick={() => compare(null, true)}>
       {t("classificationRefreshFrozen")}</Button>}
     {report && <>
-      <p>{t("nerFormula")}</p><p>{report.source_status === "verified" && report.pairs
-        ? t("nerPairCoverage", { comparable: report.comparable_pairs, total: report.total_pairs })
-        : t("nerFrozenScope", { inputs: report.input_count, total: report.total_pairs })}</p>
-      <p>{t("classificationRule", { rule: report.rule, time: report.calculated_at })}</p>
-      <code style={{ display: "block", overflowWrap: "anywhere" }}>{report.manifest_hash}</code>
-      <details><summary>{t("nerFrozenInputs")}</summary><ul>{report.manifest.inputs.map((p) => <li key={p.submission_id}>
-        {t("classificationSource", { id: p.submission_id, revision: p.revision, actor: p.submitter_id })}
-        <code style={{ display: "block", overflowWrap: "anywhere" }}>{p.result_hash}</code>
-      </li>)}</ul></details>
-      <p>{t("classificationObserved", { time: report.observed_at })}</p>
-      {report.availability === "unavailable" && <p role="status" data-testid="ner-unavailable">{t("nerUnavailable", {
-        reason: t(`nerReason_${reasons.includes(report.reason) ? report.reason : "unknown"}`) })}</p>}
-      {report.pairs && <div data-testid="ner-matrix" aria-label={t("nerMatrix")}>
-        {report.pairs.map((pair) => <Button key={`${pair.left}-${pair.right}`} look="outlined" disabled={busy}
-          ref={(node) => { matrixRefs.current[`${pair.left}-${pair.right}`] = node; }}
-          data-testid={`ner-pair-${pair.left}-${pair.right}`} onClick={() => compare([pair.left, pair.right])}>
-          {t("nerPair", { left: pair.left, right: pair.right, rate: pair.f1
-            ? `${(Number(pair.f1.numerator) / Number(pair.f1.denominator) * 100).toFixed(2)}%` : t("nerNoEntities") })}
-        </Button>)}
-      </div>}
-      {detail && p && <section data-testid="ner-detail">
-        <h4 ref={detailHeading} tabIndex={-1}>{t("nerDetail", { left: p.left, right: p.right })}</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
-          {["left", "right"].map((side) => <section key={side}><h5>{t("nerSide", { id: p[side] })}</h5>
-            <NerText text={p.text} entities={p[`${side}_entities`]} side={side} />
-            <ul>{p[`${side}_entities`].map((e, i) => <li key={i}>{e.start}–{e.end}: {e.label}</li>)}</ul>
-          </section>)}
-        </div>
-        <p>{t("nerMatched", { count: p.matches.length })}</p>
-        <ul>{p.groups.map((g, i) => <li key={i} data-testid="ner-difference">{t(`nerDifference_${g.kind}`)}: {g.start}–{g.end}</li>)}</ul>
-        <Button data-testid="ner-back-matrix" look="outlined" onClick={() => setDetail(false)}>{t("nerBackMatrix")}</Button>
-      </section>}
+      <NerResult report={report} busy={busy} detail={detail} onSelectPair={(pair) => compare(pair)}
+        onBack={() => setDetail(false)} matrixRefs={matrixRefs} detailHeading={detailHeading} />
       <Button data-testid="ner-change-revisions" look="outlined" onClick={() => { clear(); frozen.current = null; heading.current?.focus(); }}>
         {t("nerChangeRevisions")}</Button>
     </>}
