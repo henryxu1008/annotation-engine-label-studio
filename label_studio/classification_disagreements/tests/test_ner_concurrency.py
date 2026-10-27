@@ -11,7 +11,7 @@ from django.utils import timezone
 from organizations.models import OrganizationMember
 from rest_framework.response import Response
 from rest_framework.test import APIClient
-from tasks.models import Submission
+from tasks.models import Submission, Task
 
 
 @override_settings(ANNOTATION_NER_DISAGREEMENTS_ENABLED=True)
@@ -77,9 +77,11 @@ class TestNerConcurrency(TransactionTestCase):
         self.interleave(lambda: None, (403, 404, 409), remap=True)
 
     def test_assignment_task_rebinding_discards_previous_scope(self):
-        other = self.make_source()
+        # A fresh task avoids the active-assignee uniqueness constraint masking
+        # the committed scope change this response-boundary test must exercise.
+        other = Task.objects.create(project=self.project, data={'text': 'Other task'})
         self.interleave(lambda: type(self.first.assignment).objects.filter(pk=self.first.assignment_id).update(
-            task_id=other.assignment.task_id), (404, 409))
+            task_id=other.pk), (404, 409))
 
     def test_new_revision_does_not_change_explicitly_pinned_results(self):
         def append():
