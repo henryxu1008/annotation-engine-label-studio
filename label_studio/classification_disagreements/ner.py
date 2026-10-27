@@ -90,7 +90,8 @@ def controls(xml):
     if (not name or not target or name == target or control.get('toname') != target
             # Match the editor's simple-variable grammar only. Interpolation and
             # path resolution must not be mistaken for a literal task-data key.
-            or not re.fullmatch(r'\$[A-Za-z0-9_]+', field)
+            # Its compatibility getter also blocks __proto__ as an own JSON key.
+            or not re.fullmatch(r'\$[A-Za-z0-9_]+', field) or field == '$__proto__'
             or text.get('valuetype', 'text') != 'text' or text.get('encoding', 'none') != 'none'
             or text.get('savetextresult', 'yes') not in ('yes', 'none')
             or control.get('choice', 'single') != 'single'

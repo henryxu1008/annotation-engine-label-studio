@@ -11,7 +11,8 @@ Only one static Labels control on one inline, unencoded Text field is supported.
 The Text value must be a single top-level ASCII variable (`$text`, using only
 letters, digits and underscore). Templates, nested paths, indexes and non-ASCII
 variable syntax are unavailable; the reader never substitutes a literal key for
-the editor's interpolation/path resolver.
+the editor's interpolation/path resolver. The editor's compatibility getter
+blocks `__proto__`; that binding is also unavailable even as an own JSON key.
 Select at most 20 revisions, one per trusted independent submitter/assignee. An
 insufficient single input is unavailable. Full frozen configuration and task data
 must agree. Unsupported/mixed/dynamic configurations are unavailable as a whole.

@@ -116,7 +116,7 @@ class TestNerMetrics(unittest.TestCase):
     def test_interpolated_or_path_values_never_read_a_different_literal_data_key(self):
         # The editor resolves "$text suffix" as interpolation, not a literal key.
         # A matching prefix span does not prove the rest of that text was shown.
-        for value in ('$text suffix', '$text-extra', '$document.text', '$items[0]', '$文本'):
+        for value in ('$text suffix', '$text-extra', '$document.text', '$items[0]', '$文本', '$__proto__'):
             first = snapshot([(0, 5, 'PER')], 'Alice hidden context')
             first['project']['label_config'] = XML.replace('value="$text"', f'value="{value}"')
             first['task']['data'][value[1:]] = 'Alice hidden context'
