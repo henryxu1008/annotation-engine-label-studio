@@ -1,17 +1,20 @@
-"""Real PostgreSQL independent connections at the actual rendered-response boundary."""
+"""Real PostgreSQL independent connections at hydration/render response boundaries."""
+import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-from classification_disagreements import ner_api
+from classification_disagreements import ner, ner_api
 from classification_disagreements.tests import test_ner_api as fixtures
 from django.db import close_old_connections, connection
+from django.db.models.query import QuerySet
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from organizations.models import OrganizationMember
 from rest_framework.response import Response
 from rest_framework.test import APIClient
 from tasks.models import Submission, Task
+from tasks.submissions import _snapshot_hash
 
 
 @override_settings(ANNOTATION_NER_DISAGREEMENTS_ENABLED=True)
@@ -26,16 +29,23 @@ class TestNerConcurrency(TransactionTestCase):
         fixtures.TestNerAPI.setUpTestData.__func__(self)
         fixtures.TestNerAPI.setUp(self)
 
-    def interleave(self, change, expected, remap=False):
+    def interleave(self, change, expected, remap=False, stage='render'):
         entered, release = threading.Event(), threading.Event()
         original_render, resolve = Response.render, ner_api.resolve_actor
+        original_iterator = QuerySet.iterator
 
         def render(response):
             result = original_render(response)
-            if response.status_code == 200 and not entered.is_set():
+            if stage == 'render' and response.status_code == 200 and not entered.is_set():
                 entered.set()
                 assert release.wait(20)
             return result
+
+        def iterate(query, *args, **kwargs):
+            if stage == 'hydrate' and query.model is Submission and not entered.is_set():
+                entered.set()
+                assert release.wait(20)
+            return original_iterator(query, *args, **kwargs)
 
         def actor(request):
             principal, current = resolve(request)
@@ -50,7 +60,8 @@ class TestNerConcurrency(TransactionTestCase):
             finally:
                 connection.close()
 
-        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(Response, 'render', render), patch.object(ner_api, 'resolve_actor', actor):
+        with (ThreadPoolExecutor(max_workers=1) as pool, patch.object(Response, 'render', render),
+              patch.object(ner_api, 'resolve_actor', actor), patch.object(QuerySet, 'iterator', iterate)):
             pending = pool.submit(read)
             try:
                 assert entered.wait(20)
@@ -72,6 +83,21 @@ class TestNerConcurrency(TransactionTestCase):
 
     def test_source_deletion_never_returns_rendered_answers(self):
         self.interleave(lambda: Submission.objects.filter(pk=self.first.pk).delete(), (409,))
+
+    def test_source_deletion_after_authorization_rejects_before_hydration(self):
+        with patch.object(ner, 'Evaluator') as engine:
+            self.interleave(lambda: Submission.objects.filter(pk=self.first.pk).delete(), (409,), stage='hydrate')
+        engine.assert_not_called()
+
+    def test_source_growth_after_sql_preflight_never_reaches_scoring(self):
+        maximum = 8192
+        def grow():
+            value = copy.deepcopy(self.first.result_snapshot)
+            value['padding'] = 'x' * maximum
+            Submission.objects.filter(pk=self.first.pk).update(result_snapshot=value, result_hash=_snapshot_hash(value))
+        with patch.object(ner, 'MAX_STORED_BYTES', maximum), patch.object(ner, 'Evaluator') as engine:
+            self.interleave(grow, (422,), stage='hydrate')
+        engine.assert_not_called()
 
     def test_actor_remapping_discards_previous_viewer_projection(self):
         self.interleave(lambda: None, (403, 404, 409), remap=True)

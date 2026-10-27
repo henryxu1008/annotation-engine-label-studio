@@ -1117,3 +1117,11 @@ actual JSON bytes, authority and sources after rendering. Source loss masks all
 answers/scores without reducing the frozen denominator. Storage byte preflight,
 canonical input and scorer-work limits precede metric calls. No DB writes,
 migrations, delivery or Core authority are added. See ner-disagreement-v1.md.
+
+The hydrating SQL statement repeats the total stored-byte budget with a window
+sum and CASE-projected JSON; the original JSON field stays deferred. This closes
+the gap between byte preflight and decoding. Reject source-set changes during
+loading before any receipt or scorer. Text bindings accept only a simple
+top-level ASCII variable, never a literal-key substitute for editor templates
+or nested paths. These guards stay local to NER and do not change the legacy
+classification loader, producer data, review decisions or sampling.

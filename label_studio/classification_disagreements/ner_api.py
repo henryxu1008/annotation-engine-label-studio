@@ -10,7 +10,7 @@ from access_control.project_operations import READ_WORK, require_project_operati
 from django.conf import settings
 from django.core import signing
 from django.db import connection
-from django.db.models import F
+from django.db.models import BigIntegerField, Case, F, JSONField, Sum, Value, When, Window
 from django.db.models.expressions import RawSQL
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -208,14 +208,24 @@ def load(query):
     # Scope first; count bytes in SQL before hydrating a JSONField or live task body.
     column = connection.ops.quote_name(Submission._meta.db_table) + '.' + connection.ops.quote_name('result_snapshot')
     expression = f'OCTET_LENGTH(CAST({column} AS TEXT))' if connection.vendor == 'postgresql' else f'LENGTH(CAST({column} AS BLOB))'
-    sizes = list(query.annotate(ner_size=RawSQL(expression, [])).values_list('ner_size', flat=True))
+    size = RawSQL(expression, [], output_field=BigIntegerField())
+    sizes = list(query.annotate(ner_size=size).values_list('ner_size', flat=True))
     if any(type(size) is not int or size < 0 for size in sizes) or sum(sizes) > ner.MAX_STORED_BYTES:
         raise ner.Error('NER_TOO_LARGE')
     rows, used = [], 0
-    for row in query.select_related('assignment__task', 'review').only(
-            'id', 'assignment_id', 'revision', 'result_snapshot', 'result_hash', 'submitted_by_id', 'status',
+    # The preflight and this SELECT may observe different committed rows. Gate
+    # the entire selected payload inside the hydrating statement, so a growing
+    # snapshot is never transferred/decoded before its budget is enforced.
+    guarded = query.annotate(ner_total=Window(Sum(size))).annotate(ner_snapshot=Case(
+        When(ner_total__lte=ner.MAX_STORED_BYTES, then=F('result_snapshot')),
+        default=Value(None), output_field=JSONField()))
+    for row in guarded.select_related('assignment__task', 'review').only(
+            'id', 'assignment_id', 'revision', 'result_hash', 'submitted_by_id', 'status',
             'assignment__id', 'assignment__task_id', 'assignment__project_id', 'assignment__assignee_id',
             'assignment__task__id', 'assignment__task__project_id', 'review__id', 'review__decision').order_by('pk').iterator(chunk_size=1):
+        if type(row.ner_total) is not int or row.ner_total < 0 or row.ner_total > ner.MAX_STORED_BYTES:
+            raise ner.Error('NER_TOO_LARGE')
+        row.result_snapshot = row.ner_snapshot
         try:
             used += ner.bounded(row.result_snapshot, ner.MAX_SNAPSHOT_BYTES)
             if used > ner.MAX_SNAPSHOT_BYTES:
@@ -255,6 +265,8 @@ class ReportAPI(NerAPI):
                 if receipt is None or Submission.objects.filter(pk__in=set(ids) - authorized).exists():
                     raise NotFound()
             rows = load(scoped)
+            if {row.pk for row in rows} != authorized:
+                raise ner.Error('NER_READ_CHANGED', 409)
             pins = [pin(row) for row in rows]
             if len({p['submitter_id'] for p in pins}) != len(pins):
                 raise ner.Error('NER_DUPLICATE_PARTICIPANT', 400)

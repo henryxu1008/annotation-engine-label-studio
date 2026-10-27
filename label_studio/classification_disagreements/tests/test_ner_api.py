@@ -7,6 +7,8 @@ from classification_disagreements.tests.test_ner_metrics import XML, snapshot
 from django.conf import settings
 from django.core import signing
 from django.db import connection
+from django.db.models import JSONField
+from django.db.models.query import QuerySet
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -189,6 +191,65 @@ class TestNerAPI(APITestCase):
         normalize.assert_not_called()
         validate.assert_not_called()
         engine.assert_not_called()
+
+    def test_deleted_between_authorization_and_load_rejects_without_a_partial_receipt(self):
+        original = ner_api.load
+        def delete_then_load(query):
+            Submission.objects.filter(pk=self.first.pk).delete()
+            return original(query)
+        with patch.object(ner_api, 'load', delete_then_load), patch.object(ner, 'Evaluator') as engine:
+            response = self.read()
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertNotIn('Alice', response.content.decode())
+        engine.assert_not_called()
+
+    def test_storage_growth_after_preflight_is_blocked_in_the_hydrating_statement(self):
+        self.assert_storage_growth_guard()
+
+    def test_aggregate_growth_after_preflight_is_blocked_even_when_each_row_fits(self):
+        self.assert_storage_growth_guard(spread=True)
+
+    def assert_storage_growth_guard(self, spread=False):
+        maximum, changed = 8192, False
+        original_iterator, decode_json = QuerySet.iterator, JSONField.from_db_value
+        def grow_then_iterate(query, *args, **kwargs):
+            nonlocal changed
+            if query.model is Submission and not changed:
+                changed = True
+                for row in (self.first, self.second) if spread else (self.first,):
+                    value = copy.deepcopy(row.result_snapshot)
+                    value['padding'] = 'x' * (maximum // 2 if spread else maximum)
+                    if spread:
+                        self.assertLess(len(ner.canonical(value)), maximum)
+                    Submission.objects.filter(pk=row.pk).update(result_snapshot=value, result_hash=_snapshot_hash(value))
+            return original_iterator(query, *args, **kwargs)
+        def bounded_decode(field, value, expression, conn):
+            if isinstance(value, str) and len(value.encode()) > maximum:
+                raise AssertionError('Oversized JSON reached the Python decoder')
+            return decode_json(field, value, expression, conn)
+        with (patch.object(ner, 'MAX_STORED_BYTES', maximum), patch.object(QuerySet, 'iterator', grow_then_iterate),
+              patch.object(JSONField, 'from_db_value', bounded_decode), patch.object(ner, 'Evaluator') as engine):
+            response = self.read()
+        self.assertTrue(changed)
+        self.assertEqual(response.status_code, 422, response.data)
+        engine.assert_not_called()
+
+    def test_interpolated_frozen_config_is_unavailable_and_invalidates_an_old_receipt(self):
+        original = self.read().data
+        def template(value):
+            value['project']['label_config'] = XML.replace('value="$text"', 'value="$text suffix"')
+            value['task']['data'] = {'text': 'Alice', 'text suffix': 'Alice hidden context'}
+        for row in (self.first, self.second):
+            self.write(row, [(0, 5, 'PER')], mutate=template)
+        with patch.object(ner, 'Evaluator') as engine:
+            response = self.read()
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(response.data['reason'], 'unsupported_config')
+            self.assertIsNone(response.data['pairs'])
+            self.assertIsNone(response.data['selected_pair'])
+            self.assertNotIn('hidden context', response.content.decode())
+            self.assertEqual(self.read(frozen=original['frozen']).status_code, 409)
+            engine.assert_not_called()
 
     def test_output_and_receipt_reject_before_the_scorer(self):
         for name in ('MAX_OUTPUT', 'MAX_TOKEN'):

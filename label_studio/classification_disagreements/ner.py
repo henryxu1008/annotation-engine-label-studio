@@ -3,6 +3,7 @@
 import hashlib
 import itertools
 import json
+import re
 from fractions import Fraction
 
 import defusedxml.ElementTree as etree
@@ -87,7 +88,9 @@ def controls(xml):
     text, control = texts[0], labels[0]
     name, target, field = control.get('name'), text.get('name'), text.get('value', '')
     if (not name or not target or name == target or control.get('toname') != target
-            or not field.startswith('$') or len(field) == 1 or '$' in field[1:]
+            # Match the editor's simple-variable grammar only. Interpolation and
+            # path resolution must not be mistaken for a literal task-data key.
+            or not re.fullmatch(r'\$[A-Za-z0-9_]+', field)
             or text.get('valuetype', 'text') != 'text' or text.get('encoding', 'none') != 'none'
             or text.get('savetextresult', 'yes') not in ('yes', 'none')
             or control.get('choice', 'single') != 'single'

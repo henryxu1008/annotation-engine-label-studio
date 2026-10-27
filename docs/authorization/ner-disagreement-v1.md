@@ -8,6 +8,10 @@ remain open. Existing classification manifests, metrics and key recovery are unc
 ## Inputs and formula
 
 Only one static Labels control on one inline, unencoded Text field is supported.
+The Text value must be a single top-level ASCII variable (`$text`, using only
+letters, digits and underscore). Templates, nested paths, indexes and non-ASCII
+variable syntax are unavailable; the reader never substitutes a literal key for
+the editor's interpolation/path resolver.
 Select at most 20 revisions, one per trusted independent submitter/assignee. An
 insufficient single input is unavailable. Full frozen configuration and task data
 must agree. Unsupported/mixed/dynamic configurations are unavailable as a whole.
@@ -67,6 +71,11 @@ Sources enumerate identity metadata only, at most 100. PostgreSQL/SQLite SQL byt
 preflight limits selected stored JSON to 64MiB before decoding. Canonical snapshots
 then have an independent inclusive 8MiB limit. Unlike the older shared loader's
 post-decode counting, this new read path does not hydrate a giant JSON value first.
+The hydrating SELECT also uses a cumulative window byte sum and a CASE-projected
+JSON value, with the original JSON column deferred. If rows grow after preflight,
+the statement returns no oversized payload for Python to decode. A source-set
+change during loading rejects 409 before normalization or receipt construction;
+it cannot create a partial initial receipt or turn a race into a 500.
 It does not retrofit a new limit onto legacy classification routes.
 
 Additional inclusive limits: 64KiB XML and UTF-8 text, 100 static labels of at most

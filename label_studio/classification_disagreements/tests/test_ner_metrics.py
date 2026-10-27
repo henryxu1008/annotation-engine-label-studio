@@ -113,6 +113,21 @@ class TestNerMetrics(unittest.TestCase):
         first['annotation']['was_cancelled'] = True
         self.assertEqual(run(first, first)['logical']['reason'], 'cancelled_or_missing')
 
+    def test_interpolated_or_path_values_never_read_a_different_literal_data_key(self):
+        # The editor resolves "$text suffix" as interpolation, not a literal key.
+        # A matching prefix span does not prove the rest of that text was shown.
+        for value in ('$text suffix', '$text-extra', '$document.text', '$items[0]', '$文本'):
+            first = snapshot([(0, 5, 'PER')], 'Alice hidden context')
+            first['project']['label_config'] = XML.replace('value="$text"', f'value="{value}"')
+            first['task']['data'][value[1:]] = 'Alice hidden context'
+            first['task']['data']['text'] = 'Alice'
+            with self.subTest(value=value), patch.object(ner, 'Evaluator', wraps=ner.Evaluator) as engine:
+                result = run(first, copy.deepcopy(first))['logical']
+                self.assertEqual(result['availability'], 'unavailable')
+                self.assertEqual(result['reason'], 'unsupported_config')
+                self.assertIsNone(result['pairs'])
+                engine.assert_not_called()
+
     def test_exact_byte_entity_work_and_output_edges_precede_engine(self):
         first = snapshot([(0, 5, 'PER')])
         size = len(ner.canonical(first)) * 2

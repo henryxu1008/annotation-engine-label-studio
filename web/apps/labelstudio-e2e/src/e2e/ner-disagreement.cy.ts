@@ -78,6 +78,14 @@ describe('read-only frozen NER comparison', () => {
       read('empty').then(({ body }) => { expect(body.pairs[0].f1).to.eq(null); expect(body.reason).to.eq('no_entities'); });
       cy.request({ url: url('budget'), qs: { submissions: Object.values(scope.cases.budget.sources).join(',') }, failOnStatusCode: false })
         .its('status').should('eq', 422);
+      cy.get('[data-testid="ner-workspace"] input[type="number"]').clear().type(String(scope.cases.interpolated.task));
+      cy.get('[data-testid="ner-load"]').click();
+      cy.get('[data-testid="ner-workspace"] input[type="checkbox"]').each(box => cy.wrap(box).check());
+      cy.get('[data-testid="ner-compare"]').click();
+      cy.get('[data-testid="ner-unavailable"]').should('contain.text', zh ? '超出首版 NER 支持范围' : 'outside the supported NER scope');
+      cy.get('[data-testid="ner-matrix"]').should('not.exist');
+      cy.get('[data-testid="ner-left-text"]').should('not.exist');
+      cy.get('[data-testid="ner-workspace"]').should('not.contain.text', 'hidden context');
       login('reviewer');
       cy.request(url('self') + 'sources/').then(({ body }) => {
         expect(body.sources.map((r: any) => r.submitted_by_id)).not.to.include(fixture.users.reviewer.id);

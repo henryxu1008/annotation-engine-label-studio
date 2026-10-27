@@ -66,8 +66,12 @@ class Command(BaseCommand):
                 ProjectMember.objects.create(project=project, user=user,
                     role=role if role in ('manager', 'reviewer') else 'annotator')
             cases = {}
-            for case in ('differences', 'empty', 'source_loss', 'new_revision', 'budget', 'self', 'producer'):
+            for case in ('differences', 'empty', 'source_loss', 'new_revision', 'budget', 'self', 'producer', 'interpolated'):
                 data = {'text': UNICODE if case == 'producer' else TEXT}
+                if case == 'interpolated':
+                    project.label_config = XML.replace('value="$text"', 'value="$text suffix"')
+                    project.save()
+                    data = {'text': 'Alice', 'text suffix': 'Alice hidden context'}
                 task = Task.objects.create(project=project, data=data)
                 owners = ('b',) if case == 'producer' else ('a', 'b') if case == 'empty' else ('a', 'b', 'c')
                 cases[case] = {'task': task.pk, 'sources': {}}
@@ -79,11 +83,16 @@ class Command(BaseCommand):
                         spans = [(0, 5, 'PER')]
                     if case == 'producer':
                         spans = [(1, 2, 'PER'), (8, 9, 'PER')]
+                    if case == 'interpolated':
+                        spans = [(0, 5, 'PER')]
                     row = source(project, task, users[owner], spans, oversized=case == 'budget' and owner == 'a')
                     cases[case]['sources'][owner] = row.pk
                 if case == 'producer':
                     assignment = TaskAssignment.objects.create(project=project, task=task, assignee=users['a'])
                     cases[case]['assignment_a'] = assignment.pk
+                if case == 'interpolated':
+                    project.label_config = XML
+                    project.save()
             projects[locale] = {'id': project.pk, 'cases': cases}
             modes[f'{org.pk}:{project.pk}'] = 'fork_review'
         value = {'schema': 'ner-e2e/v1', 'password': password, 'organization': org.pk,
