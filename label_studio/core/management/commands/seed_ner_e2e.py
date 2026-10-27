@@ -54,7 +54,7 @@ class Command(BaseCommand):
         manager.active_organization = org
         manager.save(update_fields=['active_organization'])
         users = {'manager': manager}
-        for role in ('reviewer', 'a', 'b', 'c'):
+        for role in ('reviewer', 'a', 'b', 'c', *(f'limit{i}' for i in range(17))):
             user = User.objects.create_user(role + '@' + DOMAIN, password, username='ner-' + role, active_organization=org)
             org.add_user(user)
             users[role] = user
@@ -66,7 +66,7 @@ class Command(BaseCommand):
                 ProjectMember.objects.create(project=project, user=user,
                     role=role if role in ('manager', 'reviewer') else 'annotator')
             cases = {}
-            for case in ('differences', 'empty', 'source_loss', 'new_revision', 'budget', 'self', 'producer', 'interpolated'):
+            for case in ('differences', 'empty', 'source_loss', 'new_revision', 'budget', 'self', 'producer', 'interpolated', 'max_inputs'):
                 data = {'text': UNICODE if case == 'producer' else TEXT}
                 if case == 'interpolated':
                     project.label_config = XML.replace('value="$text"', 'value="$text suffix"')
@@ -77,13 +77,15 @@ class Command(BaseCommand):
                 cases[case] = {'task': task.pk, 'sources': {}}
                 if case == 'self':
                     owners = ('a', 'b', 'reviewer')
+                if case == 'max_inputs':
+                    owners = tuple(k for k in users if k not in ('manager', 'reviewer'))
                 for owner in owners:
                     spans = [] if case == 'empty' else [(0, 5, 'PER'), (13, 17 if owner == 'a' else 16, 'ORG')]
                     if owner == 'c':
                         spans = [(0, 5, 'PER')]
                     if case == 'producer':
                         spans = [(1, 2, 'PER'), (8, 9, 'PER')]
-                    if case == 'interpolated':
+                    if case in ('interpolated', 'max_inputs'):
                         spans = [(0, 5, 'PER')]
                     row = source(project, task, users[owner], spans, oversized=case == 'budget' and owner == 'a')
                     cases[case]['sources'][owner] = row.pk

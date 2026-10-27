@@ -90,6 +90,15 @@ pass, covering the pinned library's range-set enumeration. At most two passes an
 380 library calls occur. No per-pair database queries or HTTP/media resolution.
 Logical, response and receipt bounds precede the first scoring call.
 
+The repository Nginx entrypoint explicitly allows a 32KiB request line through
+four demand-allocated 32KiB large-header buffers. This carries the existing 16KiB
+GET receipt budget plus route/query framing; the API limit remains 16KiB.
+Twenty ordinary pins already produce a receipt above the default 8KiB Nginx
+request-line limit, so direct-to-Django tests alone cannot validate replay.
+An external ingress must preserve at least the same request-line allowance.
+uWSGI's existing 65,535-byte header buffer is unchanged. See the official
+[Nginx large-client-header documentation](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+
 ## Verification and retained environment
 
 Pure tests exercise hand-calculated and 128 deterministic three-participant cases,
@@ -103,6 +112,11 @@ Dedicated synthetic browser journeys cover en-US/zh-CN Manager/Reviewer/Annotato
 frozen navigation, delayed responses, budgets, source deletion and revocation. A
 separate real editor selection/draft reload/submission case must prove emoji and
 CRLF codepoints; hand-authored fixture JSON alone is insufficient evidence.
+The NER browser job runs through the adapted production Nginx config, with an
+isolated 8KiB negative-control proxy. Both languages replay a real 20-participant
+receipt: the old limit returns 414, the production allowance returns 200 with
+the identical frozen hash, and an over-budget receipt still reaches the API's
+400 rejection. This proxy validation runs only on the ephemeral GitHub runner.
 
 Validation results are recorded separately; test definitions are not PASS. Local
 Docker/#76 are read-only. Historical CHANGED, CHANGED_DATABASE_CONTAINER_REPLACED,

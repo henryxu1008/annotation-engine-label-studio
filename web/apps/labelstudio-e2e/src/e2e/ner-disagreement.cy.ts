@@ -76,6 +76,18 @@ describe('read-only frozen NER comparison', () => {
         expect(body.pairs).to.eq(null); expect(body.result_hash).to.eq(null);
       });
       read('empty').then(({ body }) => { expect(body.pairs[0].f1).to.eq(null); expect(body.reason).to.eq('no_entities'); });
+      read('max_inputs').then(({ body, headers }) => {
+        expect(headers.server).to.eq('nginx');
+        expect(body.input_count).to.eq(20); expect(body.total_pairs).to.eq(190);
+        expect(body.frozen.length).to.be.greaterThan(8192).and.at.most(16384);
+        const qs = { frozen: body.frozen };
+        cy.request({ url: `http://localhost:8086${url('max_inputs')}`, qs, failOnStatusCode: false }).its('status').should('eq', 414);
+        cy.request({ url: url('max_inputs'), qs }).then(response => {
+          expect(response.status).to.eq(200); expect(response.body.manifest_hash).to.eq(body.manifest_hash);
+          expect(response.body.result_hash).to.eq(body.result_hash); expect(response.body.pairs).to.have.length(190);
+        });
+        cy.request({ url: url('max_inputs'), qs: { frozen: 'x'.repeat(16385) }, failOnStatusCode: false }).its('status').should('eq', 400);
+      });
       cy.request({ url: url('budget'), qs: { submissions: Object.values(scope.cases.budget.sources).join(',') }, failOnStatusCode: false })
         .its('status').should('eq', 422);
       cy.get('[data-testid="ner-workspace"] input[type="number"]').clear().type(String(scope.cases.interpolated.task));

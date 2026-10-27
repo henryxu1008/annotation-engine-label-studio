@@ -1125,3 +1125,9 @@ loading before any receipt or scorer. Text bindings accept only a simple
 top-level ASCII variable, never a literal-key substitute for editor templates
 or nested paths. These guards stay local to NER and do not change the legacy
 classification loader, producer data, review decisions or sampling.
+
+NER GET receipts keep their 16KiB application cap. The repository Nginx config
+allows 32KiB request lines (four demand-allocated 32KiB header buffers), since a
+valid 20-participant receipt exceeds the default 8KiB line limit. NER CI adapts
+that production config and runs bilingual replay through real Nginx, including
+an 8KiB negative control; it does not deploy or touch retained local runtimes.

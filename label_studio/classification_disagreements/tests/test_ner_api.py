@@ -18,8 +18,9 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.test import APITestCase
 from review_batches.tests import test_batches as fixtures
-from tasks.models import ReviewDecision, Submission
+from tasks.models import ReviewDecision, Submission, TaskAssignment
 from tasks.submissions import _snapshot_hash
+from users.models import User
 
 
 @override_settings(ANNOTATION_NER_DISAGREEMENTS_ENABLED=True)
@@ -318,3 +319,27 @@ class TestNerAPI(APITestCase):
         with patch.object(ner, 'Evaluator') as engine:
             self.assertEqual(self.client.get(self.url, {'submissions': ','.join(map(str, ids))}).status_code, 422)
             engine.assert_not_called()
+
+    def test_twenty_independent_inputs_freeze_and_replay_with_a_bounded_long_receipt(self):
+        rows = [self.first, self.second]
+        for index in range(18):
+            actor = User.objects.create_user(f'ner-limit-{index}@example.test', None,
+                                            username=f'ner-limit-{index}', active_organization=self.org)
+            self.org.add_user(actor)
+            ProjectMember.objects.create(project=self.project, user=actor, role='annotator')
+            assignment = TaskAssignment.objects.create(project=self.project, task=self.first.assignment.task,
+                                                       assignee=actor, assigned_by=self.manager)
+            row = self.make_source(worker=actor, assignment=assignment)
+            self.write(row, [(0, 5, 'PER')])
+            rows.append(row)
+        with patch.object(ner, 'Evaluator', wraps=ner.Evaluator) as engine:
+            response = self.read(rows)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual((response.data['input_count'], response.data['total_pairs']), (20, 190))
+        self.assertEqual(engine.call_count, 380)
+        self.assertGreater(len(response.data['frozen'].encode()), 8192)
+        self.assertLessEqual(len(response.data['frozen'].encode()), ner.MAX_TOKEN)
+        replay = self.read(frozen=response.data['frozen'])
+        self.assertEqual(replay.status_code, 200, replay.data)
+        self.assertEqual(replay.data['manifest_hash'], response.data['manifest_hash'])
+        self.assertEqual(replay.data['result_hash'], response.data['result_hash'])
