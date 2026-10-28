@@ -31,7 +31,7 @@ describe('single frozen NER batch quality overview', () => {
       cy.get('[data-testid="ner-quality-read"]').should('be.visible');
       cy.request(base).then(r=>{batch=r.body.results.find((b:any)=>b.name===name);expect(batch).to.exist;});
       cy.intercept('GET',new RegExp(`/api/projects/${scope.id}/classification-disagreements/.*/quality-overview`),req=>{forbidden++;req.continue();});
-      cy.intercept('GET',new RegExp(`${base}\\d+/quality-overview/?$`)).as('overview');
+      cy.intercept({method:'GET',pathname:new RegExp(`${base}\\d+/quality-overview/?$`)}).as('overview');
       cy.get('[data-testid="ner-quality-read"]').click();cy.wait('@overview').then(({response:r})=>{
         expect(r!.statusCode).to.eq(200);origin=r!.body;
         expect(origin.summary.strict_f1).to.deep.eq({numerator:'7',denominator:'12'});
