@@ -309,11 +309,13 @@ class ReportAPI(NerAPI):
         def verify():
             current = self.recheck(request, pk, task_id, initial)
             viewer(current, expected_viewer)
+            # The last source check must follow both counter passes. Their
+            # input is immutable; pins and the complete logical hash bind replay.
+            if data['prepared']:
+                ner.check_engine(data['prepared'])
             fresh = materialize(current)
             if fresh['pins'] != data['pins'] or fresh['result_hash'] != data['result_hash']:
                 raise ner.Error('NER_READ_CHANGED', 409)
-            if fresh['prepared']:
-                ner.check_engine(fresh['prepared'])
             self.recheck(request, pk, task_id, initial)
         return self.respond(request, body, verify,
                             lambda: ner.check_engine(data['prepared']) if data['prepared'] else None)

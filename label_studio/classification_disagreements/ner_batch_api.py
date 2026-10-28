@@ -65,10 +65,12 @@ class BatchAPI(ner_api.NerAPI):
 
         def verify():
             current = self.recheck(request, pk, initial)
-            fresh, values = materialize(current)
+            # Keep the second counter pass on pinned evidence and the final
+            # source replay after all scoring, without a third hydration pass.
+            b.check_engine(prepared)
+            fresh, _ = materialize(current)
             if fresh != data:
                 b.fail('READ_CHANGED')
-            b.check_engine(values)
             self.recheck(request, pk, initial)
 
         return self.respond(request, {**data, 'observed_at': timezone.now().isoformat()},
@@ -80,6 +82,7 @@ class CapabilityAPI(BatchAPI):
         self.query(request)
         def data(context):
             return {'enabled': True, 'can_create': context[3] == 'manager' and project_operation_policy(context[2]).allows(ORGANIZE_NER),
+                    'can_view_quality_overview': settings.ANNOTATION_NER_QUALITY_OVERVIEW_ENABLED,
                     'project_id': pk, 'viewer': ner_api.viewer(context), 'schema': b.SCHEMA, 'rule': ner.RULE,
                     'selection': b.SELECTION, 'explanation': ner.EXPLANATION, 'engine': ner.ENGINE,
                     'limits': {'tasks': b.MAX_TASKS, 'participants': b.MAX_PARTICIPANTS, 'inputs': b.MAX_INPUTS,

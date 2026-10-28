@@ -51,6 +51,18 @@ const create = async (zh=false) => {
 };
 beforeEach(()=>mockCallApi.mockReset().mockImplementation(respond));
 
+it("routes an enabled NER overview only through its explicit NER adapter",async()=>{
+  mockCallApi.mockImplementation(async(m,o)=>m==="nerBatchCapability"?{...capability,can_view_quality_overview:true}:respond(m,o));
+  const {runtime,unmount}=mount();
+  fireEvent.click(await screen.findByRole("button",{name:"NER synthetic"}));
+  fireEvent.click(await screen.findByTestId("ner-quality-read"));
+  await screen.findByRole("alert");
+  expect(mockCallApi.mock.calls.some(([m])=>m==="nerQualityOverview")).toBe(true);
+  expect(mockCallApi.mock.calls.every(([m])=>m.startsWith("ner")||m==="createNerBatch")).toBe(true);
+  expect(screen.queryByTestId("classification-quality-overview")).toBeNull();
+  unmount();runtime.destroy();
+});
+
 it.each(["en-US","zh-CN"])("reuses the complete frozen queue flow without classification/arbitration calls in %s",async(locale)=>{
   const {runtime,unmount}=mount(locale),zh=locale==="zh-CN";
   await create(zh);

@@ -110,5 +110,6 @@
   "apps/labelstudio/src/pages/DataManager/ClassificationPartial.jsx",
   "apps/labelstudio/src/pages/DataManager/ClassificationOverview.jsx",
   "apps/labelstudio/src/pages/DataManager/NerDisagreement.jsx",
-  "apps/labelstudio/src/pages/DataManager/NerBatches.jsx"
+  "apps/labelstudio/src/pages/DataManager/NerBatches.jsx",
+  "apps/labelstudio/src/pages/DataManager/NerQualityOverview.jsx"
 ]
