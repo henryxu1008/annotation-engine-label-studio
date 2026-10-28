@@ -5,6 +5,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { FrozenBatchWorkspace } from "./ClassificationBatches";
 import { nerComparisonSchema, NerResult, validateNerComparison } from "./NerDisagreement";
+import { NerQualityOverview } from "./NerQualityOverview";
 
 const id = z.number().int().positive().safe(), count = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -18,6 +19,7 @@ const metadata = z.object({ id, project_id: id, name: z.string(), schema: z.lite
   visibility: z.enum(["project", "visible_subset"]), manifest_hash: hash.optional(), projection_hash: hash.optional(), viewer: hash,
 }).refine((r) => r.visibility === "project" ? Boolean(r.manifest_hash) && !r.projection_hash : Boolean(r.projection_hash) && !r.manifest_hash);
 const cap = z.object({ enabled: z.literal(true), can_create: z.boolean(), project_id: id, viewer: hash,
+  can_view_quality_overview: z.boolean().optional(),
   schema: z.literal("ner-batches/v1"), rule: z.literal("ner-strict-entities/v1"), selection: z.literal("active-assignment-latest/v1") });
 const row = z.object({ task_id: id, outcome: z.enum(["agreement", "disagreement", "unavailable"]),
   original_outcome: z.enum(["agreement", "disagreement", "unavailable"]), reason: z.string().nullable(),
@@ -96,6 +98,7 @@ export const nerBatchAdapter = {
     }
   },
   renderItem: (props) => <NerBatchComparison {...props} />,
+  renderOverview: (props) => <NerQualityOverview {...props} />,
 };
 
 export const NerBatchTitle = () => { const { t } = useLocaleTranslation("reviewBatches"); return t("nerBatchTitle"); };

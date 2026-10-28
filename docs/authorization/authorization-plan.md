@@ -1150,3 +1150,19 @@ source scoring and PostgreSQL persistence. Recheck names inside older signed
 previews before processing, without changing the original-key recovery order or
 normalizing a signed intent. Invalid input returns 400 and leaves the key unused;
 valid Chinese/non-BMP names and existing whitespace/length semantics remain.
+
+### Single-batch NER quality overview (#81)
+
+See the [NER quality overview contract](ner-quality-overview-v1.md) and its
+[confirmed design](ner-quality-overview-v1-design.md). Reduce the
+existing verified frozen pairs with equal weights within each task and then
+across scorable tasks; report task/pair denominators and coverage separately.
+Both-empty pairs stay undefined, missing inputs never become empty entities,
+and any unavailable visible pinned source masks the entire new overview.
+Use an independent read receipt and explicit NER workspace overview adapter;
+never fall back to classification APIs or extend old manifests. Preserve current
+READ_WORK/self-cohort filtering, two-pass whole-batch byte/work/scorer budgets,
+old key recovery and all metric/review/arbitration/sampling semantics. No
+new business writes, migration or retained runtime activation are introduced.
+#81/#84 stay open; Host/Core/deployment and retained Docker/#76 remain excluded.
+Preserve old/new CHANGED, cause UNKNOWN and the incomplete full database check.

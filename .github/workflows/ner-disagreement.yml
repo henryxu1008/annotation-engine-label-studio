@@ -2,7 +2,7 @@ name: Frozen NER Comparison
 
 on:
   push:
-    branches: [main, codex/issue81-ner-disagreement, codex/issue81-ner-batches]
+    branches: [main, codex/issue81-ner-disagreement, codex/issue81-ner-batches, codex/issue81-ner-quality-overview]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited]

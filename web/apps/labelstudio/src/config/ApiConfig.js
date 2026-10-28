@@ -49,6 +49,7 @@ export const API_CONFIG = {
     nerBatchDetail: "GET:/projects/:pk/ner-disagreements/batches/:batch/",
     nerBatchItems: "GET:/projects/:pk/ner-disagreements/batches/:batch/items/",
     nerBatchItem: "GET:/projects/:pk/ner-disagreements/batches/:batch/items/:task/",
+    nerQualityOverview: "GET:/projects/:pk/ner-disagreements/batches/:batch/quality-overview/",
     classificationArbitrationCapability: "GET:/projects/:pk/classification-arbitrations/capability/",
     classificationArbitrationAssignees: "GET:/projects/:pk/classification-arbitrations/assignees/",
     classificationArbitrations: "GET:/projects/:pk/classification-arbitrations/",

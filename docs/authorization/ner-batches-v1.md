@@ -10,7 +10,9 @@ GET/receipt contract remains independent and unchanged.
 Reuse the existing frozen-batch workspace through a narrow transport/schema/
 renderer adapter: list -> explicit preview/create -> frozen filtered queue ->
 NER pair matrix/differences -> return with filter/page/focus. The NER adapter
-cannot call classification, partial-match, quality-overview or arbitration APIs.
+cannot call classification, partial-match, classification quality-overview or arbitration APIs.
+The separately gated [NER overview](ner-quality-overview-v1.md) uses an explicit
+NER-only read adapter; it does not extend this queue's metric DTO or Manifest.
 Reuse the existing locale header, buttons, Zod contracts and NER result renderer.
 
 A Manager chooses an explicit task-ID set or a bounded project scope. The signed

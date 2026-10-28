@@ -80,6 +80,7 @@ class CapabilityAPI(BatchAPI):
         self.query(request)
         def data(context):
             return {'enabled': True, 'can_create': context[3] == 'manager' and project_operation_policy(context[2]).allows(ORGANIZE_NER),
+                    'can_view_quality_overview': settings.ANNOTATION_NER_QUALITY_OVERVIEW_ENABLED,
                     'project_id': pk, 'viewer': ner_api.viewer(context), 'schema': b.SCHEMA, 'rule': ner.RULE,
                     'selection': b.SELECTION, 'explanation': ner.EXPLANATION, 'engine': ner.ENGINE,
                     'limits': {'tasks': b.MAX_TASKS, 'participants': b.MAX_PARTICIPANTS, 'inputs': b.MAX_INPUTS,

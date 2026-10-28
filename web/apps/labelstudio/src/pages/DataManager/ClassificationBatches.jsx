@@ -250,8 +250,9 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
         {detail.visibility === "visible_subset" && <p>{t("batchVisibleSubset")}</p>}
         <p>{t("classificationRule", { rule: detail.rule, time: detail.calculated_at })}</p>
         <p>{t("batchCounts", queue.display_counts)}</p>
-        {canOverview && <ClassificationOverview key={`${projectId}:${batchId}`} projectId={projectId} batch={detail}
-          navigation={overviewNavigation} onOpenTask={showItem} />}
+        {canOverview && (adapter ? adapter.renderOverview?.({ projectId, batch: detail,
+          navigation: overviewNavigation, onOpenTask: showItem }) : <ClassificationOverview key={`${projectId}:${batchId}`}
+          projectId={projectId} batch={detail} navigation={overviewNavigation} onOpenTask={showItem} />)}
         <label>{t("batchFilter")}<select value={state} disabled={busy} onChange={(e) => openBatch(batchId, 1, e.target.value)}>
           {states.map((value) => <option key={value} value={value}>{t(`batchState_${value}`)}</option>)}
         </select></label>
