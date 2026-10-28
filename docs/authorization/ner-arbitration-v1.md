@@ -153,6 +153,31 @@ Biome check found formatting/style diagnostics in shared existing files; baselin
 stdin checks also fail. That broad check is not reported as passing. New NER
 files pass their scoped Biome check; this patch avoids a broad legacy reformat.
 
+## PR #121 review follow-up
+
+The review reproduced retained-form races in the NER adapter: a paired read
+could return a consistent new viewer or input-set hash while keeping the prior
+winner/reason. A read refresh after an identity change could also leave the old
+unknown command available. Bind NER read state to the last accepted viewer;
+clear pending intents, saved confirmations and form inputs when it changes.
+Retained pair inputs additionally require the same arbitration/input/viewer.
+Reject the changed read and require an explicit fresh read before new actions.
+Generation checks continue to discard late responses. The classification path
+keeps its existing contract, including saved facts after a same-identity read
+failure.
+
+Two new paired-read negative cases failed before the fix; all three added NER
+boundary cases and the seven shared frontend suites now pass (122 tests total,
+18 in NER arbitration). An additional real API Token test confirms role and
+object filtering, Manager adoption denial and revocation denying both detail
+reads and original-key decision recovery. Local Token verification passed;
+PostgreSQL and bilingual browser acceptance are revalidated by the PR CI on the
+new head. No database schema, SET_NULL policy, source selection, budget, metric,
+review, sampling or release contract changed in this follow-up.
+
+Review receipts are kept separately in
+`C:/Users/Henry/.codex/reports/ls81-ner-arbitration-review121-20261029/`.
+
 ## Retained runtime boundary
 
 Only this worktree and this report's synthetic native test resources are used.

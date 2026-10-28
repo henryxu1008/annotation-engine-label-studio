@@ -1187,4 +1187,7 @@ independent of classification records. Nullable user links support SET_NULL;
 only frozen IDs and current authoritative membership determine access.
 The feature stays disabled by default. Local acceptance uses disposable native
 PostgreSQL and synthetic browser fixtures, never retained Docker/#76 resources.
+NER client reads bind retained inputs to the accepted viewer and frozen input
+set. A changed viewer scrubs old forms, saved confirmations and pending commands;
+same-identity read failures still preserve an acknowledged save fact.
 #81/#84 remain open; current metrics, review, sampling and release stay unchanged.

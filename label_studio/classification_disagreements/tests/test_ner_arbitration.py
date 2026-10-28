@@ -530,3 +530,27 @@ class TestNerArbitration(APITestCase):
             self.command(row, key=key, expected=409)
         self.assertFalse(NerArbitrationDecision.objects.exists())
         self.command(row, key=key)
+
+    def test_real_api_tokens_keep_roles_scope_and_current_revocation(self):
+        row = self.dispatch()[0].data
+        self.org.jwt.legacy_api_tokens_enabled = True
+        self.org.jwt.save(update_fields=['legacy_api_tokens_enabled'])
+        self.client.force_authenticate(None)
+        for actor in (self.worker, self.reviewer):
+            self.client.credentials(HTTP_AUTHORIZATION=f'Token {actor.get_token().key}')
+            self.assertIn(self.detail(row).status_code, (403, 404))
+            listing = self.client.get(self.arb_base)
+            if actor == self.reviewer:
+                self.assertEqual(listing.status_code, 200, listing.data)
+                self.assertEqual(listing.data['count'], 0)
+            else:
+                self.assertIn(listing.status_code, (403, 404))
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {self.manager.get_token().key}')
+        self.command(row, expected=404)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {self.independent.get_token().key}')
+        self.assertEqual(self.detail(row).status_code, 200)
+        _, body, key = self.command(row)
+        ProjectMember.objects.filter(project=self.project, user=self.independent).update(enabled=False)
+        with patch.object(ner_api, 'load', side_effect=AssertionError('Revoked token cannot hydrate')):
+            self.assertIn(self.detail(row).status_code, (403, 404))
+            self.command(row, key=key, body=body, expected=404)

@@ -70,6 +70,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const t = (key, args) => translate(adapter?.messages?.[key] ?? key, args);
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), selected = useRef(null), heading = useRef(null);
+  const viewer = useRef(null);
   const handoffId = useRef(initialHandoffId);
   const [handoffContext, setHandoffContext] = useState(null), [handoffDetail, setHandoffDetail] = useState(null);
   const [view, setView] = useState(initialOrigin ? "create" : "list"), [busy, setBusy] = useState(false);
@@ -89,6 +90,21 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     }
     return adapter ? adapter.parse(method, r, { projectId, ...params, body }) : schema.parse(r);
   };
+  const forgetIdentity = (hash) => {
+    viewer.current = hash; pending.current = null;
+    setUnknown(false); setSaved(null); setWinner(""); setReason("");
+  };
+  const readCapability = async (current) => {
+    const capability = await fetch("classificationArbitrationCapability", {}, capsSchema);
+    if (adapter && current()) {
+      if (viewer.current && viewer.current !== capability.viewer_hash) {
+        forgetIdentity(capability.viewer_hash);
+        throw new Error("identity changed");
+      }
+      viewer.current = capability.viewer_hash;
+    }
+    return capability;
+  };
   const read = async (work) => {
     const current = ++generation.current;
     clear(); setBusy(true); setError("");
@@ -99,7 +115,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const loadList = (targetPage = 1, targetFilter = filter) => {
     setView("list"); setPage(targetPage); setFilter(targetFilter);
     return read(async (current) => {
-      const [capability, rows] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
+      const [capability, rows] = await Promise.all([readCapability(current),
         fetch("classificationArbitrations", { page: targetPage, state: targetFilter }, listSchema)]);
       if (!capability.can_read || capability.viewer_hash !== rows.viewer_hash
         || rows.results.some((row) => row.viewer_hash !== rows.viewer_hash)) throw new Error("read permission changed");
@@ -107,12 +123,17 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     });
   };
   const openTask = (identifier, pair = null, retainInputs = false) => {
+    const retained = adapter && retainInputs && data ? { id: data.id, input: data.input_set_hash, viewer: data.viewer_hash } : null;
     selected.current = identifier; setView("detail");
     if (!retainInputs) { setWinner(""); setReason(""); }
     return read(async (current) => {
-      const [capability, detail] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
+      const [capability, detail] = await Promise.all([readCapability(current),
         fetch("classificationArbitrationDetail", { arbitration: identifier, ...(pair ? { left: pair[0], right: pair[1] } : {}) }, detailSchema)]);
       if (!capability.can_read || capability.viewer_hash !== detail.viewer_hash || detail.id !== identifier) throw new Error("scope changed");
+      if (retained && (retained.id !== detail.id || retained.input !== detail.input_set_hash || retained.viewer !== detail.viewer_hash)) {
+        if (current()) { setWinner(""); setReason(""); }
+        throw new Error("retained input changed");
+      }
       let provenance = null;
       if (handoffSource) {
         provenance = await fetch("reviewHandoffDetail", { batch: handoffSource.batch, handoff: handoffId.current }, handoffDetailSchema);
@@ -130,7 +151,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const loadOrigin = (targetPage = 1) => {
     setView("create"); setRosterPage(targetPage); setAssignee("");
     return read(async (current) => {
-      const capability = await fetch("classificationArbitrationCapability", {}, capsSchema);
+      const capability = await readCapability(current);
       let origin = initialOrigin, context = null;
       if (handoffSource) {
         context = await fetch("reviewHandoffContext", { batch: handoffSource.batch, source: handoffSource.source }, handoffContextSchema);
@@ -154,6 +175,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     });
   };
   useEffect(() => {
+    viewer.current = null;
     pending.current = null; selected.current = null; setUnknown(false); setSaved(null); setWinner(""); setReason("");
     handoffId.current = initialHandoffId;
     initialTaskId ? openTask(initialTaskId) : initialOrigin || handoffSource ? loadOrigin() : loadList(1, "pending");
@@ -175,7 +197,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
         const authority = await fetch("classificationArbitrationCapability", {}, capsSchema);
         if (current !== generation.current) return;
         if (authority.viewer_hash !== intent.viewerHash || authority.actor_id !== intent.actorId) {
-          pending.current = null; setUnknown(false); throw Object.assign(new Error("identity changed"), { identityChanged: true });
+          forgetIdentity(authority.viewer_hash); throw Object.assign(new Error("identity changed"), { identityChanged: true });
         }
         if (!authority[{ create: "can_create", decision: "can_decide", cancel: "can_cancel" }[intent.action]]) throw new Error("authority withdrawn");
       }

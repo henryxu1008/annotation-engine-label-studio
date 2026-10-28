@@ -140,6 +140,24 @@ const receipt = (action, options) => ({
   status_at_commit: action === "create" ? "pending" : state,
   version_at_commit: action === "create" ? 1 : 2,
 });
+
+const three = (pair = [11, 12]) => ({
+  ...detail(),
+  inputs: [...pins, { ...pins[1], submission_id: 13, assignment_id: 13, assignee_id: 43, submitter_id: 43 }],
+  frozen_counts: { ...detail().frozen_counts, input_count: 3, total_pairs: 3, comparable_pairs: 3 },
+  comparison: {
+    ...comparison,
+    input_count: 3,
+    total_pairs: 3,
+    comparable_pairs: 3,
+    pairs: [
+      [11, 12],
+      [11, 13],
+      [12, 13],
+    ].map(([left, right]) => ({ ...comparison.pairs[0], left, right })),
+    selected_pair: { ...comparison.selected_pair, left: pair[0], right: pair[1] },
+  },
+});
 const respond = async (method, options) => {
   switch (method) {
     case "nerArbitrationCapability":
@@ -375,23 +393,6 @@ it("requires the current identity before posting a recovered command", async () 
 
 it("loads a verified pair containing a third winner before adoption", async () => {
   let release;
-  const three = (pair = [11, 12]) => ({
-    ...detail(),
-    inputs: [...pins, { ...pins[1], submission_id: 13, assignment_id: 13, assignee_id: 43, submitter_id: 43 }],
-    frozen_counts: { ...detail().frozen_counts, input_count: 3, total_pairs: 3, comparable_pairs: 3 },
-    comparison: {
-      ...comparison,
-      input_count: 3,
-      total_pairs: 3,
-      comparable_pairs: 3,
-      pairs: [
-        [11, 12],
-        [11, 13],
-        [12, 13],
-      ].map(([left, right]) => ({ ...comparison.pairs[0], left, right })),
-      selected_pair: { ...comparison.selected_pair, left: pair[0], right: pair[1] },
-    },
-  });
   mockCall.mockImplementation((m, o) => {
     if (m !== "nerArbitrationDetail") return respond(m, o);
     if (o.params.left)
@@ -413,6 +414,59 @@ it("loads a verified pair containing a third winner before adoption", async () =
   expect(screen.getByRole("button", { name: "Adopt this frozen revision" }).disabled).toBe(false);
   const read = mockCall.mock.calls.filter(([m]) => m === "nerArbitrationDetail").at(-1)[1];
   expect([read.params.left, read.params.right]).toEqual([11, 13]);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it.each(["identity", "input"])("discards retained form inputs when paired reads change %s", async (boundary) => {
+  let changed = false;
+  mockCall.mockImplementation(async (method, options) => {
+    if (method === "nerArbitrationCapability")
+      return { ...cap(), ...(changed && boundary === "identity" ? { viewer_hash: h("f") } : {}) };
+    if (method === "nerArbitrationDetail")
+      return {
+        ...three(options.params.left ? [options.params.left, options.params.right] : undefined),
+        ...(changed ? { [boundary === "identity" ? "viewer_hash" : "input_set_hash"]: h("f") } : {}),
+      };
+    return respond(method, options);
+  });
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: /NER synthetic/ }));
+  await screen.findAllByRole("radio");
+  fireEvent.change(screen.getByLabelText("Decision or cancellation reason"), {
+    target: { value: "Prior identity's private reason" },
+  });
+  changed = true;
+  fireEvent.click(screen.getAllByRole("radio")[2]);
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("ner-left-text")).toBeNull();
+  expect(screen.queryByDisplayValue("Prior identity's private reason")).toBeNull();
+  expect(mockCall.mock.calls.some(([method]) => method === "resolveNerArbitration")).toBe(false);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it("drops the prior identity's unknown command on read refresh", async () => {
+  let changed = false;
+  mockCall.mockImplementation(async (method, options) => {
+    if (method === "resolveNerArbitration") throw new Error("unknown commit result");
+    const value = await respond(method, options);
+    return changed ? { ...value, viewer_hash: h("f") } : value;
+  });
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: /NER synthetic/ }));
+  fireEvent.click((await screen.findAllByRole("radio"))[0]);
+  fireEvent.change(screen.getByLabelText("Decision or cancellation reason"), {
+    target: { value: "Prior identity's reason" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Adopt this frozen revision" }));
+  await screen.findByRole("button", { name: "Recover original command" });
+  changed = true;
+  fireEvent.click(screen.getByRole("button", { name: "Refresh read-only view" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "Recover original command" })).toBeNull();
+  expect(screen.queryByTestId("ner-left-text")).toBeNull();
+  expect(mockCall.mock.calls.filter(([method]) => method === "resolveNerArbitration")).toHaveLength(1);
   view.unmount();
   view.runtime.destroy();
 });
