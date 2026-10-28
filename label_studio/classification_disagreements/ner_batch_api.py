@@ -65,10 +65,12 @@ class BatchAPI(ner_api.NerAPI):
 
         def verify():
             current = self.recheck(request, pk, initial)
-            fresh, values = materialize(current)
+            # Keep the second counter pass on pinned evidence and the final
+            # source replay after all scoring, without a third hydration pass.
+            b.check_engine(prepared)
+            fresh, _ = materialize(current)
             if fresh != data:
                 b.fail('READ_CHANGED')
-            b.check_engine(values)
             self.recheck(request, pk, initial)
 
         return self.respond(request, {**data, 'observed_at': timezone.now().isoformat()},

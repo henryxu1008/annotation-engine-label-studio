@@ -40,6 +40,8 @@ describe('single frozen NER batch quality overview', () => {
       cy.get('[data-testid="ner-quality-summary"]').should('contain.text','58.33%').and('contain.text','66.67%');
       overview().find(`[data-quality-actor="${fixture.users.a.id}"]`).should('contain.text','62.50%');
       overview().should('contain.text',zh?'双方均无实体':'Both sides have no entities');
+      cy.get('[data-testid="ner-quality-task-reasons"]').should('contain.text',zh?'冻结不可比较任务原因':'Frozen unavailable task reasons');
+      cy.get('[data-testid="ner-quality-pair-reasons"]').should('contain.text',zh?'冻结无分数配对原因':'Frozen undefined pair reasons');
       cy.screenshot(`ner-quality-overview-${locale}`,{capture:'fullPage'});
 
       // A separate frozen batch proves real 52-person pagination without changing the main denominator.

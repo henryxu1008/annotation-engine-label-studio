@@ -292,6 +292,8 @@
   "nerQualityChanged": "The frozen context changed during verification. Scores are hidden; reopen the same batch to check its context.",
   "nerQualityUnavailable": "The NER comparison service is unavailable. Overview scores are hidden; no substitute score is used.",
   "nerQualityReasonCount": "{{reason}} × {{count}}",
+  "nerQualityTaskReasons": "Frozen unavailable task reasons: {{reasons}}",
+  "nerQualityPairReasons": "Frozen undefined pair reasons: {{reasons}}",
   "nerBatchTitle": "Frozen NER queue",
   "nerBatchBoundary": "Freeze the latest revision of each active assignment in an explicit task scope. Only an analysis batch is created; this does not approve, arbitrate, or change sampling.",
   "nerBatchLimits": "Choose up to 100 tasks and 20 independent participants per task. The whole batch must fit the comparison budget; reduce the task scope if it is too large.",

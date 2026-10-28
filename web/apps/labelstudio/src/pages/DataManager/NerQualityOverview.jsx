@@ -137,7 +137,10 @@ export const NerQualityOverview = ({ projectId, batch, navigation, onOpenTask })
       <h4>{t("nerQualityTitle")}</h4><p>{t("nerQualityBoundary")}</p>
       {shown.scope.visibility === "visible_subset" && <p>{t("batchVisibleSubset")}</p>}
       <p>{t("qualityCounts", shown.scope_counts)}</p><p>{t("nerQualityPairs", shown.scope_counts)}</p>
-      <p>{explain(shown.scope_counts.unavailable_reasons)}</p><p>{explain(shown.scope_counts.unavailable_pair_reasons)}</p>
+      {shown.scope_counts.unavailable_reasons.length > 0 && <p data-testid="ner-quality-task-reasons">
+        {t("nerQualityTaskReasons", { reasons: explain(shown.scope_counts.unavailable_reasons) })}</p>}
+      {shown.scope_counts.unavailable_pair_reasons.length > 0 && <p data-testid="ner-quality-pair-reasons">
+        {t("nerQualityPairReasons", { reasons: explain(shown.scope_counts.unavailable_pair_reasons) })}</p>}
       <p>{t("qualityRule", { rule: shown.rules.aggregation, time: shown.summarized_at ?? "—" })}</p>
       <p>{t("qualityTimes", { batch: shown.batch_calculated_at, observed: shown.observed_at })}</p>
       {shown.source_status !== "verified" ? <p role="status">{t("qualitySourceUnavailable")}</p> : <>

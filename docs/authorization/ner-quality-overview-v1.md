@@ -73,7 +73,12 @@ again. Do not truncate, sample, split or silently approximate fractions.
 
 Reuse NER's two-pass read and actual JSON render/representation guard. Materialize
 and bound all evidence before scoring; after rendering recheck identity, scope,
-flags/mode, READ_WORK, sources, complete result and counter agreement. Changes
+flags/mode, READ_WORK and counter agreement on the already bounded pinned input.
+Replay all sources and compare the complete result **after the last counter**,
+then recheck authority. This also applies to manual NER comparison and frozen
+batch GETs; scorer runtime must not hide a committed source change. Two source
+materializations and exactly 2Q counter calls remain; a concurrent failure can
+consume both bounded counter passes before final replay rejects it. Changes
 discard the response. Use private/no-store and no-referrer. GET writes no business
 data. Existing create/original-key recovery still precedes source/processing-budget
 reevaluation and is independent of overview reads.
@@ -90,7 +95,10 @@ Tests cover exact task/peer weights, mixed double-empty pairs, missing versus
 empty, frozen replay/restoration, permission/source failures, original-key
 recovery, actual 380-call limits, budgets and write-free reads. Independent
 PostgreSQL connections interleave revocation, operation withdrawal, source
-deletion/corruption and assignment rebinding after actual rendering. Bilingual
+deletion/corruption and assignment rebinding after actual rendering and during
+the last counter, including a legitimate new revision, budget growth and exact
+call cost across the three NER read paths. Task and pair reason counts have
+distinct localized unit labels. Bilingual
 browser journeys use fresh synthetic databases, real Fork/Nginx, 52-person
 pagination, immutable replay, real source-growth budget denial, restoration,
 self exclusion, revocation and late responses. Test definitions are not results;

@@ -61,10 +61,12 @@ class OverviewAPI(BatchAPI):
 
         def verify():
             current = self.recheck(request, pk, initial)
-            fresh, values = materialize(current)
+            # Score only the already bounded, pinned evidence. Replay sources
+            # after the last scorer so its runtime cannot hide a committed change.
+            batches.check_engine(prepared)
+            fresh, _ = materialize(current)
             if fresh != data:
                 overview.reject('READ_CHANGED')
-            batches.check_engine(values)
             self.recheck(request, pk, initial)
 
         return self.respond(request, body, verify, lambda: batches.check_engine(prepared))

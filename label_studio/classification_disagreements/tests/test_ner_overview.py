@@ -311,3 +311,17 @@ class TestNerOverview(APITestCase):
             return value
         with patch.object(Response, 'render', mutate):
             self.assertEqual(self.read().status_code, 409)
+
+    def test_source_change_during_last_counter_cannot_return_verified_scores(self):
+        evaluator, calls = ner.Evaluator, 0
+        def interleave(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                Submission.objects.filter(pk=self.first.pk).update(result_hash='0'*64)
+            return evaluator(*args, **kwargs)
+        with patch.object(ner, 'Evaluator', side_effect=interleave):
+            response = self.read()
+        self.assertEqual(calls, 2)
+        self.assertEqual(response.status_code, 409)
+        self.assertNotIn('summary', response.data)

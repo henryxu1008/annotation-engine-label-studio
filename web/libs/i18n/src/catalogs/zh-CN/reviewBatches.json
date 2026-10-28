@@ -292,6 +292,8 @@
   "nerQualityChanged": "核验期间冻结上下文发生变化，分数已隐藏；请重新打开同一批次核对上下文。",
   "nerQualityUnavailable": "NER 对比服务当前不可用，概览分数已隐藏，不使用替代分数。",
   "nerQualityReasonCount": "{{reason}} × {{count}}",
+  "nerQualityTaskReasons": "冻结不可比较任务原因：{{reasons}}",
+  "nerQualityPairReasons": "冻结无分数配对原因：{{reasons}}",
   "nerBatchTitle": "NER 冻结分歧队列",
   "nerBatchBoundary": "在明确的任务范围内冻结每份有效分配的最新修订。仅创建分析批次，不批准、不仲裁，也不改变抽样。",
   "nerBatchLimits": "最多选择 100 个任务、每任务 20 位独立参与者。整批须满足对比预算；超限时请明确缩小任务范围。",

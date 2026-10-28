@@ -1164,5 +1164,9 @@ never fall back to classification APIs or extend old manifests. Preserve current
 READ_WORK/self-cohort filtering, two-pass whole-batch byte/work/scorer budgets,
 old key recovery and all metric/review/arbitration/sampling semantics. No
 new business writes, migration or retained runtime activation are introduced.
+For overview, batch and manual NER GETs, run both counter passes on bounded
+pinned input before final source replay and authority checks; this closes source
+changes committed during the last scorer without a third hydration or counter
+pass. Preserve independent PostgreSQL regressions at that boundary on upgrades.
 #81/#84 stay open; Host/Core/deployment and retained Docker/#76 remain excluded.
 Preserve old/new CHANGED, cause UNKNOWN and the incomplete full database check.

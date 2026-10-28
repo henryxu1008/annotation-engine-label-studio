@@ -24,9 +24,9 @@ const response = () => ({schema:"ner-quality-overview/v1",rules:{aggregation:"ne
   summary:{task_coverage:f(1,2),pair_coverage:f(2,3),strict_f1:f(7,12),agreement_tasks:1,disagreement_tasks:1},
   annotators:[person(11),person(12)],pagination:{count:2,page:1,page_size:50,next_page:null,previous_page:null},
   frozen:"ner-overview-receipt",result_hash:h("d"),receipt_verified:true,batch_calculated_at:"batch-time",summarized_at:"first-time",observed_at:"now"});
-const mount = (locale="en-US",navigation={current:{}}) => {
+const mount = (locale="en-US",navigation={current:{}},currentBatch=batch) => {
   const runtime=createLocaleRuntime(locale),Provider=runtime.provider,onOpenTask=jest.fn();
-  const props={projectId:4,batch,navigation,onOpenTask};
+  const props={projectId:4,batch:currentBatch,navigation,onOpenTask};
   return {...render(<Provider><NerQualityOverview {...props}/></Provider>),runtime,Provider,props};
 };
 beforeEach(()=>mockCallApi.mockReset().mockResolvedValue(response()));
@@ -55,6 +55,27 @@ it("masks the whole overview on source failure, retains the old receipt and reco
   expect(v.props.navigation.current.frozen).toBe("ner-overview-receipt");
   mockCallApi.mockResolvedValue(response());fireEvent.click(screen.getByTestId("ner-quality-read"));await screen.findByTestId("ner-quality-summary");
   expect(mockCallApi.mock.calls[2][1].params.frozen).toBe("ner-overview-receipt");v.unmount();v.runtime.destroy();
+});
+
+it.each(["en-US","zh-CN"])("labels unavailable tasks and undefined pairs with distinct units in %s",async(locale)=>{
+  const data=response();
+  data.scope_counts={tasks:1,comparable_tasks:0,unavailable_tasks:1,unavailable_reasons:[{reason:"no_entities",count:1}],
+    total_pairs:190,comparable_pairs:0,unavailable_pairs:190,unavailable_pair_reasons:[{reason:"no_entities",count:190}]};
+  data.summary={task_coverage:f(0),pair_coverage:f(0),strict_f1:null,agreement_tasks:0,disagreement_tasks:0};
+  data.availability="unavailable";data.reason="no_comparable_tasks";
+  data.annotators=Array.from({length:20},(_,index)=>({actor_id:index+1,tasks:1,comparable_tasks:0,unavailable_tasks:1,
+    peer_pairs:19,comparable_peer_pairs:0,unavailable_peer_pairs:19,task_ids:[8],task_coverage:f(0),pair_coverage:f(0),strict_f1:null,
+    unavailable_reasons:[{reason:"no_entities",count:1}],unavailable_peer_pair_reasons:[{reason:"no_entities",count:19}]}));
+  data.pagination.count=20;
+  mockCallApi.mockResolvedValue(data);const v=mount(locale,undefined,{...batch,visible_task_count:1});
+  fireEvent.click(screen.getByTestId("ner-quality-read"));
+  const taskReasons=await screen.findByTestId("ner-quality-task-reasons");
+  const pairReasons=screen.getByTestId("ner-quality-pair-reasons");
+  expect(taskReasons.textContent).toContain(locale==="zh-CN"?"冻结不可比较任务原因":"Frozen unavailable task reasons");
+  expect(pairReasons.textContent).toContain(locale==="zh-CN"?"冻结无分数配对原因":"Frozen undefined pair reasons");
+  expect(taskReasons.textContent).toMatch(/× 1$/);expect(pairReasons.textContent).toMatch(/× 190$/);
+  expect(screen.getByTestId("ner-quality-summary").textContent).not.toContain("100.00%");
+  v.unmount();v.runtime.destroy();
 });
 
 it.each(["viewer","pairs","coverage","person","schema","source","receipt"])("rejects mismatched %s without displaying evidence",async(kind)=>{
