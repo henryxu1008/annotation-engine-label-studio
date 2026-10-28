@@ -3,7 +3,8 @@
 Implemented on `codex/issue81-ner-arbitration`, based on main merge
 `3001f8f3618100ec737c33d713c78f9d02a25407` (PR #120).
 The [confirmed design](ner-arbitration-v1-design.md) defines the full contract.
-This patch remains local; publishing and GitHub CI acceptance are separate steps.
+Local acceptance was completed before publication. GitHub CI acceptance is
+recorded separately against the PR's final head commit.
 
 ## Product behavior
 
