@@ -1170,3 +1170,21 @@ changes committed during the last scorer without a third hydration or counter
 pass. Preserve independent PostgreSQL regressions at that boundary on upgrades.
 #81/#84 stay open; Host/Core/deployment and retained Docker/#76 remain excluded.
 Preserve old/new CHANGED, cause UNKNOWN and the incomplete full database check.
+
+### NER frozen-revision arbitration (#81)
+
+See the [confirmed NER arbitration design](ner-arbitration-v1-design.md) and
+[implementation and acceptance record](ner-arbitration-v1.md).
+Reuse the existing lifecycle, transaction/CAS/receipt patterns and complete UI
+flow through an explicit NER adapter, while keeping classification provenance,
+APIs, operations and records independent. NER-specific operations and
+default-off gates authorize only whole frozen-revision adoption by the assigned
+independent Reviewer. The design separates the full-source-batch fixed V1 safety
+envelope from current whole-target-cohort processing budgets and actual scorer
+cost, without processing hidden tasks or changing old batch-read budgets. It preserves source-free cancellation
+and original-key metadata recovery. New tables and database guards remain
+independent of classification records. Nullable user links support SET_NULL;
+only frozen IDs and current authoritative membership determine access.
+The feature stays disabled by default. Local acceptance uses disposable native
+PostgreSQL and synthetic browser fixtures, never retained Docker/#76 resources.
+#81/#84 remain open; current metrics, review, sampling and release stay unchanged.

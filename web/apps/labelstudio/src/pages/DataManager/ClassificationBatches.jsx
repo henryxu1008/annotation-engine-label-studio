@@ -191,6 +191,9 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
     finally { if (current === generation.current) setBusy(false); }
   };
   const refresh = () => view === "detail" && batchId ? openBatch(batchId, page, state) : loadList(page);
+  if (view === "arbitration" && answer && adapter?.renderArbitration) return adapter.renderArbitration({
+    projectId, answer, onBack: () => { setView("detail"); showItem(answer.item.task_id); }
+  });
   const report = answer ? { ...answer.item, manifest_hash: answer.manifest_hash ?? answer.projection_hash,
     observed_at: answer.observed_at, manifest: { inputs: answer.item.inputs, rule: answer.rule, calculated_at: answer.calculated_at } } : null;
   return <section ref={root} className="review-batches classification-batches" data-testid={adapter?.testId ?? "classification-batches"} aria-busy={busy}>
@@ -232,7 +235,8 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
       <Button disabled={busy} onClick={() => loadList()}>{t("batchBackList")}</Button>
       {answer ? <>
         <Button onClick={() => openBatch(batchId, page, state)}>{t("batchBackQueue")}</Button>
-        {adapter ? adapter.renderItem({ answer, busy, onSelectPair: (pair) => showItem(answer.item.task_id, { left: pair[0], right: pair[1] }) }) : <>
+        {adapter ? adapter.renderItem({ answer, busy, projectId,
+          onOpenArbitration: () => { generation.current++; setView("arbitration"); }, onSelectPair: (pair) => showItem(answer.item.task_id, { left: pair[0], right: pair[1] }) }) : <>
         <ClassificationPartial projectId={projectId} taskId={answer.item.task_id} batchId={answer.id}
           enabled={answer.can_explain_partial === true} report={report}
           onFailure={() => { generation.current += 1; clear(); setBusy(false); setError(true); }}>

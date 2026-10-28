@@ -64,9 +64,10 @@ export const ClassificationArbitrationEntry = ({ projectId, onOpen, disabled, di
     {t(dispatch ? "arbitrationDispatch" : "arbitrationTitle")}</Button> : null;
 };
 
-export const ClassificationArbitrations = ({ projectId, initialOrigin = null, handoffSource = null,
+export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, handoffSource = null, adapter = null, onBackToSource = null,
   initialTaskId = null, initialHandoffId = null, onBackToReview = null }) => {
-  const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
+  const { t: translate } = useLocaleTranslation("reviewBatches"), api = useAPI();
+  const t = (key, args) => translate(adapter?.messages?.[key] ?? key, args);
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), selected = useRef(null), heading = useRef(null);
   const handoffId = useRef(initialHandoffId);
@@ -78,13 +79,15 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
   const [assignee, setAssignee] = useState(""), [winner, setWinner] = useState(""), [reason, setReason] = useState("");
   const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); };
   const fetch = async (method, params, schema, body, headers) => {
-    const r = await call.current(method, { params: { pk: projectId, ...params }, body, headers, errorFilter: () => true });
+    const mapped = adapter ? adapter.request(method, params, body) : { method, params, body };
+    if (!mapped.method) throw new Error("Unsupported arbitration transport");
+    const r = await call.current(mapped.method, { params: { pk: projectId, ...mapped.params }, body: mapped.body, headers, errorFilter: () => true });
     if (failed(r)) {
       const e = new Error("unavailable"), code = r?.response?.display_context?.reason;
-      e.rejected = r?.$meta?.ok === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(rejected, code) && rejected[code] === r.$meta.status;
+      e.rejected = r?.$meta?.ok === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(adapter?.rejected ?? rejected, code) && (adapter?.rejected ?? rejected)[code] === r.$meta.status;
       throw e;
     }
-    return schema.parse(r);
+    return adapter ? adapter.parse(method, r, { projectId, ...params, body }) : schema.parse(r);
   };
   const read = async (work) => {
     const current = ++generation.current;
@@ -103,11 +106,12 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
       if (current()) { setCaps(capability); setList(rows); }
     });
   };
-  const openTask = (identifier) => {
-    selected.current = identifier; setView("detail"); setWinner(""); setReason("");
+  const openTask = (identifier, pair = null, retainInputs = false) => {
+    selected.current = identifier; setView("detail");
+    if (!retainInputs) { setWinner(""); setReason(""); }
     return read(async (current) => {
       const [capability, detail] = await Promise.all([fetch("classificationArbitrationCapability", {}, capsSchema),
-        fetch("classificationArbitrationDetail", { arbitration: identifier }, detailSchema)]);
+        fetch("classificationArbitrationDetail", { arbitration: identifier, ...(pair ? { left: pair[0], right: pair[1] } : {}) }, detailSchema)]);
       if (!capability.can_read || capability.viewer_hash !== detail.viewer_hash || detail.id !== identifier) throw new Error("scope changed");
       let provenance = null;
       if (handoffSource) {
@@ -167,6 +171,14 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
     const current = ++generation.current;
     clear(); setBusy(true); setError("");
     try {
+      if (adapter) {
+        const authority = await fetch("classificationArbitrationCapability", {}, capsSchema);
+        if (current !== generation.current) return;
+        if (authority.viewer_hash !== intent.viewerHash || authority.actor_id !== intent.actorId) {
+          pending.current = null; setUnknown(false); throw Object.assign(new Error("identity changed"), { identityChanged: true });
+        }
+        if (!authority[{ create: "can_create", decision: "can_decide", cancel: "can_cancel" }[intent.action]]) throw new Error("authority withdrawn");
+      }
       if (intent.action === "handoff") {
         const result = await fetch("createReviewHandoff", { batch: handoffSource.batch, source: handoffSource.source },
           handoffReceiptSchema, intent.body, { "Idempotency-Key": intent.key });
@@ -194,25 +206,29 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
           || result.assignee_id !== intent.body.assignee_id || result.origin_manifest_hash !== intent.body.expected_manifest_hash
           || result.input_set_hash !== intent.inputHash))
         || (intent.action === "decision" && result.winner_submission_id !== intent.body.winner_submission_id)) throw new Error("acknowledgement changed");
+      adapter?.validateAcknowledgement(result, intent);
       pending.current = null; setUnknown(false); setSaved({ action: intent.action, id: result.id });
       await openTask(result.id);
     } catch (e) {
       if (current === generation.current) {
-        if (!recovering && e?.rejected === true) { pending.current = null; setUnknown(false); setError("arbitrationRejected"); }
+        if (e?.identityChanged) { setError("arbitrationReadFailed"); }
+        else if (!recovering && e?.rejected === true) { pending.current = null; setUnknown(false); setError("arbitrationRejected"); }
         else { setUnknown(true); setError("arbitrationReadFailed"); }
       }
     } finally { if (current === generation.current) setBusy(false); }
   };
   const begin = (action, body, identifier = null) => {
     if (busy || unknown || pending.current) return;
-    send({ action, body, identifier, key: uuidv4(), attempted: false, inputHash: roster?.input_set_hash, viewerHash: handoffContext?.viewer_hash });
+    send({ action, body, identifier, key: uuidv4(), attempted: false, inputHash: action === "create" ? roster?.input_set_hash : data?.input_set_hash,
+      projectId, viewerHash: adapter ? caps?.viewer_hash : handoffContext?.viewer_hash, actorId: caps?.actor_id,
+      winnerRevision: data?.inputs?.find((p) => p.submission_id === body.winner_submission_id)?.revision });
   };
   const beginHandoff = (binding) => begin("handoff", { mode: binding.arbitration_id ? "link_existing" : "dispatch",
     expected_plan_hash: handoffContext.expected_plan_hash, expected_input_set_hash: handoffContext.expected_input_set_hash, ...binding });
   const refresh = () => view === "create" ? loadOrigin(rosterPage) : view === "detail" && selected.current ? openTask(selected.current) : loadList(page);
   const report = data?.available ? { ...data.report, manifest_hash: data.input_set_hash, observed_at: data.observed_at,
     manifest: { inputs: data.report.inputs, rule: "classification-exact-sets/v1", calculated_at: data.calculated_at } } : null;
-  return <section className="review-batches classification-batches" data-testid="classification-arbitrations" aria-busy={busy}>
+  return <section className="review-batches classification-batches" data-testid={adapter?.testId ?? "classification-arbitrations"} aria-busy={busy}>
     <h3 ref={heading} tabIndex={-1}>{t("arbitrationTitle")}</h3>
     <p>{t("arbitrationBoundary")}</p>
     {busy && <p role="status">{t("classificationLoading")}</p>}
@@ -220,6 +236,7 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
     {saved && <p role="status" data-testid="arbitration-saved">{t(`arbitrationSaved_${saved.action}`, { id: saved.id })}</p>}
     {unknown && <p role="status">{t("arbitrationUnknown")} <Button disabled={busy} onClick={() => send()}>{t("arbitrationRecover")}</Button></p>}
     {!busy && <Button onClick={refresh}>{t("batchRefresh")}</Button>}
+    {onBackToSource && <Button disabled={busy || unknown} onClick={onBackToSource}>{t("batchBackQueue")}</Button>}
     {handoffSource ? <Button disabled={busy || unknown || !onBackToReview} onClick={onBackToReview}>{t("handoffBackHistory")}</Button>
       : view !== "list" && <Button disabled={busy || unknown} onClick={() => loadList(page)}>{t("arbitrationBack")}</Button>}
     {view === "list" && list && <>
@@ -254,23 +271,31 @@ export const ClassificationArbitrations = ({ projectId, initialOrigin = null, ha
         revision: data.decision.winner_revision, actor: data.decision.actor_id, time: data.decision.created_at })}: {data.decision.reason}</p>}
       {data.cancellation && <p>{t("arbitrationCancelled", { actor: data.cancellation.actor_id, time: data.cancellation.created_at })}: {data.cancellation.reason}</p>}
       {!data.available && <p role="status" data-testid="arbitration-unavailable">{t("arbitrationUnavailable")}</p>}
-      {data.available && <div data-testid="arbitration-text">{data.texts.map((text) => <section key={text.name}><h4>{text.name}</h4>
+      {!adapter && data.available && <div data-testid="arbitration-text">{data.texts.map((text) => <section key={text.name}><h4>{text.name}</h4>
         <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{text.text}</pre></section>)}</div>}
       {caps?.can_decide && data.can_decide && data.available && <fieldset disabled={busy || unknown}>
         <legend>{t("arbitrationChooseWinner")}</legend>
-        {data.report.inputs.map((source) => <label key={source.submission_id} style={{ display: "block" }}>
+        {adapter ? adapter.renderChoices({ data, winner, onChoose: (value) => {
+          setWinner(String(value));
+          const pair = adapter.pairForWinner(data, value);
+          if (pair) openTask(data.id, pair, true);
+        } }) : data.report.inputs.map((source) => <label key={source.submission_id} style={{ display: "block" }}>
           <input type="radio" name="arbitration-winner" value={source.submission_id} checked={winner === String(source.submission_id)} onChange={(e) => setWinner(e.target.value)} />
           {t("classificationSource", { id: source.submission_id, revision: source.revision, actor: source.submitter_id ?? "—" })}: {data.report.locations.map((location) => `${location.from_name}: ${location.values.find((v) => v.submission_id === source.submission_id)?.choices.join(", ") ?? ""}`).join("; ")}
         </label>)}
         <label>{t("arbitrationReason")}<textarea maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-        <Button disabled={!winner || !reason.trim()} onClick={() => begin("decision", { expected_version: data.version,
+        <Button disabled={!winner || !reason.trim() || (adapter && !adapter.canAdopt(data, Number(winner)))} onClick={() => begin("decision", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, winner_submission_id: Number(winner), reason }, data.id)}>{t("arbitrationAdopt")}</Button>
       </fieldset>}
       {caps?.can_cancel && data.can_cancel && <fieldset disabled={busy || unknown}><legend>{t("arbitrationCancel")}</legend>
         <label>{t("arbitrationReason")}<textarea maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         <Button disabled={!reason.trim()} onClick={() => begin("cancel", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, reason }, data.id)}>{t("arbitrationConfirmCancel")}</Button></fieldset>}
-      {report && <details><summary>{t("arbitrationEvidence")}</summary><ClassificationResult report={report} durable /></details>}
+      {adapter && data.available && adapter.renderEvidence({ data, busy,
+        onSelectPair: (pair) => openTask(data.id, pair, true) })}
+      {!adapter && report && <details><summary>{t("arbitrationEvidence")}</summary><ClassificationResult report={report} durable /></details>}
     </>}
   </section>;
 };
+
+export const ClassificationArbitrations = (props) => <FrozenArbitrationWorkspace {...props} />;
