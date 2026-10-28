@@ -24,6 +24,9 @@ env:
 jobs:
   commit-feature-flags:
     name: "Commit Feature Flags"
+    # Upstream-owned sync: reject forks before checkout, secrets, or any side effects.
+    # Reusable workflows use the caller's github.repository context.
+    if: ${{ github.repository == 'HumanSignal/label-studio' }}
 
     runs-on: ubuntu-latest
     steps:
