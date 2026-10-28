@@ -152,7 +152,9 @@ class TestNerOverview(APITestCase):
         first = self.read().data
         Submission.objects.filter(pk=self.first.pk).update(result_hash='0'*64)
         for query in ({}, {'frozen': first['frozen']}):
-            response = self.read(**query)
+            with patch.object(ner, 'Evaluator', wraps=ner.Evaluator) as engine:
+                response = self.read(**query)
+            self.assertEqual(engine.call_count, 6)  # Two passes of the remaining verified triple.
             self.assertEqual(response.status_code, 200, response.data)
             data = response.data
             self.assertEqual(data['scope_counts'], first['scope_counts'])

@@ -55,7 +55,8 @@ export const NerQualityOverview = ({ projectId, batch, navigation, onOpenTask })
         ...(saved.frozen ? { frozen: saved.frozen } : {}) }, errorFilter: () => true });
       if (current !== generation.current) return;
       if (!raw || raw.error || raw.$meta?.ok === false || typeof raw.status === "number") {
-        setPhase((raw?.$meta?.status ?? raw?.status) === 422 ? "budget" : "failed"); return;
+        const status = raw?.$meta?.status ?? raw?.status;
+        setPhase(({ 401: "denied", 403: "denied", 404: "denied", 409: "changed", 422: "budget", 503: "unavailable" })[status] ?? "failed"); return;
       }
       const result = schema.parse(raw), s = result.scope, c = result.scope_counts;
       valid(s.project_id === projectId && s.batch_id === batch.id && s.reference_hash === reference
@@ -130,7 +131,8 @@ export const NerQualityOverview = ({ projectId, batch, navigation, onOpenTask })
       {navigation.current.frozen && <Button disabled={phase === "busy"} onClick={() => read(1, true)}>{t("qualityRegenerate")}</Button>}
     </div>
     {phase === "busy" && <p role="status">{t("classificationLoading")}</p>}
-    {(phase === "failed" || phase === "budget") && <p role="alert">{t(phase === "budget" ? "nerQualityBudget" : "qualityFailed")}</p>}
+    {["failed", "budget", "denied", "changed", "unavailable"].includes(phase) && <p role="alert">{t({ budget: "nerQualityBudget",
+      denied: "nerQualityDenied", changed: "nerQualityChanged", unavailable: "nerQualityUnavailable" }[phase] ?? "qualityFailed")}</p>}
     {shown && <>
       <h4>{t("nerQualityTitle")}</h4><p>{t("nerQualityBoundary")}</p>
       {shown.scope.visibility === "visible_subset" && <p>{t("batchVisibleSubset")}</p>}
