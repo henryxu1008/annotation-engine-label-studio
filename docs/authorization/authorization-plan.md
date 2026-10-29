@@ -1206,3 +1206,18 @@ validation. Old/default/classification plans and keys remain compatible.
 No NER-to-classification handoff, new review authority, second review, Host/Core
 or retained runtime activation is introduced. #81/#84 remain open and historical
 Docker/#76 CHANGED/UNKNOWN and incomplete database-comparison records remain.
+
+### Explicit frozen NER review handoff (#84)
+
+See [the NER handoff contract](ner-review-handoff-v1.md). Default-off typed routes
+and an independent NER association table reuse the existing complete handoff and
+NER arbitration lifecycles. Current Manager + READ_WORK +
+ORGANIZE_NER_ARBITRATION may explicitly dispatch or link only an exact selected
+frozen conflict that is still the latest pending review source. Full dual-origin
+validation, viewer/actor-bound ACKs, project-first atomicity, target CAS and
+separate parent/child UUID receipts are required. History is metadata with
+not_checked source integrity; source-free recovery remains distinct from fresh
+verification. One full target cohort costs 2Q <= 380 per verified request; context
+plus POST may cost 760. Classified and NER authority, decisions and reviews remain
+separate. #81/#84 stay open; Host/Core and retained Docker/#76 are not operated,
+and historical CHANGED/UNKNOWN/incomplete-comparison records are retained.

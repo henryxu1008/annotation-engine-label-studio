@@ -312,5 +312,8 @@
   "priorityType": "Conflict evidence type",
   "priorityClassification": "Text classification",
   "priorityNer": "NER",
-  "priorityNerProvenance": "Frozen NER evidence batch #{{id}}"
+  "priorityNerProvenance": "Frozen NER evidence batch #{{id}}",
+  "nerHandoffTitle": "NER review to arbitration",
+  "nerHandoffBoundary": "Explicitly dispatch or link an arbitration for this selected frozen NER conflict. Arbitration does not approve or reject the source review.",
+  "nerHandoffIntegrity": "This history contains frozen references only. Open the arbitration to verify current source evidence."
 }

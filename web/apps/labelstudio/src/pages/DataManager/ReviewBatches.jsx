@@ -76,6 +76,7 @@ export const ReviewBatches = ({ projectId }) => {
   const nerScope = useRef(false);
   const nerConfirmed = useRef(false);
   const [canReadHandoffs, setCanReadHandoffs] = useState(false), [handoff, setHandoff] = useState(null);
+  const [canReadNerHandoffs, setCanReadNerHandoffs] = useState(false);
   const handoffReturn = useRef(null);
   const [priorityChoice, setPriorityChoice] = useState(null);
   const [creationUnknown, setCreationUnknown] = useState(false);
@@ -113,7 +114,7 @@ export const ReviewBatches = ({ projectId }) => {
     const current = ++generation.current;
     returnFocus.current = false;
     selection.current = { id, projectId };
-    setSelectedBatchId(id); setFilter(targetFilter); setSavedReview(false); setProgressBusy(false); setCanReadHandoffs(false);
+    setSelectedBatchId(id); setFilter(targetFilter); setSavedReview(false); setProgressBusy(false); setCanReadHandoffs(false); setCanReadNerHandoffs(false);
     setBusy(true); setError(""); setDetail(null); setReviewing(false); setBatches([]); setComparison(null);
     try {
       const [list, capability, selected] = await Promise.all([
@@ -136,6 +137,7 @@ export const ReviewBatches = ({ projectId }) => {
       setCanCreate(capability.can_create === true);
       setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true);
       setCanReadHandoffs(capability.can_read_handoffs === true);
+      setCanReadNerHandoffs(capability.can_read_ner_handoffs === true);
       setPage(targetPage); setNext(Boolean(list.next)); setDetail(selected);
     } catch {
       if (current === generation.current) { setError("loadFailed"); setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
@@ -150,7 +152,7 @@ export const ReviewBatches = ({ projectId }) => {
     const request = ++progressGeneration.current;
     const isCurrent = () => current === generation.current && request === progressGeneration.current;
     setProgressBusy(true); setError(""); setComparison(null);
-    setCanReadHandoffs(false);
+    setCanReadHandoffs(false); setCanReadNerHandoffs(false);
     if (reviewSaved !== null) setSavedReview(reviewSaved);
     try {
       const [result, capability] = await Promise.all([
@@ -166,6 +168,7 @@ export const ReviewBatches = ({ projectId }) => {
       setCanCreate(capability.can_create === true);
       setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true);
       setCanReadHandoffs(capability.can_read_handoffs === true);
+      setCanReadNerHandoffs(capability.can_read_ner_handoffs === true);
     } catch {
       if (!isCurrent()) return;
       // A failed read cannot establish current authority. Keep only the retry context.
@@ -289,7 +292,7 @@ export const ReviewBatches = ({ projectId }) => {
       returnFocus.current = false; setComparison(null);
       setBusy(false); setProgressBusy(false); setDetail(null); setBatches([]); setReviewing(false);
       setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
-      setCanReadHandoffs(false);
+      setCanReadHandoffs(false); setCanReadNerHandoffs(false);
       if (!intent?.unknown) creation.current = null;
       setError(intent?.unknown ? "priorityUnknownWrite" : "loadFailed");
     };
@@ -424,16 +427,18 @@ export const ReviewBatches = ({ projectId }) => {
             {i.status === "rejected" && <Button disabled={controlsBusy} onClick={(event) => {
               comparisonTrigger.current = event.currentTarget; setComparison(i.submission_id);
             }}>{t("compareRework")}</Button>}
-            {canReadHandoffs && i.selected && i.priority_reason === "frozen_conflict"
-              && detail.algorithm === "classification-conflict-ranked/v1" && <Button data-handoff-source={i.submission_id}
+            {((canReadHandoffs && detail.algorithm === "classification-conflict-ranked/v1")
+              || (canReadNerHandoffs && detail.algorithm === "ner-conflict-ranked/v1"))
+              && i.selected && i.priority_reason === "frozen_conflict" && <Button data-handoff-source={i.submission_id}
               disabled={controlsBusy || creationUnknown || reviewing} onClick={() => {
                 if (creation.current?.inFlight || creation.current?.unknown) return;
                 handoffReturn.current = { batch: detail.id, source: i.submission_id, page, filter };
                 ++generation.current; ++progressGeneration.current; selection.current = null;
-                setDetail(null); setBatches([]); setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setCanReadHandoffs(false);
+                setDetail(null); setBatches([]); setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setCanReadHandoffs(false); setCanReadNerHandoffs(false);
                 setPreview(null); creation.current = null;
-                setHandoff({ batch: detail.id, source: i.submission_id, pending: i.status === "pending" });
-              }}>{t("handoffTitle")}</Button>}
+                setHandoff({ batch: detail.id, source: i.submission_id, pending: i.status === "pending",
+                  kind: detail.algorithm === "ner-conflict-ranked/v1" ? "ner" : "classification" });
+              }}>{t(detail.algorithm === "ner-conflict-ranked/v1" ? "nerHandoffTitle" : "handoffTitle")}</Button>}
           </td>
         </tr>)}</tbody>
       </table>

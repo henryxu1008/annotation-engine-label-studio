@@ -312,5 +312,8 @@
   "priorityType": "分歧依据类型",
   "priorityClassification": "文本分类",
   "priorityNer": "NER",
-  "priorityNerProvenance": "冻结 NER 依据批次 #{{id}}"
+  "priorityNerProvenance": "冻结 NER 依据批次 #{{id}}",
+  "nerHandoffTitle": "NER 审核交接仲裁",
+  "nerHandoffBoundary": "为此条已抽中的冻结 NER 冲突明确派发或关联仲裁。仲裁不会批准或驳回来源审核。",
+  "nerHandoffIntegrity": "此历史仅记录冻结关联。请打开仲裁，验证当前来源证据。"
 }
