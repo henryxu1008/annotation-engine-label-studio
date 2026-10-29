@@ -204,7 +204,9 @@ class SourcesAPI(NerAPI):
         return self.respond(request, body, verify)
 
 
-def load(query, *, validate_source=True):
+def load(query, *, validate_source=True, projection='ner'):
+    if projection not in ('ner', 'review', 'submission'):
+        raise ValueError('Unknown guarded source projection')
     # Scope first; count bytes in SQL before hydrating a JSONField or live task body.
     column = connection.ops.quote_name(Submission._meta.db_table) + '.' + connection.ops.quote_name('result_snapshot')
     expression = f'OCTET_LENGTH(CAST({column} AS TEXT))' if connection.vendor == 'postgresql' else f'LENGTH(CAST({column} AS BLOB))'
@@ -219,10 +221,29 @@ def load(query, *, validate_source=True):
     guarded = query.annotate(ner_total=Window(Sum(size))).annotate(ner_snapshot=Case(
         When(ner_total__lte=ner.MAX_STORED_BYTES, then=F('result_snapshot')),
         default=Value(None), output_field=JSONField()))
-    for row in guarded.select_related('assignment__task', 'review').only(
-            'id', 'assignment_id', 'revision', 'result_hash', 'submitted_by_id', 'status',
-            'assignment__id', 'assignment__task_id', 'assignment__project_id', 'assignment__assignee_id',
-            'assignment__task__id', 'assignment__task__project_id', 'review__id', 'review__decision').order_by('pk').iterator(chunk_size=1):
+    fields = (
+        'id',
+        'assignment_id',
+        'revision',
+        'result_hash',
+        'submitted_by_id',
+        'status',
+        'assignment__id',
+        'assignment__task_id',
+        'assignment__project_id',
+        'assignment__assignee_id',
+        'assignment__task__id',
+        'assignment__task__project_id',
+        'review__id',
+        'review__decision',
+    )
+    related = ('assignment__task', 'review')
+    if projection in ('review', 'submission'):
+        fields += ('annotation_id', 'submitted_at', 'review__reason', 'review__reviewer_id', 'review__created_at')
+    if projection == 'submission':
+        related += ('submitted_by', 'review__reviewer')
+        fields += ('submitted_by', 'review__reviewer')
+    for row in guarded.select_related(*related).only(*fields).order_by('pk').iterator(chunk_size=1):
         if type(row.ner_total) is not int or row.ner_total < 0 or row.ner_total > ner.MAX_STORED_BYTES:
             raise ner.Error('NER_TOO_LARGE')
         row.result_snapshot = row.ner_snapshot

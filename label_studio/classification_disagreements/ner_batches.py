@@ -299,7 +299,7 @@ def plan_hash(batch):
                                                     'tasks', 'work_units', 'scorer_calls_per_pass')})
 
 
-def project_items(batch, context):
+def project_items(batch, context, *, loaded_rows=None):
     items = visible_items(batch, context[1], context[3])
     task_ids = [i['task_id'] for i in items]
     tasks = dict(Task.objects.filter(pk__in=task_ids).values_list('pk', 'project_id'))
@@ -308,7 +308,8 @@ def project_items(batch, context):
     source_ids = [e['source']['submission_id'] for e in cohort if e['source']]
     # The same cumulative SQL/JSON byte guard as manual NER, including growth
     # between preflight and hydration. Hidden cohorts never reach this query.
-    rows = ner_api.load(scoped_sources(context[2], source_ids), validate_source=False)
+    rows = (ner_api.load(scoped_sources(context[2], source_ids), validate_source=False)
+            if loaded_rows is None else [r for r in loaded_rows if r.pk in set(source_ids)])
     sources = {r.pk: r for r in rows}
     projected, prepared = [], {}
     for item in items:

@@ -1191,3 +1191,18 @@ NER client reads bind retained inputs to the accepted viewer and frozen input
 set. A changed viewer scrubs old forms, saved confirmations and pending commands;
 same-identity read failures still preserve an acknowledged save fact.
 #81/#84 remain open; current metrics, review, sampling and release stay unchanged.
+
+### Optional frozen NER conflict-priority review (#81/#84)
+
+See [the versioned contract](ner-review-priority-v1.md). A default-off NER
+strategy reuses ReviewBatches and the existing complete review/rework flow.
+Current Manager + READ_WORK + ORGANIZE_REVIEW may consume an existing frozen
+NerBatch in exact Fork review scopes. Whole self-cohorts are excluded before
+Reviewer source SQL, counts and pagination. Full pin matches, typed provenance,
+deduplicated source-union budgets, exactly two official counter passes, final
+source replay, project-first locking and source-bound original-key receipts are
+mandatory. Metadata/recovery costs stay distinct from ordinary review snapshot
+validation. Old/default/classification plans and keys remain compatible.
+No NER-to-classification handoff, new review authority, second review, Host/Core
+or retained runtime activation is introduced. #81/#84 remain open and historical
+Docker/#76 CHANGED/UNKNOWN and incomplete database-comparison records remain.

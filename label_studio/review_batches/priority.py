@@ -34,7 +34,18 @@ def viewer_hash(principal, actor, project, role):
     return salted_hmac(SCHEMA + '/viewer', value, algorithm='sha256').hexdigest()
 
 
-def read_guard(project_id, principal, actor):
+def read_guard(project_id, principal, actor, plan=None):
+    from . import ner_priority
+
+    if ner_priority.is_plan(plan):
+        project, role = ner_priority.read_guard(project_id, principal, actor)
+        if role == 'reviewer':
+            hidden = {t['task_id'] for t in plan['priority']['participants'] if actor.pk in t['actor_ids']}
+            if not any(c['submitter_id'] != actor.pk and c['task_id'] not in hidden for c in plan['candidates']):
+                from rest_framework.exceptions import NotFound
+
+                raise NotFound()
+        return project, role
     from classification_disagreements import service as comparison
 
     if not settings.ANNOTATION_CLASSIFICATION_BATCHES_ENABLED or connection.vendor not in ('postgresql', 'sqlite'):
@@ -52,7 +63,7 @@ def guard(project_id, principal, actor):
 def recheck_read(request, pk, principal, actor, role, batch):
     current, current_actor = resolve_actor(request)
     project, current_role, _ = service.guard(pk, current, current_actor)
-    read_guard(pk, current, current_actor)
+    read_guard(pk, current, current_actor, batch.plan)
     if current != principal or current_actor.pk != actor.pk or current_role != role:
         service.fail('REVIEW_PRIORITY_AUTHORITY_CHANGED', 403)
     if service.checked_batch(project, batch.pk).plan_hash != batch.plan_hash:
@@ -86,6 +97,8 @@ def context(request, pk, principal, actor_id):
 
 
 def freeze(project, candidates, selection):
+    if selection.get('kind') != 'classification_conflict':
+        service.fail('REVIEW_BATCH_INVALID_INPUT', 400)
     from classification_disagreements import batches
     from classification_disagreements import service as comparison
     from classification_disagreements.models import ClassificationBatch
@@ -170,8 +183,12 @@ def freeze(project, candidates, selection):
     }
 
 
-def validate(plan):
+def validate(plan, batch=None):
     """Receipt recovery checks local frozen structure, without needing live sources."""
+    from . import ner_priority
+
+    if ner_priority.is_plan(plan):
+        return ner_priority.validate(plan, batch)
     try:
         p = plan['priority']
         evidence = p['evidence']

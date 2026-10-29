@@ -305,5 +305,12 @@
   "nerArbitrationAdopt": "Adopt this frozen revision",
   "nerArbitrationStartHint": "Open a disagreement in a frozen NER batch to dispatch an independent reviewer.",
   "nerArbitrationEntities": "{{count}} entities (whole revision)",
-  "nerArbitrationInspect": "Inspect this revision before adopting"
+  "nerArbitrationInspect": "Inspect this revision before adopting",
+  "priorityNerEnable": "Prioritize frozen NER conflicts",
+  "priorityNerBatch": "Frozen NER batch",
+  "priorityNerBoundary": "Prioritize verified conflicts from matching frozen NER revisions. Missing, incomparable and unmatched inputs remain unknown; arbitration does not approve a Submission.",
+  "priorityType": "Conflict evidence type",
+  "priorityClassification": "Text classification",
+  "priorityNer": "NER",
+  "priorityNerProvenance": "Frozen NER evidence batch #{{id}}"
 }
