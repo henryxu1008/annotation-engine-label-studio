@@ -83,6 +83,47 @@ def receipt(row, action, key, principal, source, actor, when, request_hash):
     return {**value, 'payload_hash': ner.digest(value)}
 
 
+def create_task(context, value, key, request_hash, *, verified=None):
+    """Fresh creation inside the caller's project-fenced transaction. No render/scoring."""
+    principal, actor, project, _ = context
+    batch = get_object_or_404(b.query_batches(project).select_for_update(), pk=value['ner_batch_id'])
+    frozen = a.origin(project, batch, value['task_id'], value['expected_manifest_hash'])
+    target = a.assignee(context, value['assignee_id'], frozen['item'])
+    if verified is None:
+        initial, prepared = a.evidence(context, frozen, lock=True)
+    else:
+        verified_origin, initial, prepared = verified
+        if verified_origin != frozen:
+            a.error('SOURCE_CHANGED')
+    a.require_evidence(initial)
+    semantic = a.input_hash(project, frozen['item'])
+    if NerArbitrationTask.objects.filter(
+        project=project,
+        task_id_frozen=value['task_id'],
+        input_set_hash=semantic,
+        status__in=['pending', 'resolved'],
+    ).exists():
+        a.error('DUPLICATE_ACTIVE')
+    row = NerArbitrationTask.objects.create(
+        project=project,
+        created_by=actor,
+        assignee=target,
+        creator_principal=principal.principal_id,
+        creator_source=principal.source,
+        actor_id_frozen=actor.pk,
+        assignee_id_frozen=target.pk,
+        ner_batch_id_frozen=batch.pk,
+        task_id_frozen=value['task_id'],
+        input_set_hash=semantic,
+        origin=frozen,
+        origin_hash=ner.digest(frozen),
+        participant_ids=a.participants(frozen['item']),
+        idempotency_key=key,
+        request_hash=request_hash,
+    )
+    return row, initial, prepared
+
+
 class ArbitrationAPI(BatchAPI):
     def handle_exception(self, exc):
         # Keep the typed API domain even when a reused NER validator rejects work.
@@ -241,36 +282,7 @@ class ListAPI(ArbitrationAPI):
                     row.request_hash,
                 )
             else:
-                batch = get_object_or_404(b.query_batches(project).select_for_update(), pk=value['ner_batch_id'])
-                frozen = a.origin(project, batch, value['task_id'], value['expected_manifest_hash'])
-                target = a.assignee(context, value['assignee_id'], frozen['item'])
-                initial, prepared = a.evidence(context, frozen, lock=True)
-                a.require_evidence(initial)
-                semantic = a.input_hash(project, frozen['item'])
-                if NerArbitrationTask.objects.filter(
-                    project=project,
-                    task_id_frozen=value['task_id'],
-                    input_set_hash=semantic,
-                    status__in=['pending', 'resolved'],
-                ).exists():
-                    a.error('DUPLICATE_ACTIVE')
-                row = NerArbitrationTask.objects.create(
-                    project=project,
-                    created_by=actor,
-                    assignee=target,
-                    creator_principal=principal.principal_id,
-                    creator_source=principal.source,
-                    actor_id_frozen=actor.pk,
-                    assignee_id_frozen=target.pk,
-                    ner_batch_id_frozen=batch.pk,
-                    task_id_frozen=value['task_id'],
-                    input_set_hash=semantic,
-                    origin=frozen,
-                    origin_hash=ner.digest(frozen),
-                    participant_ids=a.participants(frozen['item']),
-                    idempotency_key=key,
-                    request_hash=request_hash,
-                )
+                row, initial, prepared = create_task(context, value, key, request_hash)
             result = {
                 **a.meta(row, context),
                 'action': 'create',

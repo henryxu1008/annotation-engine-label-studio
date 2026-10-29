@@ -57,3 +57,37 @@ class ReviewArbitrationHandoff(models.Model):
                 name="review_handoff_source_idx",
             ),
         ]
+
+
+class NerReviewArbitrationHandoff(models.Model):
+    """Typed NER provenance; never review authority or another decision."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    review_batch = models.ForeignKey(ReviewBatch, null=True, on_delete=models.SET_NULL)
+    ner_arbitration = models.ForeignKey(
+        'classification_disagreements.NerArbitrationTask', null=True, on_delete=models.SET_NULL
+    )
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    review_batch_id_frozen = models.PositiveBigIntegerField()
+    submission_id_frozen = models.PositiveBigIntegerField()
+    arbitration_id_frozen = models.PositiveBigIntegerField()
+    actor_id_frozen = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    creator_source = models.CharField(max_length=128)
+    created_at = models.DateTimeField(default=timezone.now)
+    origin = models.JSONField()
+    origin_hash = models.CharField(max_length=64)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='ner_handoff_project_key_unique'),
+            models.UniqueConstraint(
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen', 'arbitration_id_frozen'],
+                name='ner_handoff_binding_unique',
+            ),
+        ]
+        indexes = [models.Index(
+            fields=['project', 'review_batch_id_frozen', 'submission_id_frozen'], name='ner_handoff_source_idx'
+        )]

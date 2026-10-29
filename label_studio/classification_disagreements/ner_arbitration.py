@@ -215,7 +215,7 @@ def origin(project, batch, task_id, expected):
     return value
 
 
-def checked(row, project):
+def checked(row, project, *, decision_loader=None):
     hydrate(row, ('origin', 'participant_ids', 'cancellation'))
     try:
         o = row.origin
@@ -326,7 +326,13 @@ def checked(row, project):
         valid = False
     if not valid:
         error('LEDGER_INVALID')
-    d = decisions(project).filter(arbitration_id=row.pk).first()
+    # A composing caller can include decision proof in its cumulative budget.
+    # It still passes through the same status and full decision validation below.
+    d = (
+        decision_loader(row)
+        if decision_loader is not None
+        else decisions(project).filter(arbitration_id=row.pk).first()
+    )
     if (row.status == 'resolved') != (d is not None):
         error('DECISION_INVALID')
     if d:

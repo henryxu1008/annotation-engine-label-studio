@@ -5,7 +5,7 @@ import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { ClassificationResult } from "./ClassificationDisagreement";
-import { handoffContextSchema, handoffDetailSchema, handoffReceiptSchema, handoffScopeMatches } from "./reviewHandoffResponses";
+import { handoffContextSchema, handoffDetailSchema, handoffReceiptSchema, classificationReviewHandoff } from "./reviewHandoffResponses";
 import "./ReviewBatches.scss";
 import "./ClassificationBatches.scss";
 
@@ -68,6 +68,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   initialTaskId = null, initialHandoffId = null, onBackToReview = null }) => {
   const { t: translate } = useLocaleTranslation("reviewBatches"), api = useAPI();
   const t = (key, args) => translate(adapter?.messages?.[key] ?? key, args);
+  const handoffTransport = adapter ? adapter.handoff : classificationReviewHandoff;
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), pending = useRef(null), selected = useRef(null), heading = useRef(null);
   const viewer = useRef(null);
@@ -80,15 +81,20 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const [assignee, setAssignee] = useState(""), [winner, setWinner] = useState(""), [reason, setReason] = useState("");
   const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); };
   const fetch = async (method, params, schema, body, headers) => {
-    const mapped = adapter ? adapter.request(method, params, body) : { method, params, body };
+    const isHandoff = Object.prototype.hasOwnProperty.call(classificationReviewHandoff.methods, method);
+    if (isHandoff && !handoffTransport) throw new Error("Unsupported handoff type");
+    const mapped = isHandoff ? { method: handoffTransport.methods[method], params, body }
+      : adapter ? adapter.request(method, params, body) : { method, params, body };
     if (!mapped.method) throw new Error("Unsupported arbitration transport");
     const r = await call.current(mapped.method, { params: { pk: projectId, ...mapped.params }, body: mapped.body, headers, errorFilter: () => true });
     if (failed(r)) {
       const e = new Error("unavailable"), code = r?.response?.display_context?.reason;
-      e.rejected = r?.$meta?.ok === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(adapter?.rejected ?? rejected, code) && (adapter?.rejected ?? rejected)[code] === r.$meta.status;
+      const errors = isHandoff ? { ...(adapter?.rejected ?? rejected), ...handoffTransport.rejected } : adapter?.rejected ?? rejected;
+      e.rejected = r?.$meta?.ok === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(errors, code) && errors[code] === r.$meta.status;
       throw e;
     }
-    return adapter ? adapter.parse(method, r, { projectId, ...params, body }) : schema.parse(r);
+    return isHandoff ? handoffTransport.parse(method, r, { projectId, ...params, body })
+      : adapter ? adapter.parse(method, r, { projectId, ...params, body }) : schema.parse(r);
   };
   const forgetIdentity = (hash) => {
     viewer.current = hash; pending.current = null;
@@ -137,13 +143,16 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
       let provenance = null;
       if (handoffSource) {
         provenance = await fetch("reviewHandoffDetail", { batch: handoffSource.batch, handoff: handoffId.current }, handoffDetailSchema);
-        if (!handoffScopeMatches(provenance, handoffSource) || provenance.id !== handoffId.current
+        if (!handoffTransport.scopeMatches(provenance, handoffSource, projectId) || provenance.id !== handoffId.current
           || provenance.viewer_hash !== capability.viewer_hash || provenance.arbitration_id !== identifier
           || provenance.target.id !== identifier || provenance.target.input_set_hash !== detail.input_set_hash
           || provenance.target.created_at !== detail.created_at || provenance.target.assignee_id !== detail.assignee_id
           || provenance.target.batch_id !== detail.batch_id
           || (provenance.available && (provenance.arbitration_status !== detail.status || provenance.arbitration_version !== detail.version))) throw new Error("handoff changed");
-        if (!provenance.available) Object.assign(detail, { available: false, report: null, texts: [], decision: null, cancellation: null, can_decide: false, can_cancel: false });
+        if (!provenance.available || (handoffTransport.kind === 'ner' && !detail.available)) {
+          Object.assign(detail, { available: false, report: null, texts: [], decision: null, cancellation: null, can_decide: false, can_cancel: false });
+          adapter?.maskUnavailable?.(detail);
+        }
       }
       if (current()) { setCaps(capability); setData(detail); setHandoffDetail(provenance); }
     });
@@ -155,7 +164,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
       let origin = initialOrigin, context = null;
       if (handoffSource) {
         context = await fetch("reviewHandoffContext", { batch: handoffSource.batch, source: handoffSource.source }, handoffContextSchema);
-        if (!handoffScopeMatches(context, handoffSource) || !context.can_handoff || capability.viewer_hash !== context.viewer_hash
+        if (!handoffTransport.scopeMatches(context, handoffSource, projectId) || !context.can_handoff || capability.viewer_hash !== context.viewer_hash
           || !capability.can_read || !capability.can_create) throw new Error("handoff scope changed");
         origin = context.dispatch_origin;
         if (context.existing_arbitration) {
@@ -199,18 +208,21 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
         if (authority.viewer_hash !== intent.viewerHash || authority.actor_id !== intent.actorId) {
           forgetIdentity(authority.viewer_hash); throw Object.assign(new Error("identity changed"), { identityChanged: true });
         }
-        if (!authority[{ create: "can_create", decision: "can_decide", cancel: "can_cancel" }[intent.action]]) throw new Error("authority withdrawn");
+        if (!authority[{ create: "can_create", handoff: "can_create", decision: "can_decide", cancel: "can_cancel" }[intent.action]]) throw new Error("authority withdrawn");
       }
       if (intent.action === "handoff") {
+        if (handoffTransport.commandHash) intent.requestHash = await handoffTransport.commandHash(projectId, handoffSource, intent.body);
+        if (current !== generation.current) return;
         const result = await fetch("createReviewHandoff", { batch: handoffSource.batch, source: handoffSource.source },
           handoffReceiptSchema, intent.body, { "Idempotency-Key": intent.key });
         if (current !== generation.current) return;
-        if (!handoffScopeMatches(result, handoffSource) || result.viewer_hash !== intent.viewerHash || result.receipt.key !== intent.key
+        if (!handoffTransport.scopeMatches(result, handoffSource, projectId) || result.viewer_hash !== intent.viewerHash || result.receipt.key !== intent.key
           || result.receipt.mode !== intent.body.mode || result.receipt.plan_hash !== intent.body.expected_plan_hash
           || result.input_set_hash !== intent.body.expected_input_set_hash
           || (intent.body.mode === "dispatch" && (result.receipt.arbitration_status_at_commit !== "pending" || result.receipt.arbitration_version_at_commit !== 1))
-          || (intent.body.mode === "link_existing" && (result.arbitration_id !== intent.body.arbitration_id
+          || (intent.body.mode === "link_existing" && (result.arbitration_id !== intent.body[handoffTransport.linkField]
             || result.receipt.arbitration_version_at_commit !== intent.body.expected_arbitration_version))) throw new Error("handoff acknowledgement changed");
+        handoffTransport.validateAcknowledgement?.(result, intent);
         handoffId.current = result.id; pending.current = null; setUnknown(false); setSaved({ action: "handoff", id: result.arbitration_id });
         await openTask(result.arbitration_id);
         return;
@@ -245,8 +257,14 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
       projectId, viewerHash: adapter ? caps?.viewer_hash : handoffContext?.viewer_hash, actorId: caps?.actor_id,
       winnerRevision: data?.inputs?.find((p) => p.submission_id === body.winner_submission_id)?.revision });
   };
-  const beginHandoff = (binding) => begin("handoff", { mode: binding.arbitration_id ? "link_existing" : "dispatch",
-    expected_plan_hash: handoffContext.expected_plan_hash, expected_input_set_hash: handoffContext.expected_input_set_hash, ...binding });
+  const beginHandoff = (binding) => {
+    if (!handoffTransport) return;
+    const target = binding.arbitration_id;
+    const fields = target ? { [handoffTransport.linkField]: target, expected_arbitration_version: binding.expected_arbitration_version } : binding;
+    begin("handoff", { mode: target ? "link_existing" : "dispatch",
+      expected_plan_hash: handoffContext.expected_plan_hash, expected_input_set_hash: handoffContext.expected_input_set_hash,
+      ...(handoffTransport.kind === "ner" ? { expected_viewer_hash: handoffContext.viewer_hash } : {}), ...fields });
+  };
   const refresh = () => view === "create" ? loadOrigin(rosterPage) : view === "detail" && selected.current ? openTask(selected.current) : loadList(page);
   const report = data?.available ? { ...data.report, manifest_hash: data.input_set_hash, observed_at: data.observed_at,
     manifest: { inputs: data.report.inputs, rule: "classification-exact-sets/v1", calculated_at: data.calculated_at } } : null;

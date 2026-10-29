@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
+import { nerReviewHandoff } from "./nerReviewHandoffResponses";
 import { FrozenArbitrationWorkspace } from "./ClassificationArbitrations";
 import { NerResult, nerComparisonSchema, validateNerComparison } from "./NerDisagreement";
 
@@ -215,6 +216,8 @@ const Evidence = ({ data, busy, onSelectPair }) => {
 
 export const nerArbitrationAdapter = {
   testId: "ner-arbitrations",
+  handoff: nerReviewHandoff,
+  maskUnavailable: (detail) => Object.assign(detail, { comparison: null, inputs: [], source_status: "unavailable" }),
   messages: {
     arbitrationTitle: "nerArbitrationTitle",
     arbitrationBoundary: "nerArbitrationBoundary",

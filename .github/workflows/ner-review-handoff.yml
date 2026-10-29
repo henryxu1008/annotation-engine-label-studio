@@ -1,0 +1,151 @@
+name: NER Review Arbitration Handoff
+
+on:
+  push:
+    branches: [main, codex/issue84-ner-handoff]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ner-review-handoff-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  TEST_ENVIRONMENT: "1"
+  SENTRY_DSN: ""
+  POETRY_VERSION: 2.3.2
+  DJANGO_SETTINGS_MODULE: core.settings.label_studio
+  DJANGO_DB: postgresql
+  POSTGRE_HOST: localhost
+  POSTGRE_PORT: "5432"
+  POSTGRE_NAME: ner_review_handoff
+  POSTGRE_USER: postgres
+  POSTGRE_PASSWORD: ner-review-handoff-ci-synthetic-only
+  DEBUG: "true"
+  HOST: http://localhost:8080
+  FRONTEND_HOSTNAME: http://localhost:8080
+  FRONTEND_HMR: "false"
+  COLLECT_ANALYTICS: "false"
+  LATEST_VERSION_CHECK: "false"
+  SENTRY_RATE: "0"
+  JSON_LOG: "0"
+
+jobs:
+  ner-review-handoff:
+    name: NER handoff PostgreSQL and bilingual E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ner-review-handoff-ci-synthetic-only
+          POSTGRES_DB: ner_review_handoff
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ner_review_handoff"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          test -n "$(fc-list :lang=zh-cn family)"
+      - name: Install backend dependencies
+        run: poetry install --with test
+      - name: PostgreSQL permissions, budgets, receipt recovery and concurrency
+        working-directory: label_studio
+        run: |
+          poetry run python core/version.py
+          poetry run python manage.py makemigrations --check --dry-run
+          poetry run pytest -q classification_disagreements/tests review_batches/tests
+      - name: Prepare fresh synthetic database
+        run: |
+          poetry run python label_studio/core/version.py
+          poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py collectstatic --noinput
+          poetry run python label_studio/manage.py seed_ner_review_handoff_e2e
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Install frontend dependencies
+        working-directory: web
+        run: yarn install --frozen-lockfile
+      - name: Validate shared flows and build frontend
+        working-directory: web
+        run: |
+          NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
+            apps/labelstudio/src/pages/DataManager/NerReviewPriority.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ReviewPriority.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ReviewBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ReviewBatchProgress.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerArbitrations.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationArbitrations.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ReviewArbitrationHandoff.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerDisagreement.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerQualityOverview.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationBatches.test.jsx
+          yarn i18n:catalogs
+          yarn i18n:literals
+          yarn ls:build
+      - name: Start isolated Fork server
+        env:
+          ANNOTATION_REVIEW_BATCHES_ENABLED: "true"
+          ANNOTATION_NER_DISAGREEMENTS_ENABLED: "true"
+          ANNOTATION_NER_BATCHES_ENABLED: "true"
+          ANNOTATION_NER_REVIEW_PRIORITY_ENABLED: "true"
+          ANNOTATION_NER_ARBITRATION_ENABLED: "true"
+          ANNOTATION_NER_REVIEW_ARBITRATION_HANDOFF_ENABLED: "true"
+        run: |
+          export ANNOTATION_NER_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.ner-review-handoff-e2e.json"))["modes"]))')"
+          export ANNOTATION_REVIEW_BATCH_MODES="$ANNOTATION_NER_DISAGREEMENT_MODES"
+          export ANNOTATION_NER_ARBITRATION_MODES="$ANNOTATION_NER_DISAGREEMENT_MODES"
+          nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/ner-review-handoff.log 2>&1 &
+          echo $! > /tmp/ner-review-handoff.pid
+      - name: Wait for Django and same-origin bundles
+        run: |
+          for i in {1..90}; do
+            if curl --fail --silent http://localhost:8080/health/ >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/runtime.js >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/vendor.js >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/main.js >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          tail -200 /tmp/ner-review-handoff.log
+          exit 1
+      - name: Run bilingual frozen NER handoff journeys
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.ner-review-handoff.config.ts --browser chrome \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/ner-review-handoff.cy.ts
+      - name: Stop owned CI server
+        if: always()
+        run: |
+          if test -f /tmp/ner-review-handoff.pid; then kill "$(cat /tmp/ner-review-handoff.pid)" || true; fi
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ner-review-handoff-e2e
+          if-no-files-found: ignore
+          path: |
+            web/dist/cypress/apps/labelstudio-e2e/screenshots/**
+            web/dist/cypress/apps/labelstudio-e2e/videos/**
+            /tmp/ner-review-handoff.log

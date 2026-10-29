@@ -24,3 +24,14 @@ export const handoffReceiptSchema = z.object({ schema, id, review_batch_id: id, 
     arbitration_version_at_commit: id, arbitration_status_at_commit: state }),
 });
 export const handoffScopeMatches = (row, source) => row.review_batch_id === source.batch && row.submission_id === source.source;
+
+export const classificationReviewHandoff = {
+  kind: 'classification', linkField: 'arbitration_id',
+  methods: { reviewHandoffContext: 'reviewHandoffContext', reviewHandoffDetail: 'reviewHandoffDetail', createReviewHandoff: 'createReviewHandoff' },
+  listMethod: 'reviewHandoffs', listSchema: handoffListSchema,
+  capabilityMethod: 'classificationArbitrationCapability',
+  title: 'handoffTitle', boundary: 'handoffBoundary', scopeMatches: handoffScopeMatches,
+  parseCapability: (raw) => raw,
+  parse: (method, raw) => ({ reviewHandoffContext: handoffContextSchema,
+    reviewHandoffDetail: handoffDetailSchema, createReviewHandoff: handoffReceiptSchema })[method].parse(raw),
+};

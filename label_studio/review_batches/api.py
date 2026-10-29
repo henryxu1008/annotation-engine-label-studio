@@ -162,6 +162,19 @@ class CapabilityAPI(BatchAPI):
 
         data['can_prioritize_ner'] = can_create and ner_priority.available(pk, principal, actor, create=True)
         data['can_read_ner_priority'] = ner_priority.available(pk, principal, actor)
+        data['can_read_ner_handoffs'] = False
+        data['can_ner_handoff'] = False
+        if settings.ANNOTATION_NER_REVIEW_ARBITRATION_HANDOFF_ENABLED:
+            from . import ner_handoff
+
+            try:
+                ner_handoff.guard(pk, principal, actor)
+                data['can_read_ner_handoffs'] = True
+                if role == 'manager':
+                    ner_handoff.guard(pk, principal, actor, create=True)
+                    data['can_ner_handoff'] = True
+            except APIException:
+                pass
         if getattr(settings, 'ANNOTATION_REVIEW_ARBITRATION_HANDOFF_ENABLED', False):
             from . import handoff
 

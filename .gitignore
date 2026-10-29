@@ -103,3 +103,4 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 .ner-overview-e2e.json
 .ner-arbitration-e2e.json
 .ner-review-priority-e2e.json
+.ner-review-handoff-e2e.json
