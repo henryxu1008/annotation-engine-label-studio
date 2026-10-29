@@ -81,12 +81,17 @@ Creation locks Project first, then ordered tasks, assignments and submissions.
 The frozen plan is checked locally and same-key receipt recovery precedes source
 availability and changed processing budgets. Receipts bind body, principal,
 provider source and frozen actor; changed scope/body/identity conflicts. Current
-authority and stored-plan integrity remain mandatory on recovery. New revisions,
-revocation, source mutation or response-time changes roll back a fresh creation
+authority and stored-plan integrity remain mandatory on recovery.
+Stored receipt validation retains the fixed v1 plan envelope when the current
+processing byte budget is tightened; the small recovery response must still fit
+the current emitted-response budget. New revisions, revocation, source mutation
+or response-time changes roll back a fresh creation
 and leave its key reusable. Acknowledgement loss retains the original body/key;
 UI reads never issue a recovery POST automatically. Viewer changes scrub old
 intent/evidence/confirmation while same-viewer read failure retains a confirmed
-save fact.
+save fact. NER creation acknowledgements must match the intent's viewer hash as
+well as its key and plan hash; a missing or different viewer hash retains the
+unknown command for explicit original-key recovery.
 
 ## Acceptance and remaining scope
 

@@ -258,7 +258,8 @@ export const ReviewBatches = ({ projectId }) => {
         return;
       }
       if (intent.body.priority && (!Number.isSafeInteger(result.id) || result.id < 1
-        || result.idempotency_key !== intent.key || result.plan_hash !== intent.body.expected_plan_hash)) {
+        || result.idempotency_key !== intent.key || result.plan_hash !== intent.body.expected_plan_hash
+        || (isNerPriority(intent.body.priority) && result.viewer_hash !== intent.viewerHash))) {
         intent.unknown = true; setCreationUnknown(true); setError("priorityUnknownWrite"); return;
       }
       if (intent.body.priority) { nerConfirmed.current = isNerPriority(intent.body.priority); setCreatedNotice(result.id); }

@@ -21,8 +21,9 @@ from .models import ReviewBatch
 KIND = 'ner_conflict'
 ALGORITHM = 'ner-conflict-ranked/v1'
 SCHEMA = 'review-ner-priority/v1'
-MAX_BYTES = 1024 * 1024
-MAX_STORED_PLAN = 4 * MAX_BYTES
+V1_PLAN_BYTES = 1024 * 1024
+MAX_BYTES = V1_PLAN_BYTES
+MAX_STORED_PLAN = 4 * V1_PLAN_BYTES
 V1_CANDIDATES = 1000
 
 
@@ -292,7 +293,7 @@ def materialize(current, args, *, lock=False):
 def validate(plan, batch=None):
     """Validate the immutable local receipt without any live source hydration."""
     try:
-        ner.bounded(plan, MAX_BYTES)
+        ner.bounded(plan, V1_PLAN_BYTES)
         p = plan['priority']
         keys = {
             'schema',

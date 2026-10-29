@@ -197,6 +197,25 @@ class TestNerPriority(APITestCase):
         changed = {**body, 'seed': 'other'}
         assert self.create(changed, key).status_code == 409
 
+    def test_original_receipt_uses_frozen_plan_limit_and_current_reply_budget(self):
+        body, key = self.body(), str(uuid4())
+        created = self.create(body, key)
+        assert created.status_code == 201, created.data
+        batch = ReviewBatch.objects.get(pk=created.data['id'])
+        assert len(JSONRenderer().render(batch.plan)) > 1024
+        assert len(JSONRenderer().render(created.data)) < 1024
+        with patch.object(p, 'MAX_BYTES', 1024):
+            with patch.object(ner_api, 'load', side_effect=AssertionError('Receipt has no snapshot cost')):
+                with patch.object(ner, 'Evaluator', side_effect=AssertionError('Receipt has no scorer cost')):
+                    recovered = self.create(body, key)
+            assert recovered.status_code == 200, recovered.data
+            assert recovered.data['id'] == created.data['id'] and recovered.data['replayed']
+            with patch.object(ner, 'Evaluator', side_effect=AssertionError('Plan budget before first counter')):
+                assert self.preview().status_code == 422
+        with patch.object(p, 'MAX_BYTES', 64):
+            assert self.create(body, key).status_code == 422
+        assert ReviewBatch.objects.count() == 1
+
     def test_gates_and_role_capabilities_are_independent_from_classification(self):
         cap = self.client.get(self.base + 'capability/')
         assert cap.status_code == 200

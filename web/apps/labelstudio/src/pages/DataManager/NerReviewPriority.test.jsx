@@ -139,7 +139,13 @@ it.each(["en-US", "zh-CN"])("reuses sampling, original-key recovery and NER prov
   expect(writes()).toHaveLength(1);
   brokenReads = false;
   createResult = (args) =>
-    Promise.resolve({ id: 9, plan_hash: hash, idempotency_key: args.headers["Idempotency-Key"], replayed: true });
+    Promise.resolve({
+      id: 9,
+      plan_hash: hash,
+      idempotency_key: args.headers["Idempotency-Key"],
+      viewer_hash: hash,
+      replayed: true,
+    });
   fireEvent.click(screen.getByTestId("review-priority-recover"));
   await screen.findByRole("heading", { name: "NER sample" });
   expect(writes()).toHaveLength(2);
@@ -233,7 +239,12 @@ it("rejects foreign NER metadata and never transfers the selected ID", async () 
 it("preserves a matched save acknowledgement after same-identity read failure", async () => {
   createResult = (args) => {
     brokenReads = true;
-    return Promise.resolve({ id: 9, plan_hash: hash, idempotency_key: args.headers["Idempotency-Key"] });
+    return Promise.resolve({
+      id: 9,
+      plan_hash: hash,
+      idempotency_key: args.headers["Idempotency-Key"],
+      viewer_hash: hash,
+    });
   };
   const view = mount();
   await choose();
@@ -248,6 +259,43 @@ it("preserves a matched save acknowledgement after same-identity read failure", 
   expect(writes()).toHaveLength(1);
   view.finish();
 });
+
+it.each([undefined, "c".repeat(64)])(
+  "does not confirm an acknowledgement with missing or mismatched viewer %s",
+  async (ackViewer) => {
+    createResult = (args) => {
+      brokenReads = true;
+      return Promise.resolve({
+        id: 9,
+        plan_hash: hash,
+        idempotency_key: args.headers["Idempotency-Key"],
+        viewer_hash: ackViewer,
+      });
+    };
+    const view = mount();
+    await choose();
+    fireEvent.click(screen.getByRole("button", { name: "Create / retry" }));
+    await screen.findByRole("alert");
+    expect(screen.getByTestId("review-priority-recover")).toBeDefined();
+    expect(view.container.textContent).not.toContain("Batch #9");
+    expect(writes()).toHaveLength(1);
+    brokenReads = false;
+    createResult = (args) =>
+      Promise.resolve({
+        id: 9,
+        plan_hash: hash,
+        idempotency_key: args.headers["Idempotency-Key"],
+        viewer_hash: hash,
+        replayed: true,
+      });
+    fireEvent.click(screen.getByTestId("review-priority-recover"));
+    await screen.findByRole("heading", { name: "NER sample" });
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1][1].body).toEqual(writes()[0][1].body);
+    expect(writes()[1][1].headers).toEqual(writes()[0][1].headers);
+    view.finish();
+  },
+);
 
 it("ignores a late NER list after the evidence type changes", async () => {
   let resolveNer;
