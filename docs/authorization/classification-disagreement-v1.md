@@ -109,8 +109,11 @@ it does not change the transient manual comparison contract above.
 Partial matching and single-batch quality summaries are implemented separately in
 classification-partial-match-v1.md and classification-quality-overview-v1-design.md.
 Manual NER and its independent durable queues are in ner-disagreement-v1.md and
-ner-batches-v1.md. NER aggregation/arbitration, bbox/field workflows, confidence
-rules and second review remain deferred. Durable classification batches and frozen-adoption arbitration are implemented
+ner-batches-v1.md. Single frozen NER batch aggregation and adoption-only arbitration are
+implemented in ner-quality-overview-v1.md and ner-arbitration-v1.md. Manual static
+plain-text field comparison is in field-disagreement-v1.md; durable field workflows,
+bbox, confidence rules and second-review scope remain deferred.
+Durable classification batches and frozen-adoption arbitration are implemented
 in classification-batches-v1.md and classification-arbitration-v1.md. Optional
 conflict-priority sampling reuses frozen batches; see review-priority-v1.md.
 #81 and #84 remain open. Merge, deployment and Core integration are separate approvals.

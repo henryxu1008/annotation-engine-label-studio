@@ -241,5 +241,6 @@ quality metric, approval policy or rework scheduler. Core-only mode denies the
 new endpoint; #79/#80 exports and Host contracts are unchanged. #84 remains open.
 Frozen classification conflict priority now reuses this workflow. The independent
 #81 arbitration ledger can adopt a frozen revision. Classification handoff is
-implemented in review-arbitration-handoff-v1.md; second review and explicit NER
-handoff remain deferred. Optional NER priority is in ner-review-priority-v1.md.
+implemented in review-arbitration-handoff-v1.md. Explicit NER handoff is implemented
+in ner-review-handoff-v1.md. Independent second-review scope still requires design.
+Optional NER priority is in ner-review-priority-v1.md.

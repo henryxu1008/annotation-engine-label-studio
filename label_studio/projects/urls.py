@@ -23,6 +23,7 @@ _api_urlpatterns = [
     path('<int:pk>/task-packages/', include(('task_packages.urls', 'task_packages'), namespace='task-packages')),
     path('<int:pk>/review-batches/', include(('review_batches.urls', 'review_batches'), namespace='review-batches')),
     path('<int:pk>/classification-disagreements/', include('classification_disagreements.urls')),
+    path('<int:pk>/field-disagreements/', include('classification_disagreements.field_urls')),
     path('<int:pk>/ner-disagreements/', include('classification_disagreements.ner_urls')),
     path('<int:pk>/ner-arbitrations/', include('classification_disagreements.ner_arbitration_urls')),
     path('<int:pk>/classification-arbitrations/', include('classification_disagreements.arbitration_urls')),
