@@ -76,6 +76,12 @@ Collection metadata, capability and original-key receipt recovery load zero
 source snapshots and run zero NER scorers. Detail, queue and rework run zero NER
 scorers, but deliberately validate ordinary review-source snapshots (including a
 post-render replay); that I/O is not claimed to be free.
+Guarded review projections include review reasons and serialized scalar fields
+in the hydrating SQL statement. Queue/rework pages also preload submitter and
+reviewer relations, avoiding per-submission deferred-field/relation queries.
+The default NER projection stays minimal, and all projections retain the same
+SQL snapshot gate and canonical byte checks. Upstream user-presentation queries
+keep their existing contract and are separate from official scorer calls.
 
 Creation locks Project first, then ordered tasks, assignments and submissions.
 The frozen plan is checked locally and same-key receipt recovery precedes source

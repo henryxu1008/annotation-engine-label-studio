@@ -24,6 +24,7 @@ from tasks.models import ReviewDecision, Submission, Task, TaskAssignment
 from tasks.serializers import SubmissionSerializer
 from tasks.submissions import _snapshot_hash
 from users.models import User
+from users.serializers import UserSerializer
 
 
 @override_settings(
@@ -567,6 +568,52 @@ class TestNerPriority(APITestCase):
                 assert loader.call_count > 0
             self.client.force_authenticate(self.independent)
             assert self.client.get(f"{self.base}{created.data['id']}/queue/").status_code == 200
+
+    def test_guarded_review_metadata_has_no_per_submission_queries(self):
+        self.args['rate'] = 100
+        created = self.create()
+        self.client.force_authenticate(self.independent)
+        for source in (self.first, self.second):
+            reviewed = self.client.post(
+                f'/api/submissions/{source.pk}/review/',
+                {'decision': 'rejected', 'reason': 'Synthetic correction'},
+                format='json',
+            )
+            assert reviewed.status_code == 200, reviewed.data
+        expected_annotations = {row.pk: row.annotation_id for row in (self.first, self.second)}
+        rows = p.load(Submission.objects.filter(pk__in=[self.first.pk, self.second.pk]))
+        with self.assertNumQueries(0):
+            for row in rows:
+                assert row.review.reason == 'Synthetic correction'
+                assert row.review.reviewer_id == self.independent.pk
+                assert row.review.created_at
+                assert row.submitted_at
+                assert row.annotation_id == expected_annotations[row.pk]
+        result = self.detail(created.data['id'])
+        assert result.status_code == 200, result.data
+        assert all(item['review_reason'] == 'Synthetic correction' for item in result.data['items'])
+
+    def test_guarded_submission_projection_eagerly_loads_serialized_fields(self):
+        created = self.create()
+        self.client.force_authenticate(self.independent)
+        reviewed = self.client.post(
+            f'/api/submissions/{self.first.pk}/review/',
+            {'decision': 'rejected', 'reason': 'Synthetic correction'},
+            format='json',
+        )
+        assert reviewed.status_code == 200, reviewed.data
+        rows = p.load(Submission.objects.filter(pk__in=[self.first.pk, self.second.pk]), for_serialization=True)
+        # Isolate eager relation/column loading from the upstream user serializer's
+        # organization presentation queries, whose contract is unchanged here.
+        with patch.object(UserSerializer, 'to_representation', lambda _, user: {'id': user.pk}):
+            with self.assertNumQueries(0):
+                data = SubmissionSerializer(rows, many=True).data
+        assert len(data) == 2
+        assert data[0]['review']['reason'] == 'Synthetic correction'
+        assert data[0]['review']['reviewer']['id'] == self.independent.pk
+        assert data[0]['submitted_by']['id'] == self.first.submitted_by_id
+        assert data[1]['review'] is None
+        assert self.detail(created.data['id']).status_code == 200
 
     def test_rework_successor_growth_after_serialization_rejects_before_json_decoder(self):
         self.args['rate'] = 100

@@ -125,7 +125,7 @@ class BatchAPI(generics.GenericAPIView):
         if not ner_priority.is_plan(batch.plan):
             return page
         identifiers = [row.pk for row in page]
-        loaded = {row.pk: row for row in ner_priority.load(query.filter(pk__in=identifiers))}
+        loaded = {row.pk: row for row in ner_priority.load(query.filter(pk__in=identifiers), for_serialization=True)}
         if set(loaded) != set(identifiers):
             service.fail('REVIEW_PRIORITY_READ_CHANGED')
         return [loaded[identifier] for identifier in identifiers]

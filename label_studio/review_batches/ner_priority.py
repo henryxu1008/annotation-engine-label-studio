@@ -53,9 +53,13 @@ def bounded(value):
         return ner.bounded(value, MAX_BYTES)
 
 
-def load(query):
+def load(query, *, for_serialization=False):
     with errors():
-        return ner_api.load(query.select_related(None), validate_source=False)
+        return ner_api.load(
+            query.select_related(None),
+            validate_source=False,
+            projection='submission' if for_serialization else 'review',
+        )
 
 
 def read_guard(pk, principal, actor):
