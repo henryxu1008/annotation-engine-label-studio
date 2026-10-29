@@ -6,6 +6,7 @@ import { useAPI } from "../../providers/ApiProvider";
 import { FrozenBatchWorkspace } from "./ClassificationBatches";
 import { nerComparisonSchema, NerResult, validateNerComparison } from "./NerDisagreement";
 import { NerQualityOverview } from "./NerQualityOverview";
+import { NerArbitrationEntry, NerArbitrations } from "./NerArbitrations";
 
 const id = z.number().int().positive().safe(), count = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -29,7 +30,7 @@ const row = z.object({ task_id: id, outcome: z.enum(["agreement", "disagreement"
 const valid = (v) => { if (!v) throw new Error("Invalid frozen NER batch"); };
 const reference = (value) => value?.manifest_hash ?? value?.projection_hash;
 
-const NerBatchComparison = ({ answer, busy, onSelectPair }) => {
+const NerBatchComparison = ({ answer, busy, onSelectPair, projectId, onOpenArbitration }) => {
   const [detail, setDetail] = useState(true), matrixRefs = useRef({}), heading = useRef(null);
   useEffect(() => {
     if (detail) heading.current?.focus();
@@ -42,8 +43,12 @@ const NerBatchComparison = ({ answer, busy, onSelectPair }) => {
   const report = { ...item.comparison, rule: answer.rule, source_status: item.source_status,
     calculated_at: answer.calculated_at, observed_at: answer.observed_at, manifest_hash: reference(answer),
     manifest: { inputs: item.inputs } };
-  return <NerResult report={report} busy={busy} detail={detail} onSelectPair={onSelectPair}
-    onBack={() => setDetail(false)} matrixRefs={matrixRefs} detailHeading={heading} />;
+  return <>
+    {item.outcome === "disagreement" && item.source_status === "verified" && answer.manifest_hash &&
+      <NerArbitrationEntry projectId={projectId} dispatch disabled={busy} onOpen={onOpenArbitration} />}
+    <NerResult report={report} busy={busy} detail={detail} onSelectPair={onSelectPair}
+      onBack={() => setDetail(false)} matrixRefs={matrixRefs} detailHeading={heading} />
+  </>;
 };
 
 export const nerBatchAdapter = {
@@ -98,6 +103,9 @@ export const nerBatchAdapter = {
     }
   },
   renderItem: (props) => <NerBatchComparison {...props} />,
+  renderArbitration: ({ projectId, answer, onBack }) => <NerArbitrations projectId={projectId}
+    initialOrigin={{ ner_batch_id: answer.id, task_id: answer.item.task_id, expected_manifest_hash: answer.manifest_hash }}
+    onBackToSource={onBack} />,
   renderOverview: (props) => <NerQualityOverview {...props} />,
 };
 

@@ -101,3 +101,4 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 .classification-partial-e2e.json
 .ner-e2e.json
 .ner-overview-e2e.json
+.ner-arbitration-e2e.json

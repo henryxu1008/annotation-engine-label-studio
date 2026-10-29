@@ -298,5 +298,12 @@
   "nerBatchBoundary": "Freeze the latest revision of each active assignment in an explicit task scope. Only an analysis batch is created; this does not approve, arbitrate, or change sampling.",
   "nerBatchLimits": "Choose up to 100 tasks and 20 independent participants per task. The whole batch must fit the comparison budget; reduce the task scope if it is too large.",
   "nerReason_missing_submission": "A frozen participant has no submission.",
-  "nerReason_latest_revision_unusable": "A selected latest revision is unusable; older revisions are not substituted."
+  "nerReason_latest_revision_unusable": "A selected latest revision is unusable; older revisions are not substituted.",
+  "nerArbitrationTitle": "NER arbitration",
+  "nerArbitrationBoundary": "Adopt one whole frozen NER revision. Original submissions, F1, review and sampling stay unchanged.",
+  "nerArbitrationDispatch": "Dispatch NER arbitration",
+  "nerArbitrationAdopt": "Adopt this frozen revision",
+  "nerArbitrationStartHint": "Open a disagreement in a frozen NER batch to dispatch an independent reviewer.",
+  "nerArbitrationEntities": "{{count}} entities (whole revision)",
+  "nerArbitrationInspect": "Inspect this revision before adopting"
 }
