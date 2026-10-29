@@ -359,6 +359,58 @@ describe("typed NER review handoff", () => {
     view.runtime.destroy();
   });
 
+  it.each(["dispatch", "link_existing"])(
+    "completes %s without SubtleCrypto and retains server hash binding",
+    async (mode) => {
+      const nodeCrypto = require("crypto");
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: { getRandomValues: nodeCrypto.webcrypto.getRandomValues.bind(nodeCrypto.webcrypto) },
+      });
+      const serverHash = (body) =>
+        nodeCrypto
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              action: "handoff",
+              batch_id: handoffSource.batch,
+              body: Object.fromEntries(Object.entries(body).sort(([left], [right]) => left.localeCompare(right))),
+              project_id: 4,
+              schema: "review-ner-arbitration-handoff/v1",
+              source_id: handoffSource.source,
+            }),
+          )
+          .digest("hex");
+      mockCall.mockImplementation(async (method, options) => {
+        if (method === "nerReviewHandoffContext")
+          return {
+            ...handoffContext(),
+            existing_arbitration: mode === "link_existing" ? metadata() : null,
+          };
+        if (method === "createNerReviewHandoff") {
+          const result = await handoffReply(options);
+          result.receipt.request_hash = serverHash(options.body);
+          return result;
+        }
+        if (method === "nerReviewHandoffDetail") return { ...handoffProvenance(), mode };
+        return respondHandoff(method, options);
+      });
+      const view = mount("en-US", null, { handoffSource });
+      if (mode === "dispatch") await dispatchHandoff();
+      else fireEvent.click(await screen.findByRole("button", { name: "Confirm association" }));
+      await screen.findByTestId("arbitration-saved");
+      await screen.findByTestId("ner-left-text");
+      const writes = mockCall.mock.calls.filter(([method]) => method === "createNerReviewHandoff");
+      expect(writes).toHaveLength(1);
+      expect(await nerReviewHandoff.commandHash(4, handoffSource, writes[0][1].body)).toBe(
+        serverHash(writes[0][1].body),
+      );
+      expect(screen.queryByRole("button", { name: "Recover original command" })).toBeNull();
+      view.unmount();
+      view.runtime.destroy();
+    },
+  );
+
   it("recovers a committed lost handoff ACK with exactly the original parent body and key", async () => {
     let calls = 0;
     mockCall.mockImplementation(async (method, options) => {
@@ -376,6 +428,67 @@ describe("typed NER review handoff", () => {
     expect(writes).toHaveLength(2);
     expect(writes[1][1].body).toEqual(writes[0][1].body);
     expect(writes[1][1].headers).toEqual(writes[0][1].headers);
+    view.unmount();
+    view.runtime.destroy();
+  });
+
+  it("ignores a late handoff ACK after blur and recovers only the original command", async () => {
+    let finish;
+    let original;
+    mockCall.mockImplementation(async (method, options) => {
+      if (method === "createNerReviewHandoff" && !original) {
+        original = options;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return respondHandoff(method, options);
+    });
+    const view = mount("en-US", null, { handoffSource });
+    await dispatchHandoff();
+    await waitFor(() => expect(finish).toBeDefined());
+    fireEvent.blur(window);
+    await act(async () => finish(await handoffReply(original)));
+    expect(screen.queryByTestId("arbitration-saved")).toBeNull();
+    expect(mockCall.mock.calls.some(([m]) => m === "nerArbitrationDetail")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Recover original command" }));
+    await screen.findByTestId("arbitration-saved");
+    const writes = mockCall.mock.calls.filter(([m]) => m === "createNerReviewHandoff");
+    expect(writes).toHaveLength(2);
+    expect(writes[1][1].body).toEqual(original.body);
+    expect(writes[1][1].headers).toEqual(original.headers);
+    view.unmount();
+    view.runtime.destroy();
+  });
+
+  it("drops the old source's in-flight handoff ACK without accepting or retrying it", async () => {
+    let finish;
+    let original;
+    mockCall.mockImplementation(async (method, options) => {
+      if (method === "nerReviewHandoffContext") return { ...handoffContext(), submission_id: options.params.source };
+      if (method === "createNerReviewHandoff") {
+        original = options;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return respondHandoff(method, options);
+    });
+    const view = mount("en-US", null, { handoffSource });
+    await dispatchHandoff();
+    await waitFor(() => expect(finish).toBeDefined());
+    const Provider = view.Provider;
+    view.rerender(
+      <Provider>
+        <NerArbitrations projectId={4} handoffSource={{ ...handoffSource, source: 12 }} />
+      </Provider>,
+    );
+    await screen.findByRole("combobox");
+    await act(async () => finish(await handoffReply(original)));
+    expect(screen.queryByTestId("arbitration-saved")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recover original command" })).toBeNull();
+    expect(mockCall.mock.calls.filter(([m]) => m === "createNerReviewHandoff")).toHaveLength(1);
+    expect(mockCall.mock.calls.some(([m]) => m === "nerArbitrationDetail")).toBe(false);
     view.unmount();
     view.runtime.destroy();
   });

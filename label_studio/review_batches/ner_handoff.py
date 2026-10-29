@@ -3,7 +3,7 @@ from access_control.project_operations import ORGANIZE_NER_ARBITRATION, project_
 from classification_disagreements import ner
 from classification_disagreements import ner_arbitration as a
 from classification_disagreements import ner_batches as b
-from classification_disagreements.models import NerArbitrationTask, NerBatch
+from classification_disagreements.models import NerArbitrationDecision, NerArbitrationTask, NerBatch
 from django.conf import settings
 from django.db import connection, models
 from django.db.models import Case, F, Sum, Value, When, Window
@@ -109,40 +109,50 @@ def analysis(context, identifier, budget, *, lock=False):
     return b.checked(row, context[2])
 
 
-def target(context, identifier, budget, *, lock=False):
-    # Authorization before hydrating origin; scopes exclude the whole self cohort.
-    visible = a.scoped(context[2], context[1], context[3]).values('pk')
-    query = a.guarded(
-        NerArbitrationTask.objects.filter(project=context[2], pk__in=visible), ('participant_ids', 'cancellation')
-    )
-    table = connection.ops.quote_name(NerArbitrationTask._meta.db_table)
+def metadata_row(query, identifier, fields, budget, *, lock=False):
+    """Reserve every decoded field before dependent ledger validation reads more."""
+    query = a.guarded(query, fields[1:])
+    table = connection.ops.quote_name(query.model._meta.db_table)
     measure = 'OCTET_LENGTH(CAST({} AS TEXT))' if connection.vendor == 'postgresql' else 'LENGTH(CAST({} AS BLOB))'
     total = '+'.join(
-        'COALESCE(' + measure.format(table + '.' + connection.ops.quote_name(field)) + ',0)'
-        for field in ('origin', 'participant_ids', 'cancellation')
+        'COALESCE(' + measure.format(table + '.' + connection.ops.quote_name(field)) + ',0)' for field in fields
     )
     query = query.annotate(_target_bytes=RawSQL(total, [], output_field=models.BigIntegerField()))
     remaining = MAX_STORED_METADATA - budget.stored
-    for field in ('participant_ids', 'cancellation'):
+    for field in fields[1:]:
+        output = query.model._meta.get_field(field)
+        stored = a.JSON_LIMITS.get(field, (16 * 1024, 16 * 1024))[1]
         query = query.annotate(
             **{
                 f'_safe_{field}': Case(
                     When(
-                        **{'_target_bytes__lte': remaining, f'_size_{field}__lte': a.JSON_LIMITS[field][1]},
+                        **{'_target_bytes__lte': remaining, f'_size_{field}__lte': stored},
                         then=F(field),
                     ),
                     default=Value(None),
-                    output_field=models.JSONField(),
+                    output_field=output,
                 )
             }
         )
-    row = budget.load(
-        query, identifier, 'origin', a.JSON_LIMITS['origin'][0], a.JSON_LIMITS['origin'][1], lock=lock, row_total=True
-    )
-    a.checked(row, context[2])
-    for field in ('participant_ids', 'cancellation'):
+    row = budget.load(query, identifier, fields[0], *a.JSON_LIMITS[fields[0]], lock=lock, row_total=True)
+    a.hydrate(row, fields)
+    for field in fields[1:]:
         budget.add((row._meta.db_table, identifier, field), getattr(row, field), getattr(row, f'_size_{field}') or 0)
     return row
+
+
+def target(context, identifier, budget, *, lock=False):
+    # Authorization before hydrating origin; scopes exclude the whole self cohort.
+    visible = a.scoped(context[2], context[1], context[3]).values('pk')
+    query = NerArbitrationTask.objects.filter(project=context[2], pk__in=visible)
+    row = metadata_row(query, identifier, ('origin', 'participant_ids', 'cancellation'), budget, lock=lock)
+
+    def decision_loader(arbitration):
+        query = NerArbitrationDecision.objects.filter(project=context[2], arbitration_id=arbitration.pk)
+        identifier = query.values_list('pk', flat=True).first()
+        return metadata_row(query, identifier, ('winner', 'reason'), budget, lock=lock) if identifier else None
+
+    return a.checked(row, context[2], decision_loader=decision_loader)
 
 
 def require_pending(context, source_id, pin):

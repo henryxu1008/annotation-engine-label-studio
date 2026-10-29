@@ -87,7 +87,12 @@ existing 64 MiB SQL / 8 MiB canonical snapshot and work-per-pass ceilings.
 SQL CASE byte gates precede JSON decoding, including page totals.
 History reserves the complete page's proofs before reading target metadata;
 target origin, participant IDs and cancellation JSON share one predecode SQL
-gate and all contribute to the same aggregate budget. Current source status
+gate and all contribute to the same aggregate budget. Validating a resolved
+target also loads its decision winner and reason: both are reserved against the
+remaining cumulative budget before decoding. The existing full decision validator
+consumes that bounded proof without a second unaccounted read. This applies to
+context, new links and history, even though history emits neither winner nor reason.
+Current source status
 is suppressed if the task/assignment scope or complete source pin no longer matches.
 
 Verified context, fresh dispatch and fresh link each make exactly two official
@@ -111,6 +116,11 @@ dispatch assignee. Missing or inconsistent ACKs remain unknown; refresh never
 POSTs. Explicit recovery retains the exact parent body/key, identity changes scrub
 old state, and a same-identity read failure preserves an acknowledged save.
 Navigation preserves batch/page/filter/focus with fresh reads.
+
+Command SHA-256 uses the existing locked @noble/hashes implementation, declared
+as a direct dependency. It also works on supported HTTP origins where Web Crypto
+SubtleCrypto is unavailable; canonical request hashing and ACK validation remain
+mandatory. No server TLS setting or authentication boundary is changed.
 
 ## Validation and retained environment boundary
 

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 
 const id = z.number().int().positive().safe();
 const hash = z.string().regex(/^[0-9a-f]{64}$/);
@@ -171,8 +173,7 @@ export const nerReviewHandoff = {
       source_id: source.source,
       body,
     });
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
-    return Array.from(new Uint8Array(digest), (v) => v.toString(16).padStart(2, "0")).join("");
+    return bytesToHex(sha256(JSON.stringify(payload)));
   },
   validateAcknowledgement(result, intent) {
     valid(

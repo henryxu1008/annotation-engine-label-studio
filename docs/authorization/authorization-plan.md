@@ -1209,6 +1209,11 @@ Docker/#76 CHANGED/UNKNOWN and incomplete database-comparison records remain.
 
 ### Explicit frozen NER review handoff (#84)
 
+Resolved-target validation includes decision winner/reason in the same cumulative
+metadata budget and SQL predecode gate. The shared NER validator accepts a bounded
+decision loader while retaining its full scope/status/payload checks; ordinary
+NER API validation and its existing contract remain unchanged.
+
 See [the NER handoff contract](ner-review-handoff-v1.md). Default-off typed routes
 and an independent NER association table reuse the existing complete handoff and
 NER arbitration lifecycles. Current Manager + READ_WORK +

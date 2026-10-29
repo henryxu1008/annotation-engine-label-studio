@@ -6,7 +6,7 @@ from access_control.identity import LocalIdentityProvider
 from access_control.project_operations import ProjectOperationPolicy
 from classification_disagreements import ner, ner_api
 from classification_disagreements import ner_arbitration as a
-from classification_disagreements.models import NerArbitrationTask, NerBatch
+from classification_disagreements.models import NerArbitrationDecision, NerArbitrationTask, NerBatch
 from django.db import DatabaseError, transaction
 from django.db.models import JSONField
 from django.test import override_settings
@@ -503,3 +503,61 @@ class TestNerHandoff(NerHandoffFixtures, APITestCase):
         assert detail.data['source_status'] == 'unavailable'
         assert detail.data['source_integrity'] == 'not_checked'
         assert detail.data['decision'] is None
+
+    def resolved_history(self):
+        result = self.handoff()
+        assert result.status_code == 201, result.data
+        target = NerArbitrationTask.objects.get()
+        self.client.force_authenticate(self.independent)
+        self.arbitrate(target)
+        self.client.force_authenticate(self.manager)
+        return NerArbitrationDecision.objects.get()
+
+    def test_resolved_history_counts_decision_metadata_in_canonical_budget(self):
+        decision = self.resolved_history()
+        measured = []
+        original = h.Metadata.add
+
+        def add(budget, *args):
+            result = original(budget, *args)
+            measured.append((budget.canonical, budget.stored))
+            return result
+
+        with patch.object(h.Metadata, 'add', add):
+            assert self.client.get(self.handoff_url).status_code == 200
+        canonical, stored = max(measured)
+        # The same bound must include the winner and reason that checked() reads,
+        # even though this metadata-only response does not emit either field.
+        expected = sum(
+            ner.bounded(value, 4 * 1024 * 1024)
+            for value in (
+                NerReviewArbitrationHandoff.objects.get().origin,
+                NerArbitrationTask.objects.get().origin,
+                NerArbitrationTask.objects.get().participant_ids,
+                None,
+                decision.winner,
+                decision.reason,
+            )
+        )
+        assert canonical == expected
+        with patch.object(h, 'MAX_METADATA', canonical), patch.object(h, 'MAX_STORED_METADATA', stored):
+            assert self.client.get(self.handoff_url).status_code == 200
+        with patch.object(h, 'MAX_METADATA', canonical - 1):
+            assert self.client.get(self.handoff_url).status_code == 422
+
+    def test_resolved_history_sql_total_rejects_before_decoding_decision(self):
+        self.resolved_history()
+        proof = h.rows(self.project).values_list('_size_origin', flat=True).get()
+        target = a.rows(self.project).values('_size_origin', '_size_participant_ids', '_size_cancellation').get()
+        decision = a.decisions(self.project).values('_size_winner', '_size_reason').get()
+        stored = proof + sum(value or 0 for value in target.values()) + sum(decision.values())
+        original = JSONField.from_db_value
+
+        def decode(field, value, *args):
+            if isinstance(value, str) and 'submission_id' in value and 'schema' not in value:
+                raise AssertionError('Decision decoded before cumulative SQL budget')
+            return original(field, value, *args)
+
+        with patch.object(h, 'MAX_STORED_METADATA', stored - 1), patch.object(JSONField, 'from_db_value', decode):
+            result = self.client.get(self.handoff_url)
+        assert result.status_code == 422, result.data
