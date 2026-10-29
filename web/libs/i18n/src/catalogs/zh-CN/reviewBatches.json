@@ -305,5 +305,12 @@
   "nerArbitrationAdopt": "采纳此冻结修订",
   "nerArbitrationStartHint": "从冻结 NER 批次的分歧任务派发给独立审核员。",
   "nerArbitrationEntities": "{{count}} 个实体（整份修订）",
-  "nerArbitrationInspect": "采纳前查看此修订"
+  "nerArbitrationInspect": "采纳前查看此修订",
+  "priorityNerEnable": "优先抽审冻结 NER 分歧",
+  "priorityNerBatch": "冻结 NER 批次",
+  "priorityNerBoundary": "仅优先抽审与冻结 NER 修订匹配且已验证的分歧。缺失、不可比较及未匹配输入仍为未知；仲裁采纳不等于批准 Submission。",
+  "priorityType": "分歧依据类型",
+  "priorityClassification": "文本分类",
+  "priorityNer": "NER",
+  "priorityNerProvenance": "冻结 NER 依据批次 #{{id}}"
 }

@@ -134,8 +134,10 @@ The separate review-priority workflow retains existing enterprise journey budget
 Classification partial matching and single-batch project/annotator summaries are
 implemented in classification-partial-match-v1.md and classification-quality-overview-v1-design.md.
 Manual NER and independent durable NER queues are documented in ner-disagreement-v1.md
-and ner-batches-v1.md. #81 still needs NER aggregation/arbitration and bbox/field
-contracts and workflows. #84 still needs low-confidence contracts and second review;
+and ner-batches-v1.md. NER aggregation and standalone frozen-revision arbitration
+are implemented in ner-quality-overview-v1.md and ner-arbitration-v1.md; optional
+NER sampling is in ner-review-priority-v1.md. #81 still needs bbox/field contracts
+and workflows. #84 still needs low-confidence contracts and second review;
 its implemented exact review/arbitration handoff is in review-arbitration-handoff-v1.md.
 Arbitration already exists as a separate frozen-adoption ledger; it is not an
 approval decision. Neither issue is closed by this slice.

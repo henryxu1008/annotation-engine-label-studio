@@ -240,5 +240,6 @@ This is a transient read projection, not a new frozen Manifest, audit ledger,
 quality metric, approval policy or rework scheduler. Core-only mode denies the
 new endpoint; #79/#80 exports and Host contracts are unchanged. #84 remains open.
 Frozen classification conflict priority now reuses this workflow. The independent
-#81 arbitration ledger can adopt a frozen revision, but second review and explicit
-review/arbitration handoff remain deferred. See review-priority-v1.md.
+#81 arbitration ledger can adopt a frozen revision. Classification handoff is
+implemented in review-arbitration-handoff-v1.md; second review and explicit NER
+handoff remain deferred. Optional NER priority is in ner-review-priority-v1.md.

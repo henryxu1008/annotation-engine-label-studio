@@ -31,6 +31,7 @@ const detail = metadata.extend({
 const list = z.object({ results: z.object({ batches: z.array(metadata) }), next: z.string().nullable().optional() });
 const capability = z.object({ enabled: z.literal(true), can_create: z.boolean(), can_prioritize: z.boolean().optional(),
   can_read_priority: z.boolean().optional(),
+  can_prioritize_ner: z.boolean().optional(), can_read_ner_priority: z.boolean().optional(),
   can_read_handoffs: z.boolean().optional(), can_handoff: z.boolean().optional(),
   viewer_hash: z.string().regex(/^[0-9a-f]{64}$/).optional() });
 

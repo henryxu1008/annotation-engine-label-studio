@@ -7,7 +7,7 @@ import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReworkComparison } from "./ReworkComparison";
 import { ReviewArbitrationHandoff } from "./ReviewArbitrationHandoff";
-import { ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview } from "./ReviewPriority";
+import { ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview, isNerPriority } from "./ReviewPriority";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import { validBatchCapability, validBatchDetail, validBatchList } from "./reviewBatchResponses";
 import "./ReviewBatches.scss";
@@ -16,14 +16,21 @@ import "./ReviewBatches.scss";
 // These endpoints return JSON projections, never a numeric HTTP status field.
 const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
 const failedDetail = (r, id) => failed(r) || !validBatchDetail(r, id);
-const priorityViewMatches = (r, capability) => r?.algorithm !== "classification-conflict-ranked/v1"
-  || (capability?.can_read_priority === true && typeof r.viewer_hash === "string" && r.viewer_hash === capability.viewer_hash);
+const priorityViewMatches = (r, capability) => {
+  const permission = r?.algorithm === "ner-conflict-ranked/v1" ? "can_read_ner_priority"
+    : r?.algorithm === "classification-conflict-ranked/v1" ? "can_read_priority" : null;
+  return !permission || (capability?.[permission] === true && typeof r.viewer_hash === "string"
+    && r.viewer_hash === capability.viewer_hash);
+};
 const code = (r) => r?.response?.display_context?.reason ?? r?.display_context?.reason;
 const priorityRejection = (r) => ({
   REVIEW_BATCH_PREVIEW_CHANGED: 409, REVIEW_PRIORITY_MANIFEST_CHANGED: 409,
   REVIEW_PRIORITY_SOURCE_UNAVAILABLE: 409, CLASSIFICATION_BATCH_SOURCE_INVALID: 409,
   CLASSIFICATION_BATCH_MANIFEST_INVALID: 409, REVIEW_BATCH_TOO_LARGE: 422,
   REVIEW_PRIORITY_TOO_LARGE: 422, CLASSIFICATION_BATCH_TOO_LARGE: 422,
+  REVIEW_NER_PRIORITY_TOO_LARGE: 422, NER_TOO_LARGE: 422, NER_BATCH_TOO_LARGE: 422,
+  NER_BATCH_MANIFEST_INVALID: 409, NER_BATCH_RESULT_CHANGED: 409, NER_SOURCE_INTEGRITY_FAILED: 409,
+  REVIEW_BATCH_SOURCE_INVALID: 409, REVIEW_NER_PRIORITY_UNAVAILABLE: 403,
 }[code(r)] === r?.$meta?.status && r?.$meta?.status !== undefined);
 
 export const ReviewBatchTitle = () => {
@@ -64,6 +71,10 @@ export const ReviewBatches = ({ projectId }) => {
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
   const [canPrioritize, setCanPrioritize] = useState(false);
+  const [canPrioritizeNer, setCanPrioritizeNer] = useState(false);
+  const viewer = useRef(null);
+  const nerScope = useRef(false);
+  const nerConfirmed = useRef(false);
   const [canReadHandoffs, setCanReadHandoffs] = useState(false), [handoff, setHandoff] = useState(null);
   const handoffReturn = useRef(null);
   const [priorityChoice, setPriorityChoice] = useState(null);
@@ -82,6 +93,22 @@ export const ReviewBatches = ({ projectId }) => {
   const [savedReview, setSavedReview] = useState(false);
   const [filter, setFilter] = useState("all");
 
+  nerScope.current = isNerPriority(priorityChoice) || isNerPriority(creation.current?.body?.priority)
+    || detail?.algorithm === "ner-conflict-ranked/v1" || nerConfirmed.current;
+  const canUsePriority = isNerPriority(priorityChoice) ? canPrioritizeNer : canPrioritize;
+  const acceptViewer = (capability, forceNer = false) => {
+    const next = capability?.viewer_hash;
+    if ((forceNer || nerScope.current) && (typeof next !== "string" || !/^[0-9a-f]{64}$/.test(next)
+      || (viewer.current && viewer.current !== next))) {
+      creation.current = null; nerConfirmed.current = false; setCreationUnknown(false); setCreatedNotice(null);
+      setPriorityChoice(null); setPreview(null); setDetail(null); setBatches([]); setReviewing(false);
+      setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false);
+      if (typeof next === "string") viewer.current = next;
+      return false;
+    }
+    if (typeof next === "string") viewer.current = next;
+    return true;
+  };
   const load = useCallback(async (id = null, targetPage = 1, targetFilter = "all") => {
     const current = ++generation.current;
     returnFocus.current = false;
@@ -97,19 +124,21 @@ export const ReviewBatches = ({ projectId }) => {
         }),
       ]);
       if (current !== generation.current) return;
+      if (!failed(capability) && validBatchCapability(capability)
+        && !acceptViewer(capability, selected?.algorithm === "ner-conflict-ranked/v1")) throw new Error("identity changed");
       if (failed(list) || !validBatchList(list) || failed(capability) || !validBatchCapability(capability)
         || (id !== null && (failedDetail(selected, id) || !priorityViewMatches(selected, capability)))) {
-        setCanCreate(false); setCanPrioritize(false); setPreview(null);
+        setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
         if (!creation.current?.unknown) creation.current = null;
         setError("loadFailed"); return;
       }
       setBatches(list.results?.batches ?? []);
       setCanCreate(capability.can_create === true);
-      setCanPrioritize(capability.can_prioritize === true);
+      setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true);
       setCanReadHandoffs(capability.can_read_handoffs === true);
       setPage(targetPage); setNext(Boolean(list.next)); setDetail(selected);
     } catch {
-      if (current === generation.current) { setError("loadFailed"); setCanCreate(false); setCanPrioritize(false); setPreview(null);
+      if (current === generation.current) { setError("loadFailed"); setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
         if (!creation.current?.unknown) creation.current = null; }
     } finally { if (current === generation.current) setBusy(false); }
   }, [projectId]);
@@ -129,17 +158,19 @@ export const ReviewBatches = ({ projectId }) => {
         call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true }),
       ]);
       if (!isCurrent()) return;
+      if (!failed(capability) && validBatchCapability(capability)
+        && !acceptViewer(capability, result?.algorithm === "ner-conflict-ranked/v1")) throw new Error("identity changed");
       if (failedDetail(result, id) || failed(capability) || !validBatchCapability(capability)
         || !priorityViewMatches(result, capability)) throw new Error("detail unavailable");
       setDetail(result);
       setCanCreate(capability.can_create === true);
-      setCanPrioritize(capability.can_prioritize === true);
+      setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true);
       setCanReadHandoffs(capability.can_read_handoffs === true);
     } catch {
       if (!isCurrent()) return;
       // A failed read cannot establish current authority. Keep only the retry context.
       setDetail(null); setReviewing(false); setBatches([]);
-      setCanCreate(false); setCanPrioritize(false); setPreview(null);
+      setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
       if (!creation.current?.unknown) creation.current = null;
       setError(reviewSaved ? "savedRefreshFailed" : "progressRefreshFailed");
     } finally { if (isCurrent()) setProgressBusy(false); }
@@ -147,7 +178,7 @@ export const ReviewBatches = ({ projectId }) => {
 
   useEffect(() => {
     setPreview(null); creation.current = null; setCreationUnknown(false); setCreatedNotice(null); setPriorityChoice(null);
-    setHandoff(null); handoffReturn.current = null; load();
+    viewer.current = null; nerConfirmed.current = false; setHandoff(null); handoffReturn.current = null; load();
     return () => { generation.current += 1; selection.current = null; };
   }, [load]);
 
@@ -157,34 +188,61 @@ export const ReviewBatches = ({ projectId }) => {
     setPreview(null); creation.current = null; setError("");
   };
   useEffect(() => {
-    if (canPrioritize || creation.current?.unknown || priorityChoice === null) return;
+    if (canUsePriority || creation.current?.unknown || priorityChoice === null) return;
     setPriorityChoice(null); setPreview(null); creation.current = null;
-  }, [canPrioritize, priorityChoice]);
+  }, [canPrioritize, canPrioritizeNer, priorityChoice]);
   const requestPreview = async () => {
     if (creation.current?.unknown) return;
-    if (priorityChoice !== null && (!canPrioritize || !validPriorityChoice(priorityChoice))) { setError("priorityChoose"); return; }
+    if (priorityChoice !== null && (!canUsePriority || !validPriorityChoice(priorityChoice))) { setError("priorityChoose"); return; }
     setBusy(true); setError(""); setPreview(null); creation.current = null;
     const current = ++generation.current;
     try {
       const ids = (value) => value.trim() ? value.split(/[\s,]+/).map(Number) : [];
       const body = { ...form, rate: Number(form.rate), package_ids: ids(form.package_ids), submitter_ids: ids(form.submitter_ids) };
       if (priorityChoice !== null) body.priority = priorityChoice;
+      let expectedViewer = null;
+      if (isNerPriority(body.priority)) {
+        const capability = await call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true });
+        if (current !== generation.current) return;
+        if (failed(capability) || !validBatchCapability(capability) || !acceptViewer(capability, true)
+          || capability.can_create !== true || capability.can_prioritize_ner !== true) throw new Error("authority changed");
+        expectedViewer = capability.viewer_hash;
+      }
       const result = await call.current("reviewBatchPreview", { params: { pk: projectId }, body, errorFilter: () => true });
+      if (isNerPriority(body.priority)) {
+        const capability = await call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true });
+        if (current !== generation.current) return;
+        if (failed(capability) || !validBatchCapability(capability) || !acceptViewer(capability, true)
+          || capability.viewer_hash !== expectedViewer || capability.can_prioritize_ner !== true
+          || (!failed(result) && result.viewer_hash !== expectedViewer)) throw new Error("authority changed");
+      }
       if (current !== generation.current) return;
       if (failed(result)) { setError(code(result) === "REVIEW_BATCH_TOO_LARGE" ? "tooLarge" : "previewFailed"); return; }
       if (body.priority && !validPriorityPreview(result, body.priority)) { setError("previewFailed"); return; }
-      creation.current = { body: { ...body, expected_plan_hash: result.plan_hash }, key: uuidv4() };
+      creation.current = { body: { ...body, expected_plan_hash: result.plan_hash }, key: uuidv4(), viewerHash: expectedViewer };
       setPreview(result);
-    } catch { if (current === generation.current) setError("previewFailed"); }
+    } catch { if (current === generation.current) {
+      setError("previewFailed");
+      if (isNerPriority(priorityChoice)) { setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); }
+    } }
     finally { if (current === generation.current) setBusy(false); }
   };
   const create = async () => {
     if (!creation.current) return;
     const intent = creation.current;
+    let posted = false;
     intent.inFlight = true;
     const current = ++generation.current;
     setBusy(true); setError("");
     try {
+      if (isNerPriority(intent.body.priority)) {
+        const capability = await call.current("reviewBatchCapability", { params: { pk: projectId }, errorFilter: () => true });
+        if (current !== generation.current) return;
+        if (failed(capability) || !validBatchCapability(capability) || !acceptViewer(capability, true)
+          || capability.viewer_hash !== intent.viewerHash || capability.can_create !== true
+          || capability.can_prioritize_ner !== true) throw new Error("authority changed");
+      }
+      posted = true;
       const result = await call.current("reviewBatchCreate", { params: { pk: projectId },
         body: intent.body, headers: { "Idempotency-Key": intent.key }, errorFilter: () => true });
       if (current !== generation.current) return;
@@ -203,11 +261,16 @@ export const ReviewBatches = ({ projectId }) => {
         || result.idempotency_key !== intent.key || result.plan_hash !== intent.body.expected_plan_hash)) {
         intent.unknown = true; setCreationUnknown(true); setError("priorityUnknownWrite"); return;
       }
-      if (intent.body.priority) setCreatedNotice(result.id);
+      if (intent.body.priority) { nerConfirmed.current = isNerPriority(intent.body.priority); setCreatedNotice(result.id); }
       setCreationUnknown(false);
       setPreview(null); creation.current = null;
       await load(result.id);
     } catch { if (current === generation.current) {
+      if (isNerPriority(intent.body.priority) && (!posted || creation.current !== intent)) {
+        if (creation.current === intent && !intent.unknown) { creation.current = null; setPreview(null); }
+        setCanCreate(false); setCanPrioritizeNer(false); setError(intent.unknown && creation.current === intent ? "priorityUnknownWrite" : "loadFailed");
+        return;
+      }
       intent.uncertain = true;
       if (intent.body.priority) { intent.unknown = true; setCreationUnknown(true); }
       setError(intent.body.priority ? "priorityUnknownWrite" : "createFailed");
@@ -224,7 +287,7 @@ export const ReviewBatches = ({ projectId }) => {
       generation.current += 1; progressGeneration.current += 1;
       returnFocus.current = false; setComparison(null);
       setBusy(false); setProgressBusy(false); setDetail(null); setBatches([]); setReviewing(false);
-      setCanCreate(false); setCanPrioritize(false); setPreview(null);
+      setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setPreview(null);
       setCanReadHandoffs(false);
       if (!intent?.unknown) creation.current = null;
       setError(intent?.unknown ? "priorityUnknownWrite" : "loadFailed");
@@ -290,7 +353,9 @@ export const ReviewBatches = ({ projectId }) => {
       <label>{t("seed")}<input value={form.seed} onChange={(e) => change("seed", e.target.value)} /></label>
       <label>{t("packages")}<input value={form.package_ids} onChange={(e) => change("package_ids", e.target.value)} /></label>
       <label>{t("submitters")}<input value={form.submitter_ids} onChange={(e) => change("submitter_ids", e.target.value)} /></label>
-      {canPrioritize && <ReviewPrioritySelector projectId={projectId} value={priorityChoice} onChange={(value) => {
+      {(canPrioritize || canPrioritizeNer) && <ReviewPrioritySelector projectId={projectId}
+        kinds={[...(canPrioritize ? ["classification_conflict"] : []), ...(canPrioritizeNer ? ["ner_conflict"] : [])]}
+        value={priorityChoice} onChange={(value) => {
         if (creation.current?.unknown) return;
         setPriorityChoice(value); setPreview(null); creation.current = null; setError("");
       }} />}
@@ -312,14 +377,14 @@ export const ReviewBatches = ({ projectId }) => {
     {detail && <section>
       <h3>{detail.name}</h3>
       {detail.role === "reviewer" && <p>{t("visibleScope")}</p>}
-      {detail.role === "reviewer" && detail.algorithm === "classification-conflict-ranked/v1" && <p>{t("priorityReviewerScope")}</p>}
+      {detail.role === "reviewer" && ["classification-conflict-ranked/v1", "ner-conflict-ranked/v1"].includes(detail.algorithm) && <p>{t("priorityReviewerScope")}</p>}
       <p>{t("sampleCount", { selected: detail.selected_count, total: detail.candidate_count })}
         {" · "}{t("actualRate", { rate: detail.candidate_count ? (100 * detail.selected_count / detail.candidate_count).toFixed(1) : "—" })}</p>
       <code>{detail.plan_hash}</code>
       <p>{t("asOf", { time: detail.as_of })}</p>
       <p>{t("rule", { rate: detail.rule.rate, seed: detail.rule.seed, algorithm: detail.algorithm })}</p>
       <ReviewPrioritySummary summary={detail.priority_summary} />
-      {detail.priority_source && <p>{t("priorityProvenance", { id: detail.priority_source.batch_id })} <code>{detail.priority_source.manifest_hash}</code></p>}
+      {detail.priority_source && <p>{t(detail.algorithm === "ner-conflict-ranked/v1" ? "priorityNerProvenance" : "priorityProvenance", { id: detail.priority_source.batch_id })} <code>{detail.priority_source.manifest_hash}</code></p>}
       <dl className={cn("review-batches").elem("progress").toClassName()} data-testid="review-batch-progress">
         <div><dt>{t("selectedTotal")}</dt><dd>{progress.selected}</dd></div>
         <div><dt>{t("uncheckedTotal")}</dt><dd>{progress.unchecked}</dd></div>
@@ -364,7 +429,7 @@ export const ReviewBatches = ({ projectId }) => {
                 if (creation.current?.inFlight || creation.current?.unknown) return;
                 handoffReturn.current = { batch: detail.id, source: i.submission_id, page, filter };
                 ++generation.current; ++progressGeneration.current; selection.current = null;
-                setDetail(null); setBatches([]); setCanCreate(false); setCanPrioritize(false); setCanReadHandoffs(false);
+                setDetail(null); setBatches([]); setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setCanReadHandoffs(false);
                 setPreview(null); creation.current = null;
                 setHandoff({ batch: detail.id, source: i.submission_id, pending: i.status === "pending" });
               }}>{t("handoffTitle")}</Button>}
