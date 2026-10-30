@@ -118,7 +118,7 @@ def controls(xml):
     return {'to_name': target, 'field': binding[1:], 'names': sorted(names)}
 
 
-def values(snapshot, control):
+def raw_values(snapshot, control):
     annotation = snapshot.get('annotation')
     if not isinstance(annotation, dict) or annotation.get('was_cancelled') is not False:
         raise Incomparable('cancelled_or_missing')
@@ -152,13 +152,18 @@ def values(snapshot, control):
         used += size
         if size > MAX_VALUE_BYTES or used > MAX_VALUES_BYTES:
             raise Error('FIELD_TOO_LARGE')
-        found[item['from_name']] = {'raw': raw, 'normalized': normalize(raw)}
+        found[item['from_name']] = raw
     if set(found) != set(control['names']):
         raise Incomparable('missing_field')
     return found
 
 
-def prepare(ids, snapshots):
+def values(snapshot, control):
+    return {name: {'raw': raw, 'normalized': normalize(raw)} for name, raw in raw_values(snapshot, control).items()}
+
+
+def inspect(ids, snapshots):
+    """Validate bounded raw inputs without normalization or pair comparisons."""
     count = len(ids)
     if count < 2 or count != len(snapshots) or len(set(ids)) != count:
         raise Error('FIELD_INVALID_INPUT', 400)
@@ -184,7 +189,7 @@ def prepare(ids, snapshots):
             raise Incomparable('empty_or_missing_text')
         if len(text.encode()) > MAX_TEXT_BYTES:
             raise Error('FIELD_TOO_LARGE')
-        rows = [values(s, control) for s in snapshots]
+        rows = [raw_values(s, control) for s in snapshots]
     except (Incomparable, KeyError, TypeError, AttributeError) as exc:
         return {
             'logical': {
@@ -196,13 +201,44 @@ def prepare(ids, snapshots):
                 'details': None,
             }
         }
+    return {'ids': ids, 'base': base, 'control': control, 'raw_rows': rows}
+
+
+def planned_cost(inspected):
+    if 'logical' in inspected:
+        return {'normalized_values': 0, 'field_equalities': 0}
+    count, size = len(inspected['ids']), len(inspected['control']['names'])
+    return {'normalized_values': count * size, 'field_equalities': count * (count - 1) * size}
+
+
+def equal(left, right):
+    return left == right
+
+
+def calculate(inspected, counter=None):
+    """Score already-inspected values; callers fence the whole batch first."""
+    if 'logical' in inspected:
+        return inspected
+    ids, base, control = inspected['ids'], inspected['base'], inspected['control']
+    count = len(ids)
+    rows = []
+    for raw_row in inspected['raw_rows']:
+        row = {}
+        for name, raw in raw_row.items():
+            row[name] = {'raw': raw, 'normalized': normalize(raw)}
+            if counter is not None:
+                counter['normalized_values'] += 1
+        rows.append(row)
     scores, details = [], []
     for a, b in itertools.combinations(range(count), 2):
         entries = []
         for name in control['names']:
             left, right = rows[a][name], rows[b][name]
             informative = bool(left['normalized'] or right['normalized'])
-            raw_equal, normalized_equal = left['raw'] == right['raw'], left['normalized'] == right['normalized']
+            raw_equal = equal(left['raw'], right['raw'])
+            normalized_equal = equal(left['normalized'], right['normalized'])
+            if counter is not None:
+                counter['field_equalities'] += 2
             entries.append(
                 {
                     'name': name,
@@ -255,6 +291,10 @@ def prepare(ids, snapshots):
     # The public selected-pair projection has a separate output byte gate.
     bounded({'pairs': scores, 'sources': rows}, MAX_SNAPSHOT_BYTES)
     return {'logical': logical}
+
+
+def prepare(ids, snapshots):
+    return calculate(inspect(ids, snapshots))
 
 
 def public(prepared, selected=None):

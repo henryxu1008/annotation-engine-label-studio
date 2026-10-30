@@ -336,5 +336,13 @@
   "fieldReason_missing_field": "at least one configured field is missing; no denominator reduction",
   "fieldReason_no_values": "no informative values",
   "fieldReason_source_unavailable": "frozen source unavailable; all values and scores are hidden",
-  "fieldReason_unknown": "unsupported comparison"
+  "fieldReason_unknown": "unsupported comparison",
+  "fieldBatchTitle": "Frozen field queues",
+  "fieldBatchBoundary": "Read-only field analysis. Creating a batch does not approve, arbitrate or sample submissions.",
+  "fieldBatchLimits": "Up to 100 tasks / 20 participants per task, within one shared byte and calculation budget. Format-only differences remain in the disagreement queue.",
+  "fieldBatchValueDifference": "Value differences",
+  "fieldBatchFormatDifference": "Format differences",
+  "fieldReason_insufficient_inputs": "Fewer than two independent participants",
+  "fieldReason_missing_submission": "An original participant had no submission",
+  "fieldReason_latest_revision_unusable": "The latest revision was unusable"
 }

@@ -113,5 +113,6 @@
   "apps/labelstudio/src/pages/DataManager/FieldDisagreement.jsx",
   "apps/labelstudio/src/pages/DataManager/NerBatches.jsx",
   "apps/labelstudio/src/pages/DataManager/NerQualityOverview.jsx",
-  "apps/labelstudio/src/pages/DataManager/NerArbitrations.jsx"
+  "apps/labelstudio/src/pages/DataManager/NerArbitrations.jsx",
+  "apps/labelstudio/src/pages/DataManager/FieldBatches.jsx"
 ]

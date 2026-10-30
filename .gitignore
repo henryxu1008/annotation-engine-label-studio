@@ -107,3 +107,5 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 
 # Fresh synthetic field comparison browser credentials
 web/apps/labelstudio-e2e/.field-e2e.json
+
+/web/apps/labelstudio-e2e/.field-batches-e2e.json
