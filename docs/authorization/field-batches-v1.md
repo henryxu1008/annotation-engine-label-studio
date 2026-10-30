@@ -5,6 +5,10 @@ immutable `FieldBatch`; reading a queue never writes annotations, Submissions,
 review decisions, arbitration or sampling state. #81 and #84 remain open. There
 is no Host integration, release/export authority or Core-only-review fallback.
 
+The independent optional GET overview is specified in field-quality-overview-v1.md.
+It derives task/peer weighted statistics from these same frozen inputs without
+changing this Manifest, queue rules or original-key recovery.
+
 The static Text/TextArea support, raw and normalized fractions, empty/missing
 boundaries and explanation rules are unchanged from
 [field-disagreement-v1.md](field-disagreement-v1.md). There is no new scorer or

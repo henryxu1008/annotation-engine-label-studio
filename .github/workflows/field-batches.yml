@@ -2,7 +2,7 @@ name: Frozen Field Batches
 
 on:
   push:
-    branches: [main, codex/issue81-field-batches]
+    branches: [main, codex/issue81-field-batches, codex/issue81-field-quality-overview]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited]
@@ -74,6 +74,7 @@ jobs:
           poetry run python label_studio/manage.py migrate --noinput
           poetry run python label_studio/manage.py collectstatic --noinput
           poetry run python label_studio/manage.py seed_field_batch_e2e
+          poetry run python label_studio/manage.py seed_field_overview_e2e
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -85,6 +86,7 @@ jobs:
           yarn install --frozen-lockfile
           NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
             apps/labelstudio/src/pages/DataManager/FieldBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/FieldQualityOverview.test.jsx \
             apps/labelstudio/src/pages/DataManager/FieldDisagreement.test.jsx \
             apps/labelstudio/src/pages/DataManager/NerBatches.test.jsx \
             apps/labelstudio/src/pages/DataManager/ClassificationBatches.test.jsx \
@@ -97,8 +99,9 @@ jobs:
         env:
           ANNOTATION_FIELD_DISAGREEMENTS_ENABLED: "true"
           ANNOTATION_FIELD_BATCHES_ENABLED: "true"
+          ANNOTATION_FIELD_QUALITY_OVERVIEW_ENABLED: "true"
         run: |
-          export ANNOTATION_FIELD_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.field-batches-e2e.json"))["modes"]))')"
+          export ANNOTATION_FIELD_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps({**json.load(open("web/apps/labelstudio-e2e/.field-batches-e2e.json"))["modes"], **json.load(open("web/apps/labelstudio-e2e/.field-overview-e2e.json"))["modes"]}))')"
           nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/field-disagreement.log 2>&1 &
           for i in {1..90}; do
             if curl --fail --silent http://localhost:8080/health/ >/dev/null && curl --fail --silent http://localhost:8080/react-app/main.js >/dev/null; then exit 0; fi
@@ -110,7 +113,7 @@ jobs:
         working-directory: web
         run: |
           yarn cypress run --project apps/labelstudio-e2e --config-file cypress.field-batches.config.ts --browser chrome \
-            --config baseUrl=http://localhost:8080,video=true --spec apps/labelstudio-e2e/src/e2e/field-batches.cy.ts
+            --config baseUrl=http://localhost:8080,video=true --spec apps/labelstudio-e2e/src/e2e/field-batches.cy.ts,apps/labelstudio-e2e/src/e2e/field-overview.cy.ts
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v6

@@ -1275,3 +1275,34 @@ but contradictory evidence and repeated original-key recovery after bad ACKs.
 The shared frozen-source validator rejects boolean/float project/task identities
 before field freezing/scoring; ordinary integer snapshots keep their existing
 review, classification and NER semantics.
+
+### Single frozen text-field batch quality overview (#81)
+
+See [field-quality-overview-v1.md](field-quality-overview-v1.md). A separate
+default-off GET derives raw/normalized task-macro and per-annotator peer/task
+statistics from one current-authorized FieldBatch. It adds no table, migration,
+selection, review, arbitration, sampling or release authority. Current READ_WORK,
+exact Fork mode and whole self-cohort exclusion remain authoritative; signed
+receipts bind viewer/source-set/reference/rules and do not grant access.
+
+The endpoint also binds the final live context to the sealed viewer after the
+last source hydration. The generic principal/actor/role fence alone does not
+cover project organization changes: an atomic project/actor organization switch
+must discard initial and replayed overviews, even when the role stays manager.
+Supported signing-key fallbacks still allow replay of an unchanged identity.
+
+Preserve old field DTO/hash/Manifest semantics while extracting bounded source
+inspection and pure scored projection. The new overview recalculates bounded
+original inputs before its final current-source hydration, so a change committed
+during the final equality cannot evade verification. Exactly two hydrations and
+counter passes remain. Whole-batch input/CPU gates precede scoring, output byte
+checks are exact after calculation, and failures retain actual performed-cost
+facts. Source loss masks the whole overview without shrinking denominators.
+
+Reuse the existing explicit overview navigation slot through a typed field-only
+adapter. An independent synthetic fixture domain/schema prevents the new two-language
+journey from mutating the old field-batch fixture. Keep tests in the existing
+Field Batches workflow, separate from the long Enterprise job. Local HTTP startup
+denials and unexecuted browser tests must remain NOT_RUN; test definitions, source
+or unit success do not imply browser/retained runtime acceptance. #81/#84 remain
+open and all Host/Core/deployment/Docker76 and historical anomaly boundaries stay.

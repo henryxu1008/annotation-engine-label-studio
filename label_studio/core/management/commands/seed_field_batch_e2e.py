@@ -35,12 +35,22 @@ def source(project, task, user, values, *, assignment=None, revision=1):
 
 
 class Command(BaseCommand):
+    domain = DOMAIN
+    username_prefix = 'field'
+    fixture_schema = 'field-batches-e2e/v1'
+    fixture_output = 'web/apps/labelstudio-e2e/.field-batches-e2e.json'
+    organization_title = 'Field batches synthetic scope'
+    operations = ('seed', 'delete_source', 'restore_source', 'new_revision', 'revoke_reviewer')
+
+    def extra_scope(self, project, users):
+        return {}
+
     def add_arguments(self, parser):
-        parser.add_argument('--output', default='web/apps/labelstudio-e2e/.field-batches-e2e.json')
+        parser.add_argument('--output', default=self.fixture_output)
         parser.add_argument(
             '--operation',
             default='seed',
-            choices=['seed', 'delete_source', 'restore_source', 'new_revision', 'revoke_reviewer'],
+            choices=self.operations,
         )
         parser.add_argument('--locale', default='en-US', choices=['en-US', 'zh-CN'])
 
@@ -51,17 +61,19 @@ class Command(BaseCommand):
         output = Path(options['output'])
         if options['operation'] != 'seed':
             return self.transition(output, options['locale'], options['operation'])
-        if output.exists() or User.objects.filter(email__endswith='@' + DOMAIN).exists():
+        if output.exists() or User.objects.filter(email__endswith='@' + self.domain).exists():
             raise CommandError('Fresh synthetic output and database required')
         password = secrets.token_urlsafe(24)
-        manager = User.objects.create_user('manager@' + DOMAIN, password, username='field-manager')
-        org = Organization.create_organization(created_by=manager, title='Field batches synthetic scope')
+        manager = User.objects.create_user(
+            'manager@' + self.domain, password, username=self.username_prefix + '-manager'
+        )
+        org = Organization.create_organization(created_by=manager, title=self.organization_title)
         manager.active_organization = org
         manager.save(update_fields=['active_organization'])
         users = {'manager': manager}
         for role in ('reviewer', 'a', 'b', 'c'):
             user = User.objects.create_user(
-                role + '@' + DOMAIN, password, username='field-' + role, active_organization=org
+                role + '@' + self.domain, password, username=self.username_prefix + '-' + role, active_organization=org
             )
             org.add_user(user)
             users[role] = user
@@ -125,10 +137,10 @@ class Command(BaseCommand):
                         }
                 project.label_config = XML
                 project.save()
-            projects[locale] = {'id': project.pk, 'cases': cases}
+            projects[locale] = {'id': project.pk, 'cases': cases, **self.extra_scope(project, users)}
             modes[f'{org.pk}:{project.pk}'] = 'fork_review'
         value = {
-            'schema': 'field-batches-e2e/v1',
+            'schema': self.fixture_schema,
             'password': password,
             'organization': org.pk,
             'users': {k: {'id': v.pk, 'email': v.email} for k, v in users.items()},
@@ -139,17 +151,21 @@ class Command(BaseCommand):
         output.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
         self.stdout.write('Synthetic field fixture written')
 
-    def transition(self, output, locale, operation):
+    def owned_scope(self, output, locale):
         value = json.loads(output.read_text(encoding='utf-8'))
-        if value.get('schema') != 'field-batches-e2e/v1':
+        if value.get('schema') != self.fixture_schema:
             raise CommandError('Owned synthetic field fixture required')
         scope = value['projects'][locale]
         project = Project.objects.get(
             pk=scope['id'],
             organization_id=value['organization'],
-            organization__title='Field batches synthetic scope',
-            created_by__email='manager@' + DOMAIN,
+            organization__title=self.organization_title,
+            created_by__email='manager@' + self.domain,
         )
+        return value, scope, project
+
+    def transition(self, output, locale, operation):
+        value, scope, project = self.owned_scope(output, locale)
         if operation == 'revoke_reviewer':
             ProjectMember.objects.filter(project=project, user_id=value['users']['reviewer']['id']).update(
                 enabled=False
@@ -157,7 +173,7 @@ class Command(BaseCommand):
         else:
             case = scope['cases']['new_revision' if operation == 'new_revision' else 'source_loss']
             assignment = TaskAssignment.objects.get(
-                project=project, task_id=case['task'], assignee__email='a@' + DOMAIN
+                project=project, task_id=case['task'], assignee__email='a@' + self.domain
             )
             if operation == 'restore_source':
                 record = case['restore']
