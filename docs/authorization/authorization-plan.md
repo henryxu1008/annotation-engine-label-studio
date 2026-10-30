@@ -1285,6 +1285,12 @@ selection, review, arbitration, sampling or release authority. Current READ_WORK
 exact Fork mode and whole self-cohort exclusion remain authoritative; signed
 receipts bind viewer/source-set/reference/rules and do not grant access.
 
+The endpoint also binds the final live context to the sealed viewer after the
+last source hydration. The generic principal/actor/role fence alone does not
+cover project organization changes: an atomic project/actor organization switch
+must discard initial and replayed overviews, even when the role stays manager.
+Supported signing-key fallbacks still allow replay of an unchanged identity.
+
 Preserve old field DTO/hash/Manifest semantics while extracting bounded source
 inspection and pure scored projection. The new overview recalculates bounded
 original inputs before its final current-source hydration, so a change committed

@@ -344,6 +344,43 @@ it("discards delayed answers after blur or viewer change", async () => {
   v.runtime.destroy();
 });
 
+it.each(["viewer", "batch"])("ignores an old %s response while a new context is still loading", async (changed) => {
+  const replies = [];
+  mockCallApi.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+  const v = mount();
+  fireEvent.click(screen.getByTestId("field-quality-read"));
+  const nextBatch =
+    changed === "viewer"
+      ? { ...batch, viewer: h("e") }
+      : { ...batch, id: 7, manifest_hash: h("e"), calculated_at: "next-batch-time" };
+  v.rerender(
+    <v.Provider>
+      <FieldQualityOverview {...v.props} batch={nextBatch} />
+    </v.Provider>,
+  );
+  fireEvent.click(screen.getByTestId("field-quality-read"));
+  expect(replies).toHaveLength(2);
+  await act(async () => replies[0](response()));
+  expect(screen.queryByTestId("field-quality-summary")).toBeNull();
+  expect(screen.getByTestId("field-quality-overview").getAttribute("aria-busy")).toBe("true");
+  const next = response();
+  next.scope.batch_id = nextBatch.id;
+  next.scope.reference_hash = nextBatch.manifest_hash;
+  next.viewer = nextBatch.viewer;
+  next.batch_calculated_at = nextBatch.calculated_at;
+  next.frozen = "next-context-receipt";
+  next.result_hash = h("f");
+  next.annotators = [person(21), person(22)];
+  await act(async () => replies[1](next));
+  expect((await screen.findByTestId("field-quality-summary")).textContent).toContain("58.33%");
+  expect(v.container.querySelector('[data-quality-actor="11"]')).toBeNull();
+  expect(v.container.querySelector('[data-quality-actor="21"]')).not.toBeNull();
+  expect(v.props.navigation.current.frozen).toBe("next-context-receipt");
+  expect(v.props.navigation.current.viewer).toBe(nextBatch.viewer);
+  v.unmount();
+  v.runtime.destroy();
+});
+
 it.each([403, 404, 409, 422, 503])("clears prior scores on HTTP %s and never issues a write", async (status) => {
   const v = mount();
   fireEvent.click(screen.getByTestId("field-quality-read"));

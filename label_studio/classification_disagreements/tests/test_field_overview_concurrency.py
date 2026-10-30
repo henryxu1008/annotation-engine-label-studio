@@ -4,13 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from classification_disagreements import field_api, fields
+from classification_disagreements import field_batches as batches
 from classification_disagreements import field_overview as overview
 from classification_disagreements.tests import test_field_overview as f
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connection, transaction
 from django.db.models.query import QuerySet
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
-from organizations.models import OrganizationMember
+from organizations.models import Organization, OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework.response import Response
 from rest_framework.test import APIClient
@@ -160,6 +161,45 @@ class TestFieldOverviewConcurrency(TransactionTestCase):
         result, _, _ = self.interleave(append, (200,))
         for key in ('scope', 'source_set_hash', 'scope_counts', 'summary', 'annotators', 'result_hash'):
             self.assertEqual(result.data[key], before[key])
+
+    def move_organization_after_final_hydration(self, *, replay):
+        first = self.read().data if replay else None
+        owner = User.objects.create_user('scope-owner@synthetic.invalid', None, username='scope-owner')
+        other = Organization.create_organization(created_by=owner, title='Synthetic scope migration')
+        other.add_user(self.manager)
+        User.objects.filter(pk=self.manager.pk).update(active_organization=self.org)
+        original, calls = batches.inspect_items, 0
+
+        def move():
+            with transaction.atomic():
+                Project.objects.filter(pk=self.project.pk).update(organization=other)
+                User.objects.filter(pk=self.manager.pk).update(active_organization=other)
+
+        def inspect(*args):
+            nonlocal calls
+            result = original(*args)
+            calls += 1
+            if calls == 2:
+                self.commit(move)
+            return result
+
+        with self.settings(
+            ANNOTATION_FIELD_DISAGREEMENT_MODES={
+                f'{self.org.pk}:{self.project.pk}': 'fork_review',
+                f'{other.pk}:{self.project.pk}': 'fork_review',
+            }
+        ), patch.object(batches, 'inspect_items', inspect):
+            response = self.read(**({'frozen': first['frozen']} if replay else {}))
+        self.assertEqual(calls, 2)
+        self.assertIn(response.status_code, (403, 404, 409), response.data)
+        self.assertNotIn('summary', response.data)
+        self.assertNotIn('annotators', response.data)
+
+    def test_organization_change_after_final_hydration_denies_original_viewer(self):
+        self.move_organization_after_final_hydration(replay=False)
+
+    def test_organization_change_after_final_hydration_denies_frozen_replay(self):
+        self.move_organization_after_final_hydration(replay=True)
 
     def test_source_changed_during_last_equality_is_checked_after_counter_without_third_pass(self):
         with patch.object(field_api, 'load', wraps=field_api.load) as loader:

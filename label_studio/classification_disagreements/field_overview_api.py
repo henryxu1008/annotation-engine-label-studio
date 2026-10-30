@@ -3,8 +3,8 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import NotFound
 
+from . import field_api, fields
 from . import field_overview as overview
-from . import fields
 from .field_batch_api import BatchAPI
 
 
@@ -73,6 +73,9 @@ class OverviewAPI(BatchAPI):
                 overview.reject('READ_CHANGED')
             current = self.recheck(request, pk, initial)
             overview.verify_sources(self.batch(current, batch_id), current, prepared)
-            self.recheck(request, pk, initial)
+            current = self.recheck(request, pk, initial)
+            # The generic authority fence does not bind the project's organization.
+            # Keep the last context tied to the viewer sealed before rendering.
+            field_api.viewer(current, prepared['reference']['viewer'])
 
         return self.respond(request, body, verify)

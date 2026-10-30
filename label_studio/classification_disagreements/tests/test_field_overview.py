@@ -7,6 +7,7 @@ from classification_disagreements import field_batches as batches
 from classification_disagreements import field_overview as overview
 from classification_disagreements.models import FieldBatch
 from classification_disagreements.tests import test_field_batches as f
+from django.conf import settings
 from django.core import signing
 from django.db import connection
 from django.test import override_settings
@@ -115,6 +116,34 @@ class TestFieldOverview(APITestCase):
         self.assertEqual(data['processing_cost']['per_pass']['annotator_pair_updates'], 12)
         self.assertEqual(data['processing_cost']['per_pass']['normalized_values'], 30)
 
+    def test_unequal_pair_denominators_and_task_field_counts_keep_task_and_peer_weights(self):
+        def one_field(value):
+            value['project']['label_config'] = (
+                '<View><Text name="doc" value="$text"/>'
+                '<TextArea name="name" toName="doc" maxSubmissions="1"/></View>'
+            )
+
+        for row in (self.first, self.second):
+            self.write(row, ('X',), mutate=one_field)
+        triple = self.extra_task((self.worker, self.reviewer, self.manager))
+        for row, values in zip(triple, ((' A ', '', ''), ('A', 'B', ''), ('Z', '', ''))):
+            self.write(row, values)
+        self.freeze([self.task_id, triple[0].assignment.task_id])
+        response = self.read()
+        self.assertEqual(response.status_code, 200, response.data)
+        data = response.data
+        # Three-person task: pair denominators2,1,2 and normalized rates1/2,0,0.
+        # Task average1/6, then equal-weight with the one-field task's1 =>7/12.
+        self.assertEqual(data['summary']['raw_agreement'], fields.fraction(1, 2))
+        self.assertEqual(data['summary']['normalized_agreement'], fields.fraction(7, 12))
+        people = {r['actor_id']: r for r in data['annotators']}
+        for actor in (self.worker, self.reviewer):
+            self.assertEqual(people[actor.pk]['raw_agreement'], fields.fraction(1, 2))
+            self.assertEqual(people[actor.pk]['normalized_agreement'], fields.fraction(5, 8))
+        self.assertEqual(people[self.manager.pk]['normalized_agreement'], fields.fraction(0, 1))
+        self.assertEqual(data['processing_cost']['per_pass']['normalized_values'], 11)
+        self.assertEqual(data['processing_cost']['per_pass']['field_equalities'], 20)
+
     def test_all_empty_is_verified_null_not_perfect_and_still_performs_work(self):
         self.write(self.first, ('',) * 3)
         self.write(self.second, (' \t',) * 3)
@@ -175,6 +204,20 @@ class TestFieldOverview(APITestCase):
         self.assertEqual(restored.status_code, 200, restored.data)
         for key in ('summary', 'annotators', 'frozen', 'result_hash', 'summarized_at'):
             self.assertEqual(restored.data[key], first[key])
+
+    def test_receipt_replay_accepts_key_fallback_and_denies_retired_key_before_loading(self):
+        first, old_key = self.read().data, settings.SECRET_KEY
+        with self.settings(SECRET_KEY='field-overview-rotated-synthetic-key', SECRET_KEY_FALLBACKS=[old_key]):
+            response = self.read(frozen=first['frozen'])
+        self.assertEqual(response.status_code, 200, response.data)
+        for key in ('frozen', 'result_hash', 'viewer', 'summarized_at', 'summary'):
+            self.assertEqual(response.data[key], first[key])
+        with self.settings(SECRET_KEY='field-overview-retired-synthetic-key', SECRET_KEY_FALLBACKS=[]), patch.object(
+            field_api, 'load'
+        ) as loader:
+            response = self.read(frozen=first['frozen'])
+        self.assertEqual(response.status_code, 400)
+        loader.assert_not_called()
 
     def test_reviewer_filters_whole_self_cohort_before_loading_and_counts(self):
         others = self.extra_task((self.worker, self.manager), equal=True)

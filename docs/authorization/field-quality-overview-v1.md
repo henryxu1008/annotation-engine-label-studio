@@ -73,6 +73,10 @@ Overview first hydrates/inspects bounded pinned inputs and calculates/reduces.
 After actual JSON rendering it recalculates the same bounded inputs, then
 rehydrates and validates current source/Manifest/viewer evidence AFTER the last
 normalization/equality. Authority is checked throughout and again at completion.
+A final viewer check also binds the organization after source hydration: retaining
+the same principal, actor and manager role while moving the project/active
+organization cannot release a response sealed for the old organization. Supported
+signing-key fallbacks still accept the original unchanged viewer on replay.
 A changed representation, source or permission discards the response.
 There are exactly two hydration/calculation passes, no third scoring pass or
 per-annotator/HTTP fan-out. Responses are private, no-store and no-referrer.
