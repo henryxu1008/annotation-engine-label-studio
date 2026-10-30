@@ -112,7 +112,8 @@ source materializations, normalizations, equalities or scorer calls.
 The browser preserves an uncertain request's exact UUID/body in the open
 workspace. An invalid acknowledgement stays unknown until original-key recovery;
 refresh never issues a new POST. Fresh capability must match the intent viewer
-before create/recovery. This is not durable offline command storage.
+before create/recovery, and the acknowledgement must match that same viewer as
+well as the exact UUID/plan. This is not durable offline command storage.
 
 ## Budgets and truthful cost
 
@@ -164,7 +165,16 @@ NER, quality overview, arbitration or manual signed receipts. Item evidence is
 reference, cohort, calculation time and result. The browser recomputes its
 canonical Noble SHA-256 digest and checks pins, dimensions, pair arithmetic,
 explanations and actual costs. It also rejects a later rehashed revision change
-inside the same retained batch. Server authorization remains authoritative.
+inside the same retained batch. Evidence cohorts must retain their unique,
+ascending assignment order, and the frozen input/pair counts must match the
+displayed comparison. A valid digest alone cannot make contradictory payloads
+acceptable. Server authorization remains authoritative.
+
+Manifest task identifiers are strict positive integers at both the outer scope
+and each task entry; Python boolean/numeric equality is not a scope check.
+The shared frozen-source validator also requires integer snapshot project/task
+identities before accepting their numeric equality with current ORM scope.
+Rehashed snapshots carrying booleans or floating-point IDs are invalid sources.
 
 Project/viewer/batch changes, blur, revocation and late replies clear sensitive
 display. Retained-evidence state updates only after the active request generation

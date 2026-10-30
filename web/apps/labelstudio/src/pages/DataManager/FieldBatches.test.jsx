@@ -433,3 +433,52 @@ it("does not POST a pending original intent after its viewer changes", async () 
   unmount();
   runtime.destroy();
 });
+
+it.each(["comparison availability", "frozen input count", "frozen pair count", "cohort order", "assignment collision"])(
+  "rejects contradictory %s even with a valid evidence digest",
+  async (kind) => {
+    mockCallApi.mockImplementation(async (m, o) => {
+      const r = await respond(m, o);
+      if (m === "fieldBatchItem") {
+        if (kind === "comparison availability") {
+          r.item.comparison = {
+            ...r.item.comparison,
+            availability: "unavailable",
+            reason: "missing_field",
+            pairs: null,
+            selected_pair: null,
+          };
+        }
+        if (kind === "frozen input count") r.item.evidence.result.input_count++;
+        if (kind === "frozen pair count") r.item.evidence.result.unavailable_pairs++;
+        if (kind === "cohort order") r.item.evidence.cohort.reverse();
+        if (kind === "assignment collision") {
+          const member = r.item.evidence.cohort[1];
+          member.assignment_id = r.item.evidence.cohort[0].assignment_id;
+          member.source.assignment_id = member.assignment_id;
+        }
+        r.item.evidence_hash = fieldDigest(r.item.evidence);
+      }
+      return r;
+    });
+    const { runtime, unmount } = mount();
+    await open();
+    await screen.findByRole("alert");
+    expect(screen.queryByTestId("field-detail")).toBeNull();
+    unmount();
+    runtime.destroy();
+  },
+);
+
+it("keeps a matching-key acknowledgement from a different viewer unknown", async () => {
+  mockCallApi.mockImplementation(async (m, o) => {
+    const r = await respond(m, o);
+    return m === "createFieldBatch" ? { ...r, viewer: h("c") } : r;
+  });
+  const { runtime, unmount } = mount();
+  await create();
+  await screen.findByRole("button", { name: "Recover original request" });
+  expect(screen.queryByText(/was saved/)).toBeNull();
+  unmount();
+  runtime.destroy();
+});

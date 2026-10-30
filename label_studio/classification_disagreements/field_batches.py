@@ -320,6 +320,7 @@ def checked(batch, project):
         for item in m['tasks']:
             cohort, result = item['cohort'], item['result']
             valid = valid and set(item) == {'task_id', 'cohort', 'selection_reason', 'result'}
+            valid = valid and field_api.positive(item['task_id'])
             valid = valid and item['selection_reason'] in (
                 None,
                 'insufficient_inputs',

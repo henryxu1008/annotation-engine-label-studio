@@ -682,3 +682,45 @@ class TestFieldBatches(APITestCase):
         finally:
             FieldBatch.objects.filter(pk=row.pk).update(manifest=original, manifest_hash=fields.digest(original))
             migration.install(None, editor)
+
+    def test_rehashed_non_integer_nested_task_ids_reject_metadata_and_recovery(self):
+        created, body, key = self.create()
+        row = FieldBatch.objects.get(pk=created.data['id'])
+        original = copy.deepcopy(row.manifest)
+        migration = import_module('classification_disagreements.migrations.0009_field_batches')
+        editor = connection.schema_editor(atomic=False)
+        migration.uninstall(None, editor)
+        try:
+            for bad in (float(self.task_id), True):
+                with self.subTest(task_id=bad):
+                    m = copy.deepcopy(original)
+                    if type(bad) is bool:
+                        m['task_ids'] = [1]
+                        for member in m['tasks'][0]['cohort']:
+                            if member['source']:
+                                member['source']['task_id'] = 1
+                    m['tasks'][0]['task_id'] = bad
+                    FieldBatch.objects.filter(pk=row.pk).update(manifest=m, manifest_hash=fields.digest(m))
+                    with patch.object(field_api, 'load', side_effect=AssertionError('No invalid Manifest sources')):
+                        self.assertEqual(self.client.get(self.base).status_code, 409)
+                        recovered = self.client.post(self.base, body, format='json', HTTP_IDEMPOTENCY_KEY=key)
+                    self.assertEqual(recovered.status_code, 409, recovered.data)
+        finally:
+            FieldBatch.objects.filter(pk=row.pk).update(manifest=original, manifest_hash=fields.digest(original))
+            migration.install(None, editor)
+
+    def test_non_integer_snapshot_identity_is_rejected_before_freezing_or_scoring(self):
+        for section in ('project', 'task'):
+            for cast in (float, bool):
+                with self.subTest(section=section, kind=cast.__name__):
+
+                    def corrupt(value):
+                        value[section]['id'] = cast(value[section]['id'])
+
+                    self.write(self.first, mutate=corrupt)
+                    with patch.object(fields, 'normalize', wraps=fields.normalize) as normalize:
+                        response = self.preview()
+                    self.assertEqual(response.status_code, 409, response.data)
+                    normalize.assert_not_called()
+                    self.write(self.first)
+        self.assertEqual(FieldBatch.objects.count(), 0)

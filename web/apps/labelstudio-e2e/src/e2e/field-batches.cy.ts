@@ -39,12 +39,23 @@ describe('durable frozen text field queues', () => {
       button('Create frozen batch','创建冻结批次').click();cy.wait('@lostAck');
       button('Recover original request','恢复原请求').should('be.visible');
       cy.request(base).then(({body})=>{expect(body.count).to.eq(1);expect(body.results[0].id).to.eq(batch);});
+      cy.intercept({method:'POST',pathname:route(),times:1},request=>{
+        expect(request.body).to.deep.eq(originalBody);
+        expect(request.headers['idempotency-key']).to.eq(originalKey);
+        request.continue(response=>{response.body.viewer='0'.repeat(64);});
+      }).as('wrongViewerAck');
+      button('Recover original request','恢复原请求').click();cy.wait('@wrongViewerAck');
+      button('Recover original request','恢复原请求').should('be.visible');
       cy.intercept({method:'POST',pathname:route()},request=>{
         expect(request.body).to.deep.eq(originalBody);
         expect(request.headers['idempotency-key']).to.eq(originalKey);
       }).as('recover');
       button('Recover original request','恢复原请求').click();
-      cy.wait('@recover').its('response.statusCode').should('eq',200);
+      cy.wait('@recover').then(({response})=>{
+        expect(response!.statusCode).to.eq(200);expect(response!.body.replayed).to.eq(true);
+        expect(response!.body.processing_cost.total).to.deep.eq({normalized_values:0,field_equalities:0});
+      });
+      cy.request(base).then(({body})=>{expect(body.count).to.eq(1);expect(body.results[0].id).to.eq(batch);});
       cy.get('[data-testid="field-batches"] table').should('be.visible');
       item('format_only');
       cy.get('[data-testid="field-detail"]').should('contain.text',label('Format only','仅格式不同'));
@@ -73,6 +84,16 @@ describe('durable frozen text field queues', () => {
       cy.intercept({method:'GET',pathname:route('[0-9]+/items/'+scope.cases.differences.task+'/'),times:1},
         request=>request.continue(response=>{response.body.item.evidence.cohort[0].source.revision++;})).as('badEvidence');
       item('differences');cy.wait('@badEvidence');
+      cy.get('[data-testid="field-batches"] [role="alert"]').should('be.visible');
+      cy.get('[data-testid="field-detail"]').should('not.exist');
+      refresh();item('differences');cy.get('[data-testid="field-detail"]').should('contain.text','001');
+      button('Back to queue','返回队列').click();
+      cy.intercept({method:'GET',pathname:route('[0-9]+/items/'+scope.cases.differences.task+'/'),times:1},
+        request=>request.continue(response=>{
+          // Evidence/digest remain valid; the comparison contradicts its frozen summary.
+          response.body.item.comparison={...response.body.item.comparison,availability:'unavailable',reason:'missing_field',pairs:null,selected_pair:null};
+        })).as('contradictoryComparison');
+      item('differences');cy.wait('@contradictoryComparison');
       cy.get('[data-testid="field-batches"] [role="alert"]').should('be.visible');
       cy.get('[data-testid="field-detail"]').should('not.exist');
       refresh();item('differences');cy.get('[data-testid="field-detail"]').should('contain.text','001');

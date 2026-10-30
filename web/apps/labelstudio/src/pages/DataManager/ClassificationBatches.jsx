@@ -183,6 +183,7 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
       const result = await fetch("createClassificationBatch", {}, types.created, intent.body, { "Idempotency-Key": intent.key });
       if (current !== generation.current) return;
       if (result.idempotency_key !== intent.key) throw new Error("acknowledgement changed");
+      if (adapter?.guardIntentViewer && result.viewer !== intent.viewer) throw new Error("acknowledgement viewer changed");
       pending.current = null; setUnknown(false); setPreview(null);
       setSaved({ id: result.id, replayed: result.replayed });
       await openBatch(result.id);

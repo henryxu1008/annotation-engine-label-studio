@@ -162,7 +162,16 @@ const checkRow = (r) => {
         r.comparable_pairs === r.frozen_comparable_pairs &&
         r.outcome === r.original_outcome &&
         typeof r.has_value_difference === "boolean" &&
-        typeof r.has_format_difference === "boolean",
+        typeof r.has_format_difference === "boolean" &&
+        (r.outcome === "unavailable"
+          ? r.comparable_pairs === 0 &&
+            reasons.includes(r.reason) &&
+            r.reason !== "source_unavailable" &&
+            !r.has_value_difference &&
+            !r.has_format_difference
+          : r.comparable_pairs > 0 &&
+            r.reason === null &&
+            (r.outcome === "disagreement") === (r.has_value_difference || r.has_format_difference)),
     );
 };
 
@@ -174,7 +183,9 @@ export const validateFieldBatchItem = (answer, expected) => {
     r.task_id === expected.task &&
       c.input_count === r.input_count &&
       c.total_pairs === r.total_pairs &&
-      c.configured_fields === r.configured_fields,
+      c.configured_fields === r.configured_fields &&
+      c.availability === (r.outcome === "unavailable" ? "unavailable" : "available") &&
+      c.reason === r.reason,
   );
   if (r.source_status === "unavailable") {
     valid(
@@ -200,6 +211,7 @@ export const validateFieldBatchItem = (answer, expected) => {
   );
   const pins = e.cohort.flatMap((v) => (v.source ? [v.source] : [])).sort((a, b) => a.submission_id - b.submission_id);
   valid(e.cohort.length === r.input_count && new Set(e.cohort.map((v) => v.assignee_id)).size === e.cohort.length);
+  valid(e.cohort.every((v, index) => index === 0 || e.cohort[index - 1].assignment_id < v.assignment_id));
   valid(
     e.cohort.every(
       (v) =>
@@ -214,11 +226,13 @@ export const validateFieldBatchItem = (answer, expected) => {
   const f = e.result;
   valid(
     f.calculation_hash === r.calculation_hash &&
+      f.input_count === r.input_count &&
       f.outcome === r.outcome &&
       f.reason === r.reason &&
       f.configured_fields === r.configured_fields &&
       f.total_pairs === r.total_pairs &&
       f.comparable_pairs === r.comparable_pairs &&
+      f.unavailable_pairs === r.total_pairs - r.comparable_pairs &&
       f.has_value_difference === r.has_value_difference &&
       f.has_format_difference === r.has_format_difference,
   );
@@ -234,8 +248,9 @@ export const validateFieldBatchItem = (answer, expected) => {
     valid(r.outcome === (!comparable.length ? "unavailable" : rawDifference ? "disagreement" : "agreement"));
     valid(r.has_value_difference === comparable.some((p) => p.normalized_matches < p.denominator));
     valid(r.has_format_difference === comparable.some((p) => p.normalized_matches > p.raw_matches));
+    valid(c.comparable_pairs === r.comparable_pairs);
     valid(same(f.cost_per_pass, c.cost_per_pass));
-  }
+  } else valid(f.reason !== "no_values" && same(f.cost_per_pass, { normalized_values: 0, field_equalities: 0 }));
 };
 
 const FieldBatchComparison = ({ answer, busy, onSelectPair }) => {

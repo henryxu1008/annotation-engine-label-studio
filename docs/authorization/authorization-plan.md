@@ -1264,3 +1264,14 @@ client intent/evidence to the current viewer and frozen reference; close guarded
 list iterators on every exit. #81/#84 stay open. Host/Core/deployment and retained
 Docker/#76 are outside this change; preserve all CHANGED/UNKNOWN/incomplete
 comparison and existing Biome baseline records.
+
+PR #125 review tightens the same V1 contract: validate inner task IDs as strict
+positive integers before metadata reads or original-key recovery; bind field
+creation ACKs to the pending viewer; reject evidence with contradictory cohort
+order/identity, input or pair counts, or comparison availability/reason. These
+checks preserve valid V1 data and the existing metric/review/arbitration/sampling
+semantics. Regression cases include rehashed malformed Manifests, well-digested
+but contradictory evidence and repeated original-key recovery after bad ACKs.
+The shared frozen-source validator rejects boolean/float project/task identities
+before field freezing/scoring; ordinary integer snapshots keep their existing
+review, classification and NER semantics.
