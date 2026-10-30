@@ -509,7 +509,7 @@ def plan_hash(batch):
     )
 
 
-def project_items(batch, context):
+def inspect_items(batch, context):
     items = visible_items(batch, context[1], context[3])
     task_ids = [i['task_id'] for i in items]
     tasks = dict(Task.objects.filter(pk__in=task_ids).values_list('pk', 'project_id'))
@@ -550,7 +550,10 @@ def project_items(batch, context):
             }
         else:
             inspected[item['task_id']] = prepare(item['cohort'], current_rows, item['selection_reason'])
-    scored, cost = score_all(inspected)
+    return items, inspected, missing
+
+
+def project_scored(items, scored, missing):
     projected = []
     for item in items:
         task_id, frozen = item['task_id'], item['result']
@@ -580,7 +583,13 @@ def project_items(batch, context):
                 '_frozen': item,
             }
         )
-    return projected, cost
+    return projected
+
+
+def project_items(batch, context):
+    items, inspected, missing = inspect_items(batch, context)
+    scored, cost = score_all(inspected)
+    return project_scored(items, scored, missing), cost
 
 
 def public_row(row):

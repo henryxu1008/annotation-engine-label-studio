@@ -6,6 +6,7 @@ import { useAPI } from "../../providers/ApiProvider";
 import { FrozenBatchWorkspace } from "./ClassificationBatches";
 import { FieldResult, fieldComparisonSchema, validateFieldComparison } from "./FieldDisagreement";
 import { fieldDigest } from "./fieldEvidence";
+import { FieldQualityOverview } from "./FieldQualityOverview";
 
 const id = z.number().int().positive().safe();
 const count = z.number().int().nonnegative().safe();
@@ -94,7 +95,7 @@ const cap = z.object({
   ...versions,
   enabled: z.literal(true),
   can_create: z.boolean(),
-  can_view_quality_overview: z.literal(false),
+  can_view_quality_overview: z.boolean(),
   project_id: id,
   viewer: hash,
   processing_cost: processing,
@@ -298,6 +299,7 @@ const FieldBatchComparison = ({ answer, busy, onSelectPair }) => {
 };
 
 export const fieldBatchAdapter = {
+  renderOverview: (props) => <FieldQualityOverview {...props} />,
   testId: "field-batches",
   refreshTestId: "field-batch-refresh",
   guardIntentViewer: true,

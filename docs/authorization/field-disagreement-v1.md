@@ -131,8 +131,9 @@ UI malformed evidence/denominator/cost/viewer and late-response tests; bilingual
 browser journeys through manager comparison, reviewer exclusion/revocation and
 annotator denial. CI retains full production build and browser artifacts.
 
-Future independent design is required for image box identity/IoU, richer document
-formats, persistent field batches/overviews/arbitration and low-confidence review.
+Persistent field queues are in field-batches-v1.md; their independent read-only
+overview is in field-quality-overview-v1.md. Future independent design is required
+for image box identity/IoU, richer document formats, field arbitration and low-confidence review.
 Second-review scope still needs explicit agreement: ReviewDecision is one-to-one
 with a Submission and cannot be overwritten to impersonate a second review.
 Do not close #81/#84 from this slice or claim retained runtime/deployment acceptance.

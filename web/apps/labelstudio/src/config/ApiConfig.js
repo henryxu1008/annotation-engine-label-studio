@@ -77,6 +77,7 @@ export const API_CONFIG = {
     classificationQualityOverview: "GET:/projects/:pk/classification-disagreements/batches/:batch/quality-overview/",
     classificationSources: "GET:/projects/:pk/classification-disagreements/tasks/:task/sources/",
     fieldBatchCapability: "GET:/projects/:pk/field-disagreements/batches/capability/",
+    fieldQualityOverview: "GET:/projects/:pk/field-disagreements/batches/:batch/quality-overview/",
     fieldBatches: "GET:/projects/:pk/field-disagreements/batches/",
     fieldBatchPreview: "POST:/projects/:pk/field-disagreements/batches/preview/",
     createFieldBatch: "POST:/projects/:pk/field-disagreements/batches/",

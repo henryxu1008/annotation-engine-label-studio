@@ -344,5 +344,20 @@
   "fieldBatchFormatDifference": "格式差异",
   "fieldReason_insufficient_inputs": "独立参与者不足两人",
   "fieldReason_missing_submission": "原参与者缺少提交",
-  "fieldReason_latest_revision_unusable": "最新修订不可用"
+  "fieldReason_latest_revision_unusable": "最新修订不可用",
+  "fieldQualityTitle": "冻结字段批次质量概览",
+  "fieldQualityBoundary": "仅本冻结批次及当前可见子集。任务等权，原样与规范化后一致率分开统计。分数描述一致性，不代表正确率或审核批准。",
+  "fieldQualityPairs": "冻结配对：共 {{total_pairs}} / 有分数 {{comparable_pairs}} / 无分数 {{unavailable_pairs}}",
+  "fieldQualityTaskReasons": "冻结不可比较任务原因：{{reasons}}",
+  "fieldQualityPairReasons": "冻结无分数配对原因：{{reasons}}",
+  "fieldQualityReasonCount": "{{reason}} × {{count}}",
+  "fieldQualitySummary": "任务覆盖率 {{task}}；配对覆盖率 {{pair}}；原样一致率 {{raw}}；规范化后一致率 {{normalized}}",
+  "fieldQualityPeerCounts": "本人配对：总数 / 有分数 / 无分数",
+  "fieldQualityCoverage": "任务 / 配对覆盖率",
+  "fieldQualityRaw": "原样一致率",
+  "fieldQualityNormalized": "规范化后一致率",
+  "fieldQualityBudget": "本冻结批次超出概览预算，未显示分数。",
+  "fieldQualityDenied": "当前身份或范围已无概览读取权限。",
+  "fieldQualityChanged": "冻结概览上下文已变化，请重新读取本批次。",
+  "fieldQualityUnavailable": "该概览当前不可用。"
 }

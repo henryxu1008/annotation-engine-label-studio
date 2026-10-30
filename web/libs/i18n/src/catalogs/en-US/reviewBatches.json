@@ -344,5 +344,20 @@
   "fieldBatchFormatDifference": "Format differences",
   "fieldReason_insufficient_inputs": "Fewer than two independent participants",
   "fieldReason_missing_submission": "An original participant had no submission",
-  "fieldReason_latest_revision_unusable": "The latest revision was unusable"
+  "fieldReason_latest_revision_unusable": "The latest revision was unusable",
+  "fieldQualityTitle": "Frozen field batch quality overview",
+  "fieldQualityBoundary": "Only this frozen batch and your visible subset. Tasks have equal weight; raw and normalized agreement remain separate. Scores describe agreement, not accuracy or approval.",
+  "fieldQualityPairs": "Frozen pairs: {{total_pairs}} total / {{comparable_pairs}} defined / {{unavailable_pairs}} undefined",
+  "fieldQualityTaskReasons": "Frozen unavailable task reasons: {{reasons}}",
+  "fieldQualityPairReasons": "Frozen undefined pair reasons: {{reasons}}",
+  "fieldQualityReasonCount": "{{reason}} × {{count}}",
+  "fieldQualitySummary": "Task coverage {{task}}; pair coverage {{pair}}; raw agreement {{raw}}; normalized agreement {{normalized}}",
+  "fieldQualityPeerCounts": "Peer pairs: total / defined / undefined",
+  "fieldQualityCoverage": "Task / pair coverage",
+  "fieldQualityRaw": "Raw agreement",
+  "fieldQualityNormalized": "Normalized agreement",
+  "fieldQualityBudget": "This frozen batch exceeds the overview budget. No scores are shown.",
+  "fieldQualityDenied": "Overview access is no longer available for this identity or scope.",
+  "fieldQualityChanged": "The frozen overview context changed. Reload this batch before reading again.",
+  "fieldQualityUnavailable": "This overview is currently unavailable."
 }

@@ -107,7 +107,7 @@ class CapabilityAPI(BatchAPI):
             return {
                 'enabled': True,
                 'can_create': context[3] == 'manager' and project_operation_policy(context[2]).allows(ORGANIZE_FIELD),
-                'can_view_quality_overview': False,
+                'can_view_quality_overview': settings.ANNOTATION_FIELD_QUALITY_OVERVIEW_ENABLED,
                 'project_id': pk,
                 'viewer': field_api.viewer(context),
                 'schema': b.SCHEMA,
