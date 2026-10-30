@@ -48,7 +48,8 @@ describe('durable frozen text field queues', () => {
       cy.get('[data-testid="field-batches"] table').should('be.visible');
       item('format_only');
       cy.get('[data-testid="field-detail"]').should('contain.text',label('Format only','仅格式不同'));
-      cy.get('[data-testid="field-matrix"]').should('contain.text','100.00%').and('contain.text','0.00%');
+      // One raw-equal code among three fields; normalized values all match.
+      cy.get('[data-testid="field-matrix"]').should('contain.text','100.00%').and('contain.text','33.33%');
       cy.get('[data-testid="field-batches"]').should('contain.text',label('Format differences','格式差异'));
 
       // Returning preserves the queue state, and reload finds a persisted batch.
