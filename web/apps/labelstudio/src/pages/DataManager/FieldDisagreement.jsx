@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
+import { trim } from "es-toolkit/string";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
@@ -12,17 +15,19 @@ const id = z.number().int().positive().safe();
 const count = z.number().int().min(0).max(20);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const ratio = z.object({ numerator: z.string().regex(/^\d{1,2}$/), denominator: z.string().regex(/^[1-9]\d?$/) });
-const pin = z.object({
-  submission_id: id,
-  assignment_id: id,
-  assignee_id: id,
-  task_id: id,
-  revision: id,
-  submitter_id: id,
-  result_hash: hash,
-  config_hash: hash,
-  task_data_hash: hash,
-});
+const pin = z
+  .object({
+    submission_id: id,
+    assignment_id: id,
+    assignee_id: id,
+    task_id: id,
+    revision: id,
+    submitter_id: id,
+    result_hash: hash,
+    config_hash: hash,
+    task_data_hash: hash,
+  })
+  .strict();
 const value = z.object({ raw: z.string().max(4096), normalized: z.string().max(4096) });
 const entry = z.object({
   name: z.string().min(1),
@@ -52,19 +57,21 @@ const reportSchema = z.object({
   engine: z.literal(ENGINE),
   viewer: hash,
   scope: z.object({ project_id: id, task_id: id, input_ids: z.array(id).min(2).max(20) }),
-  manifest: z.object({
-    schema: z.literal(SCHEMA),
-    rule: z.literal(RULE),
-    explanation: z.literal(EXPLANATION),
-    engine: z.literal(ENGINE),
-    project_id: id,
-    task_id: id,
-    inputs: z.array(pin).min(2).max(20),
-    viewer: hash,
-    calculated_at: z.string(),
-    result_hash: hash,
-    configured_fields: count.nullable(),
-  }),
+  manifest: z
+    .object({
+      schema: z.literal(SCHEMA),
+      rule: z.literal(RULE),
+      explanation: z.literal(EXPLANATION),
+      engine: z.literal(ENGINE),
+      project_id: id,
+      task_id: id,
+      inputs: z.array(pin).min(2).max(20),
+      viewer: hash,
+      calculated_at: z.string(),
+      result_hash: hash,
+      configured_fields: count.nullable(),
+    })
+    .strict(),
   manifest_hash: hash,
   frozen: z.string().min(1).max(16384),
   calculated_at: z.string(),
@@ -110,8 +117,21 @@ const equalIds = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]
 const requireValid = (v) => {
   if (!v) throw new Error("Invalid field projection");
 };
+// Receipt keys are fixed ASCII protocol names. Recurse through the input array
+// to match the server's sorted-key JSON, including every revision identity pin.
+const canonicalManifest = (v) =>
+  Array.isArray(v)
+    ? v.map(canonicalManifest)
+    : v && typeof v === "object"
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((key) => [key, canonicalManifest(v[key])]),
+        )
+      : v;
+const manifestDigest = (v) => bytesToHex(sha256(JSON.stringify(canonicalManifest(v))));
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
-const normalize = (s) => s.replace(/\r\n?/g, "\n").replace(/^[ \t\n\v\f]+|[ \t\n\v\f]+$/g, "");
+const normalize = (s) => trim(s.replace(/\r\n?/g, "\n"), [" ", "\t", "\n", "\v", "\f"]);
 const reasons = [
   "unsupported_config",
   "config_mismatch",
@@ -127,6 +147,7 @@ const reasons = [
 export const validateFieldReport = (raw, expected) => {
   const r = reportSchema.parse(raw);
   const ids = r.scope.input_ids;
+  requireValid(manifestDigest(r.manifest) === r.manifest_hash);
   requireValid(
     r.scope.project_id === expected.project &&
       r.scope.task_id === expected.task &&
@@ -147,6 +168,22 @@ export const validateFieldReport = (raw, expected) => {
       r.manifest.inputs.every((p) => p.task_id === expected.task && p.assignee_id === p.submitter_id) &&
       new Set(r.manifest.inputs.map((p) => p.submitter_id)).size === ids.length,
   );
+  if (!expected.frozen)
+    requireValid(
+      expected.sources?.length === ids.length &&
+        r.manifest.inputs.every((p) => {
+          const s = expected.sources.find((s) => s?.id === p.submission_id);
+          return (
+            s &&
+            s.assignment_id === p.assignment_id &&
+            s.assignment__assignee_id === p.assignee_id &&
+            s.assignment__task_id === p.task_id &&
+            s.submitted_by_id === p.submitter_id &&
+            s.revision === p.revision &&
+            s.result_hash === p.result_hash
+          );
+        }),
+    );
   if (expected.frozen)
     requireValid(
       r.frozen === expected.frozen &&
@@ -479,6 +516,7 @@ export const FieldDisagreement = ({ projectId, initialTaskId = "" }) => {
       ids,
       pair,
       viewer: old?.viewer ?? scope.current?.viewer,
+      sources: old ? undefined : ids.map((id) => rows?.find((row) => row.id === id)),
       ...(old
         ? { frozen: old.frozen, manifestHash: old.manifestHash, time: old.time, resultHash: old.resultHash }
         : {}),

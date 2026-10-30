@@ -83,6 +83,16 @@ JSON representation changed. Headers are `private, no-store` and `no-referrer`.
 UI scope/viewer/generation checks discard late or malformed reads after blur,
 project/task changes and revocation. Values are React text, never HTML.
 
+The client recomputes the manifest digest using sorted-key JSON through all
+input-array elements, rather than trusting a repeated digest field. Initial
+comparison also binds each manifest pin to the selected source metadata
+(assignment, assignee/submitter, task, revision and snapshot hash). Status is not
+an input pin: a later review decision alone does not change a frozen answer.
+Digest or selected-source mismatches clear the projection; a retry keeps the
+original receipt and never silently selects another revision. This verifies
+receipt/body consistency and does not replace server-side signature or authority
+checks. Existing unmodified V1 receipts continue to replay.
+
 ## Whole-request budgets and cost
 
 No truncation, field/input dropping, splitting or hidden fallback:
@@ -107,6 +117,10 @@ Selected-pair rendering reuses stored equality flags and does not recalculate.
 Maximum request cost is 800 normalizations and 15,200 equalities, with zero
 third-party scorer calls. `cost_per_pass` reports the actual bounded input work.
 Unavailable malformed cohorts do not claim a successful scoring cost.
+Client ASCII trimming uses the existing es-toolkit implementation with explicit
+ASCII characters, avoiding repeated regex scans of internal whitespace while
+retaining the same versioned normalization rule. Client hashing reuses the
+existing Noble SHA-256 dependency and works without secure-context WebCrypto.
 
 ## Acceptance and remaining scope
 

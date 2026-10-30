@@ -22,6 +22,15 @@ describe('frozen static text field comparison', () => {
       cy.get('[data-testid="field-matrix"]').should('contain.text', '66.67%').and('contain.text', '0.00%');
       cy.get('[data-testid="field-difference"]').should('contain.text', zh ? '仅格式不同' : 'Format only');
       cy.get('[data-testid="field-detail"]').should('contain.text', '001').and('contain.text', '张三');
+      // A response must prove its manifest contents, not merely repeat an old digest.
+      cy.intercept({ method: 'GET', pathname: new RegExp(url('differences') + '?$'), times: 1 }, request => request.continue(response => {
+        response.body.manifest.inputs[0].revision++;
+      })).as('changedFieldManifest');
+      cy.get('[data-testid="field-read"]').click(); cy.wait('@changedFieldManifest');
+      cy.get('[data-testid="field-workspace"] [role="alert"]').should('be.visible');
+      cy.get('[data-testid="field-detail"]').should('not.exist');
+      cy.get('[data-testid="field-read"]').click();
+      cy.get('[data-testid="field-detail"]').should('contain.text', '001');
       cy.get('[data-testid="field-back-matrix"]').click();
       const ids = Object.values(scope.cases.differences.sources).map(Number).sort((a, b) => a - b);
       cy.get(`[data-testid="field-pair-${ids[0]}-${ids[2]}"]`).click();

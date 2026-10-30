@@ -1237,3 +1237,10 @@ to `snapshot_loading.py`; permission and PostgreSQL race regressions cover both.
 No write authority, Host/Core fallback, batch or review-state changes. #81/#84 stay
 open. Historical Docker/#76 CHANGED/UNKNOWN and incomplete full-data comparison
 are not resolved by source, isolated synthetic or CI validation.
+
+PR #124 review adds client manifest-digest verification (including nested input
+arrays) and binds initial answers to the selected revision metadata. A claimed
+old hash cannot relabel a changed revision or source. Tests cover tampered and
+correctly rehashed-but-mismatched sources, stale replies, exact receipt retry and
+HTTP-compatible hashing. Existing permission, metric, review and sampling
+semantics remain unchanged; see field-disagreement-v1.md.
