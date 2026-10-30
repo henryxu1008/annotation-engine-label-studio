@@ -104,3 +104,6 @@ web/apps/labelstudio-e2e/.release-snapshot-e2e.json
 .ner-arbitration-e2e.json
 .ner-review-priority-e2e.json
 .ner-review-handoff-e2e.json
+
+# Fresh synthetic field comparison browser credentials
+web/apps/labelstudio-e2e/.field-e2e.json

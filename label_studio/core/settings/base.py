@@ -985,3 +985,7 @@ FSM_INITIALIZATION_TRANSITION_NAME = 'fsm.utils._get_initialization_transition_n
 # Used for async migrations. In LSE this is set to a real queue name, including here so we
 # can use settings.SERVICE_QUEUE_NAME in async migrations in LSO
 SERVICE_QUEUE_NAME = get_env('SERVICE_QUEUE_NAME', 'default')
+
+# Independent default-off field read capability; no Host/Core fallback.
+ANNOTATION_FIELD_DISAGREEMENTS_ENABLED = get_bool_env('ANNOTATION_FIELD_DISAGREEMENTS_ENABLED', False)
+ANNOTATION_FIELD_DISAGREEMENT_MODES = json.loads(get_env('ANNOTATION_FIELD_DISAGREEMENT_MODES', '{}'))

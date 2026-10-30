@@ -22,6 +22,7 @@ import { selectedTaskPackageIds } from "./taskPackageSelection";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReviewBatchEntry, ReviewBatches, ReviewBatchTitle } from "./ReviewBatches";
 import { ClassificationDisagreement, ClassificationEntry, ClassificationTitle } from "./ClassificationDisagreement";
+import { FieldDisagreement, FieldEntry, FieldTitle } from "./FieldDisagreement";
 import { NerDisagreement, NerEntry, NerTitle } from "./NerDisagreement";
 import { NerBatches, NerBatchEntry, NerBatchTitle } from "./NerBatches";
 import { NerArbitrations, NerArbitrationEntry, NerArbitrationTitle } from "./NerArbitrations";
@@ -469,6 +470,16 @@ DataManagerPage.context = ({ dmRef }) => {
       style: { width: 1000, maxWidth: "calc(100vw - 32px)" },
     });
   };
+  const openFieldDisagreement = () => {
+    const trigger = document.activeElement;
+    modal({
+      title: <FieldTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <FieldDisagreement projectId={project.id} initialTaskId={dmRef?.store?.taskStore?.selected?.id ?? ""} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1000, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
 
   const openNerBatches = () => {
     if (!project) return;
@@ -588,6 +599,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
       <ReviewBatchEntry projectId={project.id} onOpen={openReviewBatches} disabled={!localePreference.ready} />
       <ClassificationEntry projectId={project.id} onOpen={openClassification} disabled={!localePreference.ready} />
+      <FieldEntry projectId={project.id} onOpen={openFieldDisagreement} disabled={!localePreference.ready} />
       <NerEntry projectId={project.id} onOpen={openNerDisagreement} disabled={!localePreference.ready} />
       <NerBatchEntry projectId={project.id} onOpen={openNerBatches} disabled={!localePreference.ready} />
       <NerArbitrationEntry projectId={project.id} onOpen={openNerArbitrations} disabled={!localePreference.ready} />

@@ -1226,3 +1226,21 @@ verification. One full target cohort costs 2Q <= 380 per verified request; conte
 plus POST may cost 760. Classified and NER authority, decisions and reviews remain
 separate. #81/#84 stay open; Host/Core and retained Docker/#76 are not operated,
 and historical CHANGED/UNKNOWN/incomplete-comparison records are retained.
+
+### #81 static text field comparison
+
+Independent default-off GET capability in `fork_review` only. See
+[field-disagreement-v1.md](field-disagreement-v1.md) for exact revision/viewer
+binding, SQL predecode guards, normalization and whole-request budgets. The NER
+loader keeps its existing public wrapper and behavior while delegating SQL gating
+to `snapshot_loading.py`; permission and PostgreSQL race regressions cover both.
+No write authority, Host/Core fallback, batch or review-state changes. #81/#84 stay
+open. Historical Docker/#76 CHANGED/UNKNOWN and incomplete full-data comparison
+are not resolved by source, isolated synthetic or CI validation.
+
+PR #124 review adds client manifest-digest verification (including nested input
+arrays) and binds initial answers to the selected revision metadata. A claimed
+old hash cannot relabel a changed revision or source. Tests cover tampered and
+correctly rehashed-but-mismatched sources, stale replies, exact receipt retry and
+HTTP-compatible hashing. Existing permission, metric, review and sampling
+semantics remain unchanged; see field-disagreement-v1.md.
