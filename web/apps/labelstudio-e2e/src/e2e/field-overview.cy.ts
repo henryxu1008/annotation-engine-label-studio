@@ -89,7 +89,7 @@ describe('single frozen field batch quality overview', () => {
         expect(response!.body.frozen).to.eq(frozen);expect(response!.body.result_hash).to.eq(hash);
         expect(response!.body.summarized_at).to.eq(firstTime);expect(response!.body.pagination.page).to.eq(2);
       });
-      cy.get('[data-testid="field-quality-summary"]').should('be.visible');
+      cy.get('[data-testid="field-quality-summary"]').scrollIntoView().should('be.visible');
       cy.screenshot('field-quality-'+locale,{capture:'fullPage'});
 
       login('reviewer');cy.get('[data-testid="open-field-batches"]').click();
