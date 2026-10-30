@@ -76,11 +76,20 @@ describe('single frozen field batch quality overview', () => {
         expect(response!.body.result_hash).to.eq(hash);expect(response!.body.frozen).to.eq(frozen);
       });
       // A late response cannot revive evidence after window blur.
+      let entered=false,release:(()=>void)|undefined;
       cy.intercept({method:'GET',pathname:new RegExp('^'+base+'[0-9]+/quality-overview/?$'),times:1},
-        request=>request.continue(response=>{response.setDelay(800);})).as('late');
-      read();cy.window().then(win=>win.dispatchEvent(new Event('blur')));
-      cy.wait('@late');cy.get('[data-testid="field-quality-summary"]').should('not.exist');
-      read();cy.wait('@overview');cy.get('[data-testid="field-quality-summary"]').should('be.visible');
+        request=>request.continue(()=>{entered=true;return new Cypress.Promise<void>(done=>{release=done;});})).as('late');
+      read();cy.wrap(null).should(()=>expect(entered).to.eq(true));
+      cy.window().then(win=>win.dispatchEvent(new win.Event('blur')));
+      cy.then(()=>release!());cy.wait('@late');
+      cy.get('[data-testid="field-quality-overview"]').should('not.exist');
+      // The parent also clears its detail on blur; reauthorize it before replaying the retained receipt.
+      cy.get('[data-testid="field-batch-refresh"]').click();
+      cy.wait('@overview').then(({response})=>{
+        expect(response!.body.frozen).to.eq(frozen);expect(response!.body.result_hash).to.eq(hash);
+        expect(response!.body.summarized_at).to.eq(firstTime);expect(response!.body.pagination.page).to.eq(2);
+      });
+      cy.get('[data-testid="field-quality-summary"]').should('be.visible');
       cy.screenshot('field-quality-'+locale,{capture:'fullPage'});
 
       login('reviewer');cy.get('[data-testid="open-field-batches"]').click();
