@@ -5,6 +5,8 @@ describe('durable frozen text field queues', () => {
     it(`creates, recovers and reads frozen field queues in ${locale}`, () => {
       const zh = locale === 'zh-CN', scope = fixture.projects[locale];
       const base = `/api/projects/${scope.id}/field-disagreements/batches/`;
+      // ApiConfig emits slashless paths; direct API fixtures also accept a slash.
+      const route = (suffix = '') => new RegExp('^' + (base + suffix).replace(/\/$/, '') + '/?$');
       const cases = ['differences','format_only','agreement','empty','self','new_revision','source_loss'];
       const tasks = cases.map(name => scope.cases[name].task);
       const login = (role: string) => {
@@ -26,7 +28,7 @@ describe('durable frozen text field queues', () => {
       cy.get('[data-testid="field-batches"] input').eq(1).type(tasks.join(','));
       button('Preview comparison','预览比较').click();
       let originalBody: any, originalKey: string, batch: number;
-      cy.intercept({method:'POST',pathname:new RegExp(base+'$'),times:1},request=>{
+      cy.intercept({method:'POST',pathname:route(),times:1},request=>{
         originalBody=request.body;originalKey=request.headers['idempotency-key'] as string;
         request.continue(response=>{
           batch=response.body.id;
@@ -37,7 +39,7 @@ describe('durable frozen text field queues', () => {
       button('Create frozen batch','创建冻结批次').click();cy.wait('@lostAck');
       button('Recover original request','恢复原请求').should('be.visible');
       cy.request(base).then(({body})=>{expect(body.count).to.eq(1);expect(body.results[0].id).to.eq(batch);});
-      cy.intercept('POST',new RegExp(base+'$'),request=>{
+      cy.intercept({method:'POST',pathname:route()},request=>{
         expect(request.body).to.deep.eq(originalBody);
         expect(request.headers['idempotency-key']).to.eq(originalKey);
       }).as('recover');
@@ -58,7 +60,7 @@ describe('durable frozen text field queues', () => {
       button('Back to queue','返回队列').click();
 
       let entered=false,release:(()=>void)|undefined;
-      cy.intercept({method:'GET',pathname:new RegExp(base+'[0-9]+/items/'+scope.cases.differences.task+'/$'),times:1},
+      cy.intercept({method:'GET',pathname:route('[0-9]+/items/'+scope.cases.differences.task+'/'),times:1},
         request=>request.continue(()=>{entered=true;return new Cypress.Promise<void>(done=>{release=done;});})).as('lateItem');
       item('differences');cy.wrap(null).should(()=>expect(entered).to.eq(true));
       cy.window().then(win=>win.dispatchEvent(new win.Event('blur')));
@@ -67,7 +69,7 @@ describe('durable frozen text field queues', () => {
       refresh();item('differences');cy.get('[data-testid="field-detail"]').should('contain.text','001');
       button('Back to queue','返回队列').click();
 
-      cy.intercept({method:'GET',pathname:new RegExp(base+'[0-9]+/items/'+scope.cases.differences.task+'/$'),times:1},
+      cy.intercept({method:'GET',pathname:route('[0-9]+/items/'+scope.cases.differences.task+'/'),times:1},
         request=>request.continue(response=>{response.body.item.evidence.cohort[0].source.revision++;})).as('badEvidence');
       item('differences');cy.wait('@badEvidence');
       cy.get('[data-testid="field-batches"] [role="alert"]').should('be.visible');
