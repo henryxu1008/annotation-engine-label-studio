@@ -1,0 +1,123 @@
+name: Frozen Field Batches
+
+on:
+  push:
+    branches: [main, codex/issue81-field-batches]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-batches-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEST_ENVIRONMENT: "1"
+  SENTRY_DSN: ""
+  DJANGO_SETTINGS_MODULE: core.settings.label_studio
+  DJANGO_DB: postgresql
+  POSTGRE_HOST: localhost
+  POSTGRE_PORT: "5432"
+  POSTGRE_NAME: fields_ci
+  POSTGRE_USER: postgres
+  POSTGRE_PASSWORD: fields-ci-synthetic-only
+  DEBUG: "true"
+  HOSTNAME: http://localhost:8080
+  FRONTEND_HOSTNAME: http://localhost:8080
+  FRONTEND_HMR: "false"
+  COLLECT_ANALYTICS: "false"
+  LATEST_VERSION_CHECK: "false"
+  SENTRY_RATE: "0"
+  JSON_LOG: "0"
+
+jobs:
+  field-batches:
+    name: Field batches PostgreSQL and bilingual E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      fields-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: fields-ci-synthetic-only
+          POSTGRES_DB: fields_ci
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fields_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - run: pipx install poetry==2.3.2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          test -n "$(fc-list :lang=zh-cn family)"
+          poetry install --with test
+      - name: PostgreSQL frozen comparison and concurrency regression
+        working-directory: label_studio
+        run: |
+          poetry run python core/version.py
+          poetry run pytest -q classification_disagreements/tests review_batches/tests tasks/tests/test_project_operation_policy.py
+      - name: Prepare fresh synthetic database
+        run: |
+          poetry run python label_studio/core/version.py
+          poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py collectstatic --noinput
+          poetry run python label_studio/manage.py seed_field_batch_e2e
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Frontend regressions and production build
+        working-directory: web
+        run: |
+          yarn install --frozen-lockfile
+          NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
+            apps/labelstudio/src/pages/DataManager/FieldBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/FieldDisagreement.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/NerDisagreement.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationDisagreement.test.jsx
+          yarn i18n:catalogs
+          yarn i18n:literals
+          yarn ls:build
+      - name: Start isolated synthetic Fork server
+        env:
+          ANNOTATION_FIELD_DISAGREEMENTS_ENABLED: "true"
+          ANNOTATION_FIELD_BATCHES_ENABLED: "true"
+        run: |
+          export ANNOTATION_FIELD_DISAGREEMENT_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.field-batches-e2e.json"))["modes"]))')"
+          nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/field-disagreement.log 2>&1 &
+          for i in {1..90}; do
+            if curl --fail --silent http://localhost:8080/health/ >/dev/null && curl --fail --silent http://localhost:8080/react-app/main.js >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          tail -200 /tmp/field-disagreement.log
+          exit 1
+      - name: Bilingual frozen field batch journeys
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.field-batches.config.ts --browser chrome \
+            --config baseUrl=http://localhost:8080,video=true --spec apps/labelstudio-e2e/src/e2e/field-batches.cy.ts
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: field-batches-e2e
+          if-no-files-found: ignore
+          path: |
+            web/dist/cypress/apps/labelstudio-e2e/screenshots/**
+            web/dist/cypress/apps/labelstudio-e2e/videos/**
+            /tmp/field-disagreement.log

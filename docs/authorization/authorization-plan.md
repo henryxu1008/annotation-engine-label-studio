@@ -1244,3 +1244,34 @@ old hash cannot relabel a changed revision or source. Tests cover tampered and
 correctly rehashed-but-mismatched sources, stale replies, exact receipt retry and
 HTTP-compatible hashing. Existing permission, metric, review and sampling
 semantics remain unchanged; see field-disagreement-v1.md.
+
+### #81 durable frozen text field queues
+
+See [field-batches-v1.md](field-batches-v1.md). A separate default-off FieldBatch
+table, immutable-row trigger and ORGANIZE_FIELD operation reuse the field engine,
+bounded snapshot loader and complete batch workspace through a field-only adapter.
+No existing classification/NER record, manual receipt, review, arbitration or
+sampling rule is reinterpreted. Current READ_WORK and manager/reviewer scope are
+required; creation adds manager + ORGANIZE_FIELD. Reviewer self-cohorts are
+excluded as whole tasks before SQL pagination, counts and source hydration.
+
+Split inspection from calculation to preflight aggregate input/CPU budgets before
+the first normalization/comparison. Exact final Manifest/rendered-byte limits are
+checked after calculation, with new creation rolled back on rejection and no
+claim of zero performed work. Current-authority original-key metadata recovery
+precedes preview/source/engine revalidation and performs no scoring. Bound
+client intent/evidence to the current viewer and frozen reference; close guarded
+list iterators on every exit. #81/#84 stay open. Host/Core/deployment and retained
+Docker/#76 are outside this change; preserve all CHANGED/UNKNOWN/incomplete
+comparison and existing Biome baseline records.
+
+PR #125 review tightens the same V1 contract: validate inner task IDs as strict
+positive integers before metadata reads or original-key recovery; bind field
+creation ACKs to the pending viewer; reject evidence with contradictory cohort
+order/identity, input or pair counts, or comparison availability/reason. These
+checks preserve valid V1 data and the existing metric/review/arbitration/sampling
+semantics. Regression cases include rehashed malformed Manifests, well-digested
+but contradictory evidence and repeated original-key recovery after bad ACKs.
+The shared frozen-source validator rejects boolean/float project/task identities
+before field freezing/scoring; ordinary integer snapshots keep their existing
+review, classification and NER semantics.

@@ -134,7 +134,7 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
       const result = await fetch("classificationBatchItem", { batch: batchId, task, ...pair }, types.item);
       if (result.id !== batchId || result.item.task_id !== task) throw new Error("scope changed");
       adapter?.match?.(basis.current, result);
-      if (current()) setAnswer(result);
+      if (current()) { adapter?.retainItem?.(result); setAnswer(result); }
     });
   };
   useEffect(() => {
@@ -162,7 +162,7 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
         : { kind: "tasks", task_ids: form.tasks.trim().split(/[\s,]+/).map(Number) };
       const result = await fetch("classificationBatchPreview", {}, types.preview, { name: form.name, scope });
       if (current !== generation.current) return;
-      pending.current = { body: { preview_token: result.preview_token, expected_plan_hash: result.plan_hash }, key: uuidv4(), attempted: false };
+      pending.current = { body: { preview_token: result.preview_token, expected_plan_hash: result.plan_hash }, key: uuidv4(), attempted: false, viewer: result.viewer };
       setPreview(result);
     } catch { if (current === generation.current) setError(true); }
     finally { if (current === generation.current) setBusy(false); }
@@ -175,9 +175,15 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
     const current = ++generation.current;
     setBusy(true); setError(false); clear();
     try {
+      if (adapter?.guardIntentViewer) {
+        const capability = await fetch("classificationBatchCapability", {}, types.capability);
+        if (current !== generation.current) return;
+        if (!capability.can_create || capability.viewer !== intent.viewer) throw new Error("Creation authority changed");
+      }
       const result = await fetch("createClassificationBatch", {}, types.created, intent.body, { "Idempotency-Key": intent.key });
       if (current !== generation.current) return;
       if (result.idempotency_key !== intent.key) throw new Error("acknowledgement changed");
+      if (adapter?.guardIntentViewer && result.viewer !== intent.viewer) throw new Error("acknowledgement viewer changed");
       pending.current = null; setUnknown(false); setPreview(null);
       setSaved({ id: result.id, replayed: result.replayed });
       await openBatch(result.id);
@@ -202,7 +208,7 @@ export const FrozenBatchWorkspace = ({ projectId, onOpenArbitration, adapter }) 
     {error && <p role="alert">{t(typeof error === "string" ? error : "batchReadFailed")}</p>}
     {saved && <p role="status">{t(saved.replayed ? "batchRecovered" : "batchSaved", { id: saved.id })}</p>}
     {unknown && <p role="status">{t("batchUnknown")} <Button disabled={busy} onClick={create}>{t("batchRecover")}</Button></p>}
-    {!busy && view !== "create" && <Button onClick={refresh} data-testid={adapter ? "ner-batch-refresh" : "classification-batch-refresh"}>{t("batchRefresh")}</Button>}
+    {!busy && view !== "create" && <Button onClick={refresh} data-testid={adapter?.refreshTestId ?? (adapter ? "ner-batch-refresh" : "classification-batch-refresh")}>{t("batchRefresh")}</Button>}
     {view === "list" && <>
       {canCreate && !unknown && <Button disabled={busy} onClick={() => { setView("create"); setList(null); setError(false); }}>{t("batchNew")}</Button>}
       {list && <>

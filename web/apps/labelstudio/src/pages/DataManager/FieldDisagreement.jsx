@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
-import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex } from "@noble/hashes/utils";
+import { fieldDigest } from "./fieldEvidence";
 import { trim } from "es-toolkit/string";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
@@ -117,19 +116,6 @@ const equalIds = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]
 const requireValid = (v) => {
   if (!v) throw new Error("Invalid field projection");
 };
-// Receipt keys are fixed ASCII protocol names. Recurse through the input array
-// to match the server's sorted-key JSON, including every revision identity pin.
-const canonicalManifest = (v) =>
-  Array.isArray(v)
-    ? v.map(canonicalManifest)
-    : v && typeof v === "object"
-      ? Object.fromEntries(
-          Object.keys(v)
-            .sort()
-            .map((key) => [key, canonicalManifest(v[key])]),
-        )
-      : v;
-const manifestDigest = (v) => bytesToHex(sha256(JSON.stringify(canonicalManifest(v))));
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const normalize = (s) => trim(s.replace(/\r\n?/g, "\n"), [" ", "\t", "\n", "\v", "\f"]);
 const reasons = [
@@ -147,7 +133,7 @@ const reasons = [
 export const validateFieldReport = (raw, expected) => {
   const r = reportSchema.parse(raw);
   const ids = r.scope.input_ids;
-  requireValid(manifestDigest(r.manifest) === r.manifest_hash);
+  requireValid(fieldDigest(r.manifest) === r.manifest_hash);
   requireValid(
     r.scope.project_id === expected.project &&
       r.scope.task_id === expected.task &&
@@ -203,12 +189,36 @@ export const validateFieldReport = (raw, expected) => {
     return r;
   }
   requireValid(r.receipt_verified && r.result_hash === r.manifest.result_hash);
+  return validateFieldComparison(r, expected);
+};
+
+export const fieldComparisonSchema = reportSchema
+  .pick({
+    availability: true,
+    reason: true,
+    input_count: true,
+    total_pairs: true,
+    configured_fields: true,
+    comparable_pairs: true,
+    unavailable_pairs: true,
+    cost_per_pass: true,
+    pairs: true,
+    selected_pair: true,
+  })
+  .extend({ total_pairs: z.number().int().min(0).max(190) });
+
+export const validateFieldComparison = (r, expected) => {
+  fieldComparisonSchema.parse(r);
+  const ids = expected.ids;
   if (r.pairs === null) {
-    requireValid(r.availability === "unavailable" && reasons.includes(r.reason) && r.selected_pair === null);
+    requireValid(
+      r.availability === "unavailable" && (expected.reasons ?? reasons).includes(r.reason) && r.selected_pair === null,
+    );
     return r;
   }
   requireValid(
-    r.configured_fields > 0 &&
+    r.input_count === ids.length &&
+      r.configured_fields > 0 &&
       r.pairs.length === r.total_pairs &&
       r.cost_per_pass?.normalized_values === ids.length * r.configured_fields &&
       r.cost_per_pass?.field_equalities === 2 * r.total_pairs * r.configured_fields,
@@ -291,7 +301,17 @@ export const FieldTitle = () => {
 };
 
 const rate = (r) => (r ? `${((Number(r.numerator) / Number(r.denominator)) * 100).toFixed(2)}%` : "—");
-export const FieldResult = ({ report, busy, detail, onSelectPair, onBack, matrixRefs, detailHeading }) => {
+export const FieldResult = ({
+  report,
+  busy,
+  detail,
+  onSelectPair,
+  onBack,
+  matrixRefs,
+  detailHeading,
+  evidence,
+  extraReasons = [],
+}) => {
   const { t } = useLocaleTranslation("reviewBatches");
   const p = report.selected_pair;
   return (
@@ -299,11 +319,11 @@ export const FieldResult = ({ report, busy, detail, onSelectPair, onBack, matrix
       <p>{t("fieldFormula")}</p>
       <p>{t("nerFrozenScope", { inputs: report.input_count, total: report.total_pairs })}</p>
       <p>{t("classificationRule", { rule: report.rule, time: report.calculated_at })}</p>
-      <code style={{ display: "block", overflowWrap: "anywhere" }}>{report.manifest_hash}</code>
+      <code style={{ display: "block", overflowWrap: "anywhere" }}>{evidence?.reference ?? report.manifest_hash}</code>
       <details>
         <summary>{t("nerFrozenInputs")}</summary>
         <ul>
-          {report.manifest.inputs.map((p) => (
+          {(evidence?.inputs ?? report.manifest.inputs).map((p) => (
             <li key={p.submission_id}>
               {t("classificationSource", { id: p.submission_id, revision: p.revision, actor: p.submitter_id })}
               <code style={{ display: "block", overflowWrap: "anywhere" }}>{p.result_hash}</code>
@@ -315,7 +335,9 @@ export const FieldResult = ({ report, busy, detail, onSelectPair, onBack, matrix
       {report.availability === "unavailable" && (
         <p role="status" data-testid="field-unavailable">
           {t("fieldUnavailable", {
-            reason: t(`fieldReason_${reasons.includes(report.reason) ? report.reason : "unknown"}`),
+            reason: t(
+              `fieldReason_${reasons.includes(report.reason) || extraReasons.includes(report.reason) ? report.reason : "unknown"}`,
+            ),
           })}
         </p>
       )}

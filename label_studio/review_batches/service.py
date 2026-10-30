@@ -128,8 +128,10 @@ def valid_source(row, project_id):
         and row.assignment.task.project_id == project_id
         and row.result_hash == _snapshot_hash(row.result_snapshot)
         and isinstance(row.result_snapshot.get("project"), dict)
+        and type(row.result_snapshot["project"].get("id")) is int
         and row.result_snapshot["project"].get("id") == project_id
         and isinstance(row.result_snapshot.get("task"), dict)
+        and type(row.result_snapshot["task"].get("id")) is int
         and row.result_snapshot["task"].get("id") == row.assignment.task_id
     )
 

@@ -336,5 +336,13 @@
   "fieldReason_missing_field": "至少一个配置字段缺失，不缩小分母",
   "fieldReason_no_values": "没有可评分的有信息值",
   "fieldReason_source_unavailable": "冻结源不可用，隐藏全部值和分数",
-  "fieldReason_unknown": "不支持的对照"
+  "fieldReason_unknown": "不支持的对照",
+  "fieldBatchTitle": "冻结字段分歧队列",
+  "fieldBatchBoundary": "字段分析只读。创建批次不代表审核通过、仲裁或抽审。",
+  "fieldBatchLimits": "最多 100 个任务、每任务 20 名参与者，并受整批共享字节与计算预算限制。仅格式不同仍列为分歧。",
+  "fieldBatchValueDifference": "值差异",
+  "fieldBatchFormatDifference": "格式差异",
+  "fieldReason_insufficient_inputs": "独立参与者不足两人",
+  "fieldReason_missing_submission": "原参与者缺少提交",
+  "fieldReason_latest_revision_unusable": "最新修订不可用"
 }

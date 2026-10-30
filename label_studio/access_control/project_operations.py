@@ -27,6 +27,7 @@ ORGANIZE_WORK = 'organize_work'
 ORGANIZE_REVIEW = 'organize_review'
 ORGANIZE_CLASSIFICATION = 'organize_classification'
 ORGANIZE_NER = 'organize_ner'
+ORGANIZE_FIELD = 'organize_field'
 ORGANIZE_ARBITRATION = 'organize_arbitration'
 ARBITRATE = 'arbitrate'
 ORGANIZE_NER_ARBITRATION = 'organize_ner_arbitration'
@@ -53,6 +54,8 @@ class LegacyProjectOperationProvider:
             operations = operations | {ORGANIZE_REVIEW}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_CLASSIFICATION}
+        if getattr(settings, 'ANNOTATION_FIELD_BATCHES_ENABLED', False):
+            operations = operations | {ORGANIZE_FIELD}
         if getattr(settings, 'ANNOTATION_NER_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_NER}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED', False):
