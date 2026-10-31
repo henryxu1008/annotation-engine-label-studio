@@ -232,7 +232,7 @@ def check_loaded_batch(batch, project):
     return batch
 
 
-def checked_sources(batch, actor=None, role=None):
+def checked_sources(batch, actor=None, role=None, *, for_serialization=False):
     from . import guarded
     candidates = batch.plan["candidates"]
     if guarded.is_plan(batch.plan):
@@ -243,7 +243,8 @@ def checked_sources(batch, actor=None, role=None):
     query = Submission.objects.filter(pk__in=ids).select_related("assignment__task", "review")
     if guarded.is_plan(batch.plan):
         query = query.filter(assignment__project_id=batch.project_id, assignment__task__project_id=batch.project_id)
-    loaded = guarded.load(query, plan=batch.plan) if guarded.is_plan(batch.plan) else query
+    loaded = (guarded.load(query, plan=batch.plan, for_serialization=for_serialization)
+              if guarded.is_plan(batch.plan) else query)
     rows = {row.pk: row for row in loaded}
     for item in batch.plan["candidates"]:
         row = rows.get(item["submission_id"])
@@ -263,13 +264,13 @@ def checked_sources(batch, actor=None, role=None):
     return rows
 
 
-def read_sources(batch, actor, role):
+def read_sources(batch, actor, role, *, for_serialization=False):
     from . import guarded
-    return (checked_sources(batch, actor, role) if guarded.is_plan(batch.plan)
+    return (checked_sources(batch, actor, role, for_serialization=for_serialization) if guarded.is_plan(batch.plan)
             else checked_sources(batch))
 
 
-def require_selected(project, batch_id, submission, actor, *, principal):
+def require_selected(project, batch_id, submission, actor, *, principal, for_serialization=False):
     project, role, _ = guard(project.pk, principal, actor)
     if role != 'reviewer':
         raise PermissionDenied()
@@ -278,7 +279,7 @@ def require_selected(project, batch_id, submission, actor, *, principal):
     if 'priority' in batch.plan:
         from . import priority
         priority.read_guard(project.pk, principal, actor, batch.plan)
-    rows = read_sources(batch, actor, role)
+    rows = read_sources(batch, actor, role, for_serialization=for_serialization)
     selected = any(item["selected"] and item["submission_id"] == submission.pk for item in visible_candidates(batch, actor, role))
     if not selected or submission.pk not in rows or submission.submitted_by_id == actor.pk:
         raise PermissionDenied()

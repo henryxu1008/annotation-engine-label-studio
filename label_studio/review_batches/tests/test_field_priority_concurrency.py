@@ -1,24 +1,25 @@
-"""Independent PostgreSQL connections for NER ReviewBatch planning."""
+"""Independent PostgreSQL connections for field ReviewBatch planning and review."""
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from uuid import uuid4
 
 from classification_disagreements import fields
-from django.db import close_old_connections, connection, transaction
+from django.db import DatabaseError, close_old_connections, connection, transaction
 from django.db.models import JSONField
 from django.db.models.query import QuerySet
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from organizations.models import OrganizationMember
-from projects.models import Project
+from projects.models import Project, ProjectMember
 from rest_framework.renderers import JSONRenderer
 from rest_framework.test import APIClient
 from review_batches import field_priority as p
 from review_batches.models import ReviewBatch
 from review_batches.tests import test_concurrency as existing
 from review_batches.tests import test_field_priority as fixtures
-from tasks.models import Submission
+from tasks.models import ReviewDecision, Submission
+from tasks.serializers import SubmissionSerializer
 
 
 @override_settings(
@@ -34,6 +35,7 @@ class TestFieldPriorityConcurrency(TransactionTestCase):
     freeze_analysis = fixtures.TestFieldPriority.freeze_analysis
     preview = fixtures.TestFieldPriority.preview
     body = fixtures.TestFieldPriority.body
+    create = fixtures.TestFieldPriority.create
     run_request = existing.TestBatchConcurrency.run_request
 
     def setUp(self):
@@ -211,3 +213,54 @@ class TestFieldPriorityConcurrency(TransactionTestCase):
             result = self.preview()
         assert result.status_code == 409, result.data
         assert len(calls) == 12 and not ReviewBatch.objects.exists()
+
+    def test_committed_revocation_denies_waiting_review_without_snapshot_decode(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        attempted = threading.Event()
+        decoder = JSONField.from_db_value
+
+        def decode(field, value, expression, db):
+            assert field.name != 'result_snapshot', 'Revoked review decoded immutable evidence'
+            return decoder(field, value, expression, db)
+
+        url = f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}'
+        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(JSONField, 'from_db_value', decode):
+            with transaction.atomic():
+                Project.objects.select_for_update().get(pk=self.project.pk)
+                pending = pool.submit(
+                    self.run_request, self.independent, url, {'decision': 'approved'}, attempted=attempted
+                )
+                assert attempted.wait(15)
+                ProjectMember.objects.filter(project=self.project, user=self.independent).update(enabled=False)
+            result = pending.result(30)
+        assert result.status_code in (403, 404), result.data
+        assert not ReviewDecision.objects.exists()
+        assert Submission.objects.values_list('status', flat=True).get(pk=self.first.pk) == 'pending'
+
+    def test_review_fence_remains_held_through_guarded_response_serialization(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        entered, release = threading.Event(), threading.Event()
+        serialize = SubmissionSerializer.to_representation
+
+        def hold(serializer, instance):
+            data = serialize(serializer, instance)
+            entered.set()
+            assert release.wait(15)
+            return data
+
+        url = f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}'
+        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(SubmissionSerializer, 'to_representation', hold):
+            pending = pool.submit(self.run_request, self.independent, url, {'decision': 'approved'})
+            try:
+                assert entered.wait(15)
+                with self.assertRaises(DatabaseError) as blocked, transaction.atomic():
+                    Project.objects.select_for_update(nowait=True).get(pk=self.project.pk)
+                cause = blocked.exception.__cause__
+                assert (getattr(cause, 'pgcode', None) or getattr(cause, 'sqlstate', None)) == '55P03'
+            finally:
+                release.set()
+            result = pending.result(30)
+        assert result.status_code == 200, result.data
+        assert ReviewDecision.objects.filter(submission=self.first).count() == 1

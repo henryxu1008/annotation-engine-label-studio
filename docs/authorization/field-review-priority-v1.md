@@ -45,6 +45,10 @@ field read scope, independently of ORGANIZE_FIELD, REVIEW or arbitration.
 Current Manager/Reviewer reads require READ_WORK and both scopes. A Reviewer's
 whole frozen self-cohorts and own other candidates are excluded before counts,
 pagination and source loading, including direct batch-context review/rework.
+Direct review identity/lock lookups defer immutable snapshots; package scope
+lookups load IDs only. Both decision validation and response serialization use
+the shared bounded loader, followed by a final source/representation check in
+the same write fence. A generic ORM refresh must not bypass that loader.
 All-hidden batches are absent/404. Reviewers receive only visible generic
 reasons, without full origin hash/cohorts or peers' answers. Current REVIEW and
 all ordinary selected/pending/exact-source/no-self-review constraints remain

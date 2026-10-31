@@ -19,11 +19,11 @@ from rest_framework.exceptions import APIException
 from rest_framework.renderers import JSONRenderer
 from rest_framework.test import APITestCase
 from review_batches import field_priority as p
-from review_batches import service
+from review_batches import guarded, service
 from review_batches.models import ReviewBatch
 from tasks.models import ReviewDecision, Submission, Task, TaskAssignment
 from tasks.serializers import SubmissionSerializer
-from tasks.submissions import _snapshot_hash
+from tasks.submissions import _snapshot_hash, review_submission
 from users.models import User
 from users.serializers import UserSerializer
 
@@ -261,6 +261,125 @@ class TestFieldPriority(APITestCase):
             assert legacy.status_code == 200 and legacy.data['plan']['algorithm'] == service.ALGORITHM
         with self.settings(ANNOTATION_FIELD_DISAGREEMENT_MODES={}):
             assert self.preview().status_code == 403
+
+    def test_direct_review_hidden_cohort_and_current_gates_precede_snapshot_decode(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        url = f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}'
+        decoder = JSONField.from_db_value
+
+        def decode(field, value, expression, db):
+            assert field.name != 'result_snapshot', 'Denied review decoded a source snapshot'
+            return decoder(field, value, expression, db)
+
+        self.client.force_authenticate(self.reviewer)
+        with patch.object(JSONField, 'from_db_value', decode):
+            assert self.client.post(url, {'decision': 'approved'}, format='json').status_code in (403, 404)
+            with self.assertRaises(APIException):
+                review_submission(
+                    submission=self.first, reviewer=self.reviewer, decision='approved', review_batch_id=identifier
+                )
+        self.client.force_authenticate(self.independent)
+        for settings in (
+            {'ANNOTATION_FIELD_REVIEW_PRIORITY_ENABLED': False},
+            {'ANNOTATION_FIELD_BATCHES_ENABLED': False},
+            {'ANNOTATION_FIELD_DISAGREEMENTS_ENABLED': False},
+            {'ANNOTATION_REVIEW_BATCHES_ENABLED': False},
+            {'ANNOTATION_FIELD_DISAGREEMENT_MODES': {}},
+            {'ANNOTATION_REVIEW_BATCH_MODES': {}},
+        ):
+            with self.settings(**settings), patch.object(JSONField, 'from_db_value', decode):
+                result = self.client.post(url, {'decision': 'approved'}, format='json')
+                assert result.status_code in (403, 404), result.data
+        assert not ReviewDecision.objects.exists()
+
+    def test_direct_review_stored_budget_precedes_snapshot_decode(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        self.client.force_authenticate(self.independent)
+        decoder = JSONField.from_db_value
+
+        def decode(field, value, expression, db):
+            assert field.name != 'result_snapshot', 'Over-budget review decoded a source snapshot'
+            return decoder(field, value, expression, db)
+
+        with patch.object(fields, 'MAX_STORED_BYTES', 1), patch.object(JSONField, 'from_db_value', decode):
+            result = self.client.post(
+                f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}',
+                {'decision': 'approved'},
+                format='json',
+            )
+        assert result.status_code == 422, result.data
+        assert not ReviewDecision.objects.exists()
+        assert Submission.objects.get(pk=self.first.pk).status == 'pending'
+
+    @override_settings(ANNOTATION_FIXED_PACKAGES_ENABLED=True)
+    def test_direct_review_response_only_hydrates_through_guarded_loader(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        package = self.client.post(
+            f'/api/projects/{self.project.pk}/task-packages/',
+            {'name': 'Review scope', 'task_ids': [self.first.assignment.task_id]},
+            format='json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid4()),
+        )
+        assert package.status_code == 201, package.data
+        self.client.force_authenticate(self.independent)
+        decoder, load = JSONField.from_db_value, guarded.load
+        depth, calls = [], []
+
+        def bounded(*args, **kwargs):
+            depth.append(True)
+            calls.append(kwargs.get('for_serialization', False))
+            try:
+                return load(*args, **kwargs)
+            finally:
+                depth.pop()
+
+        def decode(field, value, expression, db):
+            assert field.name != 'result_snapshot' or depth, 'Unbounded source hydration'
+            return decoder(field, value, expression, db)
+
+        with patch.object(guarded, 'load', bounded), patch.object(JSONField, 'from_db_value', decode):
+            result = self.client.post(
+                f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}&task_package={package.data["id"]}',
+                {'decision': 'approved'},
+                format='json',
+            )
+        assert result.status_code == 200, result.data
+        assert True in calls
+        assert result.data['result_snapshot'] == self.first.result_snapshot
+        assert result.data['review']['reviewer']['id'] == self.independent.pk
+        assert result.data['status'] == 'approved'
+        assert ReviewDecision.objects.filter(submission=self.first).count() == 1
+
+    def test_direct_review_post_serialization_revocation_and_corruption_roll_back(self):
+        self.args['rate'] = 100
+        identifier = self.create().data['id']
+        self.client.force_authenticate(self.independent)
+        serialize = SubmissionSerializer.to_representation
+        for change in ('revocation', 'source', 'representation'):
+
+            def alter(serializer, instance):
+                data = serialize(serializer, instance)
+                if change == 'revocation':
+                    ProjectMember.objects.filter(project=self.project, user=self.independent).update(enabled=False)
+                elif change == 'source':
+                    Submission.objects.filter(pk=self.first.pk).update(result_hash='f' * 64)
+                else:
+                    data['result_snapshot']['tampered'] = True
+                return data
+
+            with patch.object(SubmissionSerializer, 'to_representation', alter):
+                result = self.client.post(
+                    f'/api/submissions/{self.first.pk}/review/?review_batch={identifier}',
+                    {'decision': 'approved'},
+                    format='json',
+                )
+            assert result.status_code in (403, 404) if change == 'revocation' else result.status_code == 409
+            assert not ReviewDecision.objects.exists()
+            assert Submission.objects.get(pk=self.first.pk).status == 'pending'
+            assert ProjectMember.objects.get(project=self.project, user=self.independent).enabled
 
     def test_revocation_blocks_original_key_and_ordinary_reads(self):
         body, key = self.body(), str(uuid4())
