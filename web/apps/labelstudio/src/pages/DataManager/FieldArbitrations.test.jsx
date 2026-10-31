@@ -453,3 +453,98 @@ it("does not retain a late old cohort over a newer accepted detail", async () =>
   view.unmount();
   view.runtime.destroy();
 });
+
+it.each([
+  ["winner outside the frozen cohort", (v) => (v.decision.winner_submission_id = 99)],
+  ["winner at a different revision", (v) => v.decision.winner_revision++],
+  ["decision by a different actor", (v) => v.decision.actor_id++],
+  ["terminal adoption permission", (v) => (v.can_decide = true)],
+  ["terminal cancellation permission", (v) => (v.can_cancel = true)],
+])("masks a resolved projection with %s", async (_name, change) => {
+  state = "resolved";
+  mockCall.mockImplementation(async (m, o) => {
+    const v = await respond(m, o);
+    if (m === "fieldArbitrationDetail") change(v);
+    return v;
+  });
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: /Field synthetic/ }));
+  await screen.findByRole("alert");
+  expect(screen.queryByTestId("field-detail")).toBeNull();
+  expect(screen.queryByTestId("arbitration-decision")).toBeNull();
+  expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it.each(["create", "decision"])("rejects source-free cost on a fresh %s acknowledgement", async (action) => {
+  const method = action === "create" ? "createFieldArbitration" : "resolveFieldArbitration";
+  const body =
+    action === "create"
+      ? { ...origin, assignee_id: 30 }
+      : {
+          expected_version: 1,
+          expected_input_set_hash: hash("b"),
+          winner_submission_id: 11,
+          reason: "Complete frozen revision",
+        };
+  const options = { body, headers: { "Idempotency-Key": "a1b2c3d4-1234-4234-8234-123456789abc" } };
+  const raw = await respond(method, options);
+  raw.processing_cost = cost();
+  expect(() =>
+    fieldArbitrationAdapter.parse(
+      action === "create" ? "createClassificationArbitration" : "resolveClassificationArbitration",
+      raw,
+      { projectId: 4, arbitration: 7 },
+    ),
+  ).toThrow();
+});
+
+it("recovers the original command after contradictory fresh cost without losing its body/key", async () => {
+  const commands = [];
+  mockCall.mockImplementation(async (m, o) => {
+    const v = await respond(m, o);
+    if (m === "resolveFieldArbitration") {
+      commands.push(o);
+      if (commands.length === 1) v.processing_cost = cost();
+    }
+    return v;
+  });
+  const view = mount();
+  await open();
+  choose();
+  fireEvent.click(screen.getByRole("button", { name: "Adopt this frozen revision" }));
+  await screen.findByRole("button", { name: "Recover original command" });
+  expect(screen.queryByTestId("arbitration-saved")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Recover original command" }));
+  await screen.findByTestId("arbitration-saved");
+  expect(commands).toHaveLength(2);
+  expect(commands[1].body).toEqual(commands[0].body);
+  expect(commands[1].headers).toEqual(commands[0].headers);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it("keeps authorized resolved metadata when the original source is unavailable", async () => {
+  state = "resolved";
+  mockCall.mockImplementation(async (m, o) => {
+    const v = await respond(m, o);
+    if (m === "fieldArbitrationDetail")
+      Object.assign(v, {
+        source_status: "unavailable",
+        reason: "source_unavailable",
+        comparison: null,
+        inputs: [],
+        processing_cost: cost(),
+      });
+    return v;
+  });
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: /Field synthetic/ }));
+  await screen.findByTestId("arbitration-unavailable");
+  expect(screen.getByTestId("arbitration-decision").textContent).toContain("Human reason");
+  expect(screen.queryByTestId("field-detail")).toBeNull();
+  expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  view.unmount();
+  view.runtime.destroy();
+});

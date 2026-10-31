@@ -270,23 +270,32 @@ export const fieldArbitrationAdapter = {
     const cost = checkedCost(raw.processing_cost);
     const v = schemas[method].parse(raw);
     v.processing_cost = cost;
-    if (
+    const sourceFree =
       [
         "classificationArbitrationCapability",
         "classificationArbitrationAssignees",
         "classificationArbitrations",
       ].includes(method) ||
       v.replayed ||
-      v.action === "cancel"
-    )
+      v.action === "cancel";
+    if (sourceFree)
       valid(
         cost.hydration_passes === 0 &&
           cost.calculation_passes === 0 &&
           cost.total.normalized_values === 0 &&
           cost.total.field_equalities === 0,
       );
-    const check = (row) =>
+    else if (v.action === "create" || v.action === "decision")
+      valid(
+        cost.hydration_passes === 2 &&
+          cost.calculation_passes === 2 &&
+          cost.per_pass.normalized_values >= 2 &&
+          cost.per_pass.field_equalities >= 2,
+      );
+    const check = (row) => {
       valid(row.assignee_id === row.assignee_id_frozen && row.version === (row.status === "pending" ? 1 : 2));
+      valid(row.status === "pending" || (!row.can_decide && !row.can_cancel));
+    };
     if (v.schema === SCHEMA && v.task_id) check(v);
     if (method === "classificationArbitrations") {
       v.results.forEach((row) => {
@@ -300,6 +309,7 @@ export const fieldArbitrationAdapter = {
       valid(
         (v.status === "resolved") === Boolean(v.decision) && (v.status === "cancelled") === Boolean(v.cancellation),
       );
+      if (v.decision) valid(v.decision.actor_id === v.assignee_id_frozen);
       const ids = v.inputs.map((p) => p.submission_id);
       const n = v.frozen_counts.input_count;
       valid(n >= 2 && n <= 20 && v.frozen_counts.total_pairs === (n * (n - 1)) / 2);
@@ -345,6 +355,12 @@ export const fieldArbitrationAdapter = {
             cost.calculation_passes === 2 &&
             cost.hydration_passes === 2,
         );
+        if (v.decision)
+          valid(
+            v.inputs.some(
+              (p) => p.submission_id === v.decision.winner_submission_id && p.revision === v.decision.winner_revision,
+            ),
+          );
       }
       return {
         ...normalize(v),

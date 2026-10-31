@@ -62,8 +62,10 @@ describe('frozen field revision arbitration', () => {
       cy.intercept({ method: 'POST', pathname: new RegExp(`${base}\\d+/decision/?$`) }, req => {
         if (!req.url.includes(`${base}${first.id}/`)) { req.continue(); return; }
         posts++; const body = req.body, key = req.headers['idempotency-key'];
-        if (posts === 1) { original = { body, key }; req.continue(res => res.send({ ...res.body,
-          receipt: { ...res.body.receipt, key: '00000000-0000-4000-8000-000000000000' } })); }
+        if (posts === 1) { original = { body, key }; req.continue(res => res.send(zh ? { ...res.body,
+          receipt: { ...res.body.receipt, key: '00000000-0000-4000-8000-000000000000' } } : { ...res.body,
+          processing_cost: { validation_passes: 2, hydration_passes: 0, calculation_passes: 0,
+            per_pass: { normalized_values: 0, field_equalities: 0 }, total: { normalized_values: 0, field_equalities: 0 }, scorer_calls: 0 } })); }
         else { expect(body).to.deep.eq(original.body); expect(key).to.eq(original.key); req.continue(); }
       }).as('decision');
       cy.intercept({ pathname: new RegExp(`/api/projects/${scope.id}/(classification-arbitrations|ner-arbitrations|review-batches|field-disagreements/tasks)/`) }, req => { forbidden++; req.continue(); });
@@ -73,6 +75,17 @@ describe('frozen field revision arbitration', () => {
       cy.screenshot(`field-arbitration-narrow-${locale}`, { capture: 'fullPage' });
       action('Adopt this frozen revision', '采纳此冻结修订').click(); cy.wait('@decision');
       action('Recover original command', '恢复原命令').should('be.visible');
+      if (!zh) {
+        // A mixed resolved projection must not display a winner from another revision.
+        cy.then(() => cy.intercept({ method: 'GET', pathname: `${base}${first.id}/`, times: 1 }, req => {
+          req.continue(res => res.send({ ...res.body,
+            decision: { ...res.body.decision, winner_revision: res.body.decision.winner_revision + 1 } }));
+        }).as('mismatchedRevision'));
+        action('Refresh read-only view', '刷新只读视图').click(); cy.wait('@mismatchedRevision');
+        arb().find('[role="alert"]').should('be.visible');
+        cy.get('[data-testid="field-detail"]').should('not.exist');
+        cy.get('[data-testid="arbitration-decision"]').should('not.exist');
+      }
       action('Refresh read-only view', '刷新只读视图').click();
       cy.get('[data-testid="arbitration-decision"]').should('contain.text', '选择已有完整空值修订');
       cy.then(() => expect(posts).to.eq(1));

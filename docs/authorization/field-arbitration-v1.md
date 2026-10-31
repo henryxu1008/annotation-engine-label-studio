@@ -126,6 +126,13 @@ identity changes clear answers; late responses cannot poison newer state.
 Read refresh never POSTs. Unknown commands retain original body/key for explicit
 recovery. A same-viewer read failure does not erase a confirmed save.
 Verify receipt payload/request hashes, actor/resource/key and winner before ACK.
+Resolved detail metadata binds the assigned Reviewer; with verified sources its
+winner ID/revision must match one complete pinned input. Terminal projections
+cannot offer adoption/cancellation. Fresh create/adoption ACKs require both
+hydration/calculation passes and positive work; zero work is reserved for
+metadata, cancellation and original-key recovery. Contradictory ACKs retain the
+original command/key as unknown. Source-unavailable resolved metadata remains
+readable without exposing or replacing its missing answer inputs.
 Render answer values as text.
 
 Coverage includes field/empty/missing/format vectors, Token/role/revocation and
