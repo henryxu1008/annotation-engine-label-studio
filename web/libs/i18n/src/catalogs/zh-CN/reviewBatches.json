@@ -359,5 +359,11 @@
   "fieldQualityBudget": "本冻结批次超出概览预算，未显示分数。",
   "fieldQualityDenied": "当前身份或范围已无概览读取权限。",
   "fieldQualityChanged": "冻结概览上下文已变化，请重新读取本批次。",
-  "fieldQualityUnavailable": "该概览当前不可用。"
+  "fieldQualityUnavailable": "该概览当前不可用。",
+  "fieldArbitrationTitle": "字段仲裁",
+  "fieldArbitrationBoundary": "采纳一份完整的冻结修订；原提交、审核结论与发布权限保持不变。",
+  "fieldArbitrationDispatch": "派发字段仲裁",
+  "fieldArbitrationAdopt": "采纳此冻结修订",
+  "fieldArbitrationStartHint": "从冻结字段批次的冲突任务中派发独立审核员。",
+  "fieldArbitrationFields": "字段数：{{count}}"
 }

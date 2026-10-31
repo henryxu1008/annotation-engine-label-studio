@@ -1306,3 +1306,19 @@ Field Batches workflow, separate from the long Enterprise job. Local HTTP startu
 denials and unexecuted browser tests must remain NOT_RUN; test definitions, source
 or unit success do not imply browser/retained runtime acceptance. #81/#84 remain
 open and all Host/Core/deployment/Docker76 and historical anomaly boundaries stay.
+
+### Frozen field revision arbitration (#81)
+
+See [field-arbitration-v1.md](field-arbitration-v1.md). Independent default-off
+field arbitration flags/modes, ORGANIZE_FIELD_ARBITRATION and ARBITRATE_FIELD
+separate dispatch/adoption from REVIEW/release authority. Field-only immutable
+Task/Decision models and PostgreSQL/SQLite guards retain complete frozen origins,
+semantic uniqueness, CAS and source-free original-key recovery. Final checks bind
+current actor, organization and exact source graph through response rendering.
+Reuse field inspection/calculation and bounded snapshot loading; two calculations
+precede final source replay, with accurate work counters and no third pass.
+The complete arbitration workspace uses a typed field adapter; a generation-fenced
+retention hook rejects changed frozen evidence without allowing late reads to
+poison current state. Classification/NER contracts stay unchanged. Field sampling,
+review handoff and independent second review remain separate designs. Preserve
+#81/#84 OPEN and all retained runtime/Host/Core/deployment/Biome boundaries.

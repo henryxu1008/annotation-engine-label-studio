@@ -359,5 +359,11 @@
   "fieldQualityBudget": "This frozen batch exceeds the overview budget. No scores are shown.",
   "fieldQualityDenied": "Overview access is no longer available for this identity or scope.",
   "fieldQualityChanged": "The frozen overview context changed. Reload this batch before reading again.",
-  "fieldQualityUnavailable": "This overview is currently unavailable."
+  "fieldQualityUnavailable": "This overview is currently unavailable.",
+  "fieldArbitrationTitle": "Field arbitration",
+  "fieldArbitrationBoundary": "Adopt one complete frozen revision. The original submissions, review decisions and release permissions stay unchanged.",
+  "fieldArbitrationDispatch": "Dispatch field arbitration",
+  "fieldArbitrationAdopt": "Adopt this frozen revision",
+  "fieldArbitrationStartHint": "Open a frozen field batch conflict to dispatch an independent reviewer.",
+  "fieldArbitrationFields": "Fields: {{count}}"
 }

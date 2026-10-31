@@ -32,6 +32,8 @@ ORGANIZE_ARBITRATION = 'organize_arbitration'
 ARBITRATE = 'arbitrate'
 ORGANIZE_NER_ARBITRATION = 'organize_ner_arbitration'
 ARBITRATE_NER = 'arbitrate_ner'
+ORGANIZE_FIELD_ARBITRATION = 'organize_field_arbitration'
+ARBITRATE_FIELD = 'arbitrate_field'
 SECURITY_CANCEL = 'security_cancel'
 LEGACY_OPERATIONS = frozenset({READ_WORK, EDIT, SUBMIT, REVIEW, ASSIGN})
 
@@ -60,6 +62,8 @@ class LegacyProjectOperationProvider:
             operations = operations | {ORGANIZE_NER}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED', False):
             operations = operations | {ORGANIZE_ARBITRATION, ARBITRATE}
+        if getattr(settings, 'ANNOTATION_FIELD_ARBITRATION_ENABLED', False):
+            operations = operations | {ORGANIZE_FIELD_ARBITRATION, ARBITRATE_FIELD}
         if getattr(settings, 'ANNOTATION_NER_ARBITRATION_ENABLED', False):
             operations = operations | {ORGANIZE_NER_ARBITRATION, ARBITRATE_NER}
         if getattr(settings, 'ANNOTATION_FIXED_PACKAGES_ENABLED', False):

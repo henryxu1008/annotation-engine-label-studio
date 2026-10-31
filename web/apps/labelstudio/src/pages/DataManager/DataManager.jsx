@@ -27,6 +27,7 @@ import { FieldBatches, FieldBatchEntry, FieldBatchTitle } from "./FieldBatches";
 import { NerDisagreement, NerEntry, NerTitle } from "./NerDisagreement";
 import { NerBatches, NerBatchEntry, NerBatchTitle } from "./NerBatches";
 import { NerArbitrations, NerArbitrationEntry, NerArbitrationTitle } from "./NerArbitrations";
+import { FieldArbitrations, FieldArbitrationEntry, FieldArbitrationTitle } from "./FieldArbitrations";
 import { ClassificationBatches, ClassificationBatchEntry, ClassificationBatchTitle } from "./ClassificationBatches";
 import { ClassificationArbitrations, ClassificationArbitrationEntry, ClassificationArbitrationTitle } from "./ClassificationArbitrations";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
@@ -511,6 +512,15 @@ DataManagerPage.context = ({ dmRef }) => {
       style: { width: 1100, maxWidth: "calc(100vw - 32px)" } });
   };
 
+  const openFieldArbitrations = () => {
+    const trigger = document.activeElement;
+    modal({ title: <FieldArbitrationTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <FieldArbitrations projectId={project.id} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" } });
+  };
+
   const openArbitrations = (initialOrigin = null) => {
     const trigger = document.activeElement;
     modal({
@@ -615,6 +625,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <FieldBatchEntry projectId={project.id} onOpen={openFieldBatches} disabled={!localePreference.ready} />
       <NerBatchEntry projectId={project.id} onOpen={openNerBatches} disabled={!localePreference.ready} />
       <NerArbitrationEntry projectId={project.id} onOpen={openNerArbitrations} disabled={!localePreference.ready} />
+      <FieldArbitrationEntry projectId={project.id} onOpen={openFieldArbitrations} disabled={!localePreference.ready} />
       <ClassificationBatchEntry projectId={project.id} onOpen={openClassificationBatches} disabled={!localePreference.ready} />
       <ClassificationArbitrationEntry projectId={project.id} onOpen={() => openArbitrations()} disabled={!localePreference.ready} />
       {canManageAssignments && (
