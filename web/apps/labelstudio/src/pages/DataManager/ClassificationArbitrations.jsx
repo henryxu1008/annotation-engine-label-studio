@@ -154,7 +154,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
           adapter?.maskUnavailable?.(detail);
         }
       }
-      if (current()) { setCaps(capability); setData(detail); setHandoffDetail(provenance); }
+      if (current()) { adapter?.retainDetail?.(detail, projectId); setCaps(capability); setData(detail); setHandoffDetail(provenance); }
     });
   };
   const loadOrigin = (targetPage = 1) => {

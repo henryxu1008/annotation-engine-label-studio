@@ -133,7 +133,9 @@ annotator denial. CI retains full production build and browser artifacts.
 
 Persistent field queues are in field-batches-v1.md; their independent read-only
 overview is in field-quality-overview-v1.md. Future independent design is required
-for image box identity/IoU, richer document formats, field arbitration and low-confidence review.
+for image box identity/IoU, richer document formats and low-confidence review.
+Whole frozen field revision adoption is in field-arbitration-v1.md; it does not
+change review or sampling authority.
 Second-review scope still needs explicit agreement: ReviewDecision is one-to-one
 with a Submission and cannot be overwritten to impersonate a second review.
 Do not close #81/#84 from this slice or claim retained runtime/deployment acceptance.

@@ -7,6 +7,7 @@ import { FrozenBatchWorkspace } from "./ClassificationBatches";
 import { FieldResult, fieldComparisonSchema, validateFieldComparison } from "./FieldDisagreement";
 import { fieldDigest } from "./fieldEvidence";
 import { FieldQualityOverview } from "./FieldQualityOverview";
+import { FieldArbitrationEntry, FieldArbitrations } from "./FieldArbitrations";
 
 const id = z.number().int().positive().safe();
 const count = z.number().int().nonnegative().safe();
@@ -254,7 +255,7 @@ export const validateFieldBatchItem = (answer, expected) => {
   } else valid(f.reason !== "no_values" && same(f.cost_per_pass, { normalized_values: 0, field_equalities: 0 }));
 };
 
-const FieldBatchComparison = ({ answer, busy, onSelectPair }) => {
+const FieldBatchComparison = ({ answer, busy, onSelectPair, projectId, onOpenArbitration }) => {
   const { t } = useLocaleTranslation("reviewBatches");
   const [detail, setDetail] = useState(true);
   const matrixRefs = useRef({});
@@ -270,6 +271,9 @@ const FieldBatchComparison = ({ answer, busy, onSelectPair }) => {
           {r.has_value_difference && <span>{t("fieldBatchValueDifference")} </span>}
           {r.has_format_difference && <span>{t("fieldBatchFormatDifference")}</span>}
         </p>
+      )}
+      {r.outcome === "disagreement" && r.source_status === "verified" && answer.manifest_hash && (
+        <FieldArbitrationEntry projectId={projectId} dispatch disabled={busy} onOpen={onOpenArbitration} />
       )}
       <FieldResult
         report={{
@@ -299,6 +303,17 @@ const FieldBatchComparison = ({ answer, busy, onSelectPair }) => {
 };
 
 export const fieldBatchAdapter = {
+  renderArbitration: ({ projectId, answer, onBack }) => (
+    <FieldArbitrations
+      projectId={projectId}
+      initialOrigin={{
+        field_batch_id: answer.id,
+        task_id: answer.item.task_id,
+        expected_manifest_hash: answer.manifest_hash,
+      }}
+      onBackToSource={onBack}
+    />
+  ),
   renderOverview: (props) => <FieldQualityOverview {...props} />,
   testId: "field-batches",
   refreshTestId: "field-batch-refresh",

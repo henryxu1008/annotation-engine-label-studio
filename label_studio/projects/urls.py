@@ -26,6 +26,7 @@ _api_urlpatterns = [
     path('<int:pk>/field-disagreements/', include('classification_disagreements.field_urls')),
     path('<int:pk>/ner-disagreements/', include('classification_disagreements.ner_urls')),
     path('<int:pk>/ner-arbitrations/', include('classification_disagreements.ner_arbitration_urls')),
+    path('<int:pk>/field-arbitrations/', include('classification_disagreements.field_arbitration_urls')),
     path('<int:pk>/classification-arbitrations/', include('classification_disagreements.arbitration_urls')),
     path('<int:pk>/members/', api.ProjectMemberListCreateAPI.as_view(), name='project-member-list'),
     path(
