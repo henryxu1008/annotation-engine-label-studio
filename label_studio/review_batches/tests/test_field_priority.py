@@ -19,7 +19,7 @@ from rest_framework.exceptions import APIException
 from rest_framework.renderers import JSONRenderer
 from rest_framework.test import APITestCase
 from review_batches import field_priority as p
-from review_batches import guarded, service
+from review_batches import guarded, ner_priority, service
 from review_batches.models import ReviewBatch
 from tasks.models import ReviewDecision, Submission, Task, TaskAssignment
 from tasks.serializers import SubmissionSerializer
@@ -261,6 +261,48 @@ class TestFieldPriority(APITestCase):
             assert legacy.status_code == 200 and legacy.data['plan']['algorithm'] == service.ALGORITHM
         with self.settings(ANNOTATION_FIELD_DISAGREEMENT_MODES={}):
             assert self.preview().status_code == 403
+
+    def test_disabled_field_gate_keeps_ordinary_rows_and_excludes_markers_before_decode(self):
+        created = self.create()
+        assert created.status_code == 201, created.data
+        args = {key: value for key, value in self.args.items() if key != 'priority'}
+        preview = self.preview(args)
+        ordinary = self.create({**args, 'expected_plan_hash': preview.data['plan_hash']})
+        assert ordinary.status_code == 201, ordinary.data
+        for adapter in (p, ner_priority):
+            for marker in (
+                {'algorithm': adapter.ALGORITHM},
+                {'priority': {'kind': adapter.KIND}},
+                {'priority': {'schema': adapter.SCHEMA}},
+            ):
+                plan = {**marker, 'padding': 'disabled-marker-must-not-decode'}
+                ReviewBatch.objects.create(
+                    project=self.project,
+                    created_by=self.manager,
+                    actor_id_frozen=self.manager.pk,
+                    creator_principal='synthetic',
+                    name='Malformed protected marker',
+                    idempotency_key=uuid4(),
+                    request_hash='a' * 64,
+                    plan=plan,
+                    plan_hash=service.digest(plan),
+                )
+        decoder = JSONField.from_db_value
+
+        def decode(field, value, expression, db):
+            assert not isinstance(value, str) or 'disabled-marker-must-not-decode' not in value
+            assert not isinstance(value, str) or p.ALGORITHM not in value
+            return decoder(field, value, expression, db)
+
+        with self.settings(ANNOTATION_FIELD_REVIEW_PRIORITY_ENABLED=False), patch.object(
+            JSONField, 'from_db_value', decode
+        ):
+            for actor in (self.manager, self.independent):
+                self.client.force_authenticate(actor)
+                result = self.client.get(self.base)
+                assert result.status_code == 200, result.data
+                assert result.data['count'] == 1
+                assert [row['id'] for row in result.data['results']['batches']] == [ordinary.data['id']]
 
     def test_direct_review_hidden_cohort_and_current_gates_precede_snapshot_decode(self):
         self.args['rate'] = 100

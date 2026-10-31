@@ -54,6 +54,11 @@ reasons, without full origin hash/cohorts or peers' answers. Current REVIEW and
 all ordinary selected/pending/exact-source/no-self-review constraints remain
 independent. Existing classification/NER handoff routes reject this algorithm.
 
+Disabled strategy collection filters normalize positive JSON markers to
+non-null SQL booleans before excluding them. Missing optional legacy keys must
+preserve ordinary/classification batches; algorithm, schema or kind matching
+still identifies a protected plan even when the other marker keys are absent.
+
 Source loss or later decisions/revisions never recalculate historical selection
 or shrink its denominator. Detail/queue/rework validate ordinary review sources
 without computing field scores or loading other field answers. Matched review

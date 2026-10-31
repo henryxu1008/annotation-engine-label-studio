@@ -1,5 +1,5 @@
 """Bounded read adapters shared by frozen NER and field review strategies."""
-from django.db.models import BigIntegerField, Case, F, JSONField, Q, Sum, Value, When, Window
+from django.db.models import BigIntegerField, BooleanField, Case, F, JSONField, Q, Sum, Value, When, Window
 
 from . import ner_priority, service
 
@@ -37,7 +37,17 @@ def visible_query(project, principal, actor, role):
     rows = query(project)
     for adapter in (ner_priority, field_priority):
         if not adapter.available(project.pk, principal, actor):
-            rows = rows.exclude(adapter.marker())
+            # Missing legacy JSON paths yield SQL NULL. Normalize the positive
+            # marker before negating it, so only explicit protected plans leave
+            # the collection when their strategy is unavailable.
+            name = f'_disabled_{adapter.KIND}'
+            rows = rows.alias(
+                **{
+                    name: Case(
+                        When(adapter.marker(), then=Value(True)), default=Value(False), output_field=BooleanField()
+                    )
+                }
+            ).filter(**{name: False})
     return ner_priority.filter_visible(rows, actor, role)
 
 
