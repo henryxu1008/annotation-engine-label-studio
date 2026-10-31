@@ -104,8 +104,12 @@ def marker():
     return Q(plan__algorithm=ALGORITHM) | Q(plan__priority__schema=SCHEMA) | Q(plan__priority__kind=KIND)
 
 
-def query(project):
+def query(project, *, protected_marker=None):
     """Only the new schema is SQL-size guarded; legacy plan contracts stay intact."""
+    from . import field_priority
+
+    if protected_marker is None:
+        protected_marker = marker() | field_priority.marker()
     table = connection.ops.quote_name(ReviewBatch._meta.db_table)
     column = table + '.' + connection.ops.quote_name('plan')
     expression = (
@@ -116,11 +120,15 @@ def query(project):
     return (
         ReviewBatch.objects.filter(project=project)
         .annotate(
-            _ner_kind=Case(When(marker(), then=Value(True)), default=Value(False), output_field=BooleanField()),
+            _ner_kind=Case(
+                When(protected_marker, then=Value(True)), default=Value(False), output_field=BooleanField()
+            ),
             _ner_plan_size=RawSQL(expression, [], output_field=BigIntegerField()),
         )
         .annotate(
             _ner_plan=Case(
+                When(field_priority.marker() & Q(_ner_plan_size__lte=4 * field_priority.V1_BYTES), then=F('plan')),
+                When(field_priority.marker(), then=Value(None)),
                 When(_ner_kind=False, then=F('plan')),
                 When(_ner_plan_size__lte=MAX_STORED_PLAN, then=F('plan')),
                 default=Value(None),
@@ -143,6 +151,10 @@ def visible_query(project, principal, actor, role):
     rows = query(project)
     if not available(project.pk, principal, actor):
         return rows.filter(_ner_kind=False)
+    return filter_visible(rows, actor, role)
+
+
+def filter_visible(rows, actor, role):
     if role != 'reviewer':
         return rows
     table = connection.ops.quote_name(ReviewBatch._meta.db_table)

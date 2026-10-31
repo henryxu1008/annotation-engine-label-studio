@@ -2,6 +2,7 @@
 
 import json
 import re
+from types import SimpleNamespace
 
 from access_control.identity import resolve_actor
 from access_control.project_operations import ORGANIZE_REVIEW, lock_project_operation, require_project_operation
@@ -35,8 +36,15 @@ def viewer_hash(principal, actor, project, role):
 
 
 def read_guard(project_id, principal, actor, plan=None):
-    from . import ner_priority
+    from . import field_priority, ner_priority
 
+    if field_priority.is_plan(plan):
+        project, role = field_priority.read_guard(project_id, principal, actor, plan)
+        if role == 'reviewer' and not service.visible_candidates(SimpleNamespace(plan=plan), actor, role):
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound()
+        return project, role
     if ner_priority.is_plan(plan):
         project, role = ner_priority.read_guard(project_id, principal, actor)
         if role == 'reviewer':
@@ -185,8 +193,10 @@ def freeze(project, candidates, selection):
 
 def validate(plan, batch=None):
     """Receipt recovery checks local frozen structure, without needing live sources."""
-    from . import ner_priority
+    from . import field_priority, ner_priority
 
+    if field_priority.is_plan(plan):
+        return field_priority.validate(plan, batch)
     if ner_priority.is_plan(plan):
         return ner_priority.validate(plan, batch)
     try:
@@ -264,7 +274,7 @@ def create(request, pk, principal, args, expected, key, request_hash):
     with transaction.atomic():
         project, actor = lock_project_operation(pk, principal, ORGANIZE_REVIEW)
         context(request, pk, principal, actor.pk)
-        previous = ReviewBatch.objects.filter(project=project, idempotency_key=key).first()
+        previous = ReviewBatch.objects.filter(project=project, idempotency_key=key).defer('plan').first()
         if previous:
             if (
                 previous.request_hash != request_hash

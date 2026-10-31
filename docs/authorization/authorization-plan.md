@@ -1322,3 +1322,7 @@ retention hook rejects changed frozen evidence without allowing late reads to
 poison current state. Classification/NER contracts stay unchanged. Field sampling,
 review handoff and independent second review remain separate designs. Preserve
 #81/#84 OPEN and all retained runtime/Host/Core/deployment/Biome boundaries.
+
+### Frozen field conflict priority review sampling (#84)
+
+See [field-review-priority-v1.md](field-review-priority-v1.md). Default-off field strategy consumes one complete existing FieldBatch through the existing ReviewBatch flow. Exact source pins, full Manifest validation, bounded source union, post-calculation replay, current organization/viewer fences and source-free original-key recovery remain separate from review authority. Shared bounded NER read hooks now also cover explicit field plans; legacy shapes and hashes stay unchanged. No new tables, Submission/metric/decision changes, field review-to-arbitration handoff or Host integration. #81/#84 remain open; retained runtime and lint baselines remain separate.

@@ -19,7 +19,7 @@ from rest_framework.utils.encoders import JSONEncoder
 from tasks.models import Submission
 from tasks.serializers import SubmissionSerializer
 
-from . import service
+from . import field_priority, guarded, service
 from .models import ReviewBatch
 
 
@@ -41,16 +41,16 @@ class BatchAPI(generics.GenericAPIView):
     pagination_class = BatchPagination
 
     def handle_exception(self, exc):
-        from classification_disagreements import ner
+        from classification_disagreements import fields, ner
 
-        if isinstance(exc, ner.Error):
+        if isinstance(exc, (ner.Error, fields.Error)):
             error = APIException(exc.code)
             error.status_code = exc.status
             error.display_context = {'reason': exc.code}
             exc = error
         return super().handle_exception(exc)
 
-    def finish_ner_read(
+    def finish_priority_read(
         self,
         request,
         pk,
@@ -66,7 +66,7 @@ class BatchAPI(generics.GenericAPIView):
     ):
         """Reuse the complete read for a post-render, source/identity-bound replay.
 
-        Only NER-priority reads take this path. Re-entry is GET-only and local;
+        NER and field priority reads take this path. Re-entry is GET-only and local;
         it never scores, calls HTTP, or retries a command. Ordinary review-source
         validation reads are intentionally distinct from NER scorer costs.
         """
@@ -74,12 +74,14 @@ class BatchAPI(generics.GenericAPIView):
 
         if getattr(self, '_ner_verifying', False):
             return result
-        protected = batch is not None and ner_priority.is_plan(batch.plan)
+        protected = batch is not None and guarded.is_plan(batch.plan)
         if collection:
-            protected = ReviewBatch.objects.filter(project_id=pk).filter(ner_priority.marker()).exists()
+            protected = ReviewBatch.objects.filter(project_id=pk).filter(guarded.marker()).exists()
         if capability:
-            protected = settings.ANNOTATION_NER_REVIEW_PRIORITY_ENABLED or bool(
-                result.data.get('can_read_ner_priority')
+            protected = (
+                settings.ANNOTATION_FIELD_REVIEW_PRIORITY_ENABLED
+                or settings.ANNOTATION_NER_REVIEW_PRIORITY_ENABLED
+                or bool(result.data.get('can_read_ner_priority'))
             )
         if not protected:
             return result
@@ -91,13 +93,19 @@ class BatchAPI(generics.GenericAPIView):
             return value
 
         expected = normalized(result.data)
-        ner_priority.bounded(expected)
+        adapter = guarded.strategy(batch.plan) if batch is not None else ner_priority
+        if batch is None and field_priority.available(pk, principal, actor):
+            adapter = field_priority
+        adapter.bounded(expected)
         result.accepted_renderer = JSONRenderer()
         result.accepted_media_type = 'application/json'
         result.renderer_context = {}
         result.render()
-        if len(result.content) > ner_priority.MAX_BYTES:
-            service.fail('REVIEW_NER_PRIORITY_TOO_LARGE', 422)
+        if len(result.content) > adapter.MAX_BYTES:
+            service.fail(
+                'REVIEW_FIELD_PRIORITY_TOO_LARGE' if adapter is field_priority else 'REVIEW_NER_PRIORITY_TOO_LARGE',
+                422,
+            )
         if normalized(json.loads(result.content)) != expected or normalized(result.data) != expected:
             service.fail('REVIEW_PRIORITY_REPRESENTATION_CHANGED')
         current, current_actor = resolve_actor(request)
@@ -110,22 +118,33 @@ class BatchAPI(generics.GenericAPIView):
             self._ner_verifying = False
         if normalized(fresh.data) != expected:
             service.fail('REVIEW_PRIORITY_READ_CHANGED')
+        if normalized(json.loads(result.content)) != expected or normalized(result.data) != expected:
+            service.fail('REVIEW_PRIORITY_REPRESENTATION_CHANGED')
         current, current_actor = resolve_actor(request)
-        _, current_role, _ = service.guard(pk, current, current_actor)
+        current_project, current_role, _ = service.guard(pk, current, current_actor)
         if current != principal or current_actor.pk != actor.pk or current_role != role:
             service.fail('REVIEW_PRIORITY_AUTHORITY_CHANGED', 403)
+        if batch is not None and field_priority.is_plan(batch.plan):
+            field_priority.read_guard(pk, current, current_actor, batch.plan)
+        if expected.get('viewer_hash') is not None:
+            from . import priority
+
+            if priority.viewer_hash(current, current_actor, current_project, current_role) != expected['viewer_hash']:
+                service.fail('REVIEW_PRIORITY_AUTHORITY_CHANGED', 403)
         if batch is not None:
             if service.checked_batch(batch.project, batch.pk).plan_hash != batch.plan_hash:
                 service.fail('REVIEW_BATCH_PLAN_INVALID')
         return result
 
-    def bounded_ner_page(self, query, page, batch):
-        from . import ner_priority
+    def bounded_priority_page(self, query, page, batch):
 
-        if not ner_priority.is_plan(batch.plan):
+        if not guarded.is_plan(batch.plan):
             return page
         identifiers = [row.pk for row in page]
-        loaded = {row.pk: row for row in ner_priority.load(query.filter(pk__in=identifiers), for_serialization=True)}
+        loaded = {
+            row.pk: row
+            for row in guarded.load(query.filter(pk__in=identifiers), plan=batch.plan, for_serialization=True)
+        }
         if set(loaded) != set(identifiers):
             service.fail('REVIEW_PRIORITY_READ_CHANGED')
         return [loaded[identifier] for identifier in identifiers]
@@ -160,6 +179,8 @@ class CapabilityAPI(BatchAPI):
         }
         from . import ner_priority
 
+        data['can_prioritize_field'] = can_create and field_priority.available(pk, principal, actor, create=True)
+        data['can_read_field_priority'] = field_priority.available(pk, principal, actor)
         data['can_prioritize_ner'] = can_create and ner_priority.available(pk, principal, actor, create=True)
         data['can_read_ner_priority'] = ner_priority.available(pk, principal, actor)
         data['can_read_ner_handoffs'] = False
@@ -189,10 +210,10 @@ class CapabilityAPI(BatchAPI):
             except APIException:
                 pass
         current, current_actor = resolve_actor(request)
-        _, current_role, _ = service.guard(pk, current, current_actor)
+        current_project, current_role, _ = service.guard(pk, current, current_actor)
         if current != principal or current_actor.pk != actor.pk or current_role != role:
             service.fail('REVIEW_PRIORITY_AUTHORITY_CHANGED', 403)
-        return self.finish_ner_read(request, pk, Response(data), principal, actor, role, capability=True)
+        return self.finish_priority_read(request, pk, Response(data), principal, actor, role, capability=True)
 
 
 class PreviewAPI(BatchAPI):
@@ -202,6 +223,8 @@ class PreviewAPI(BatchAPI):
         args = service.payload(request)
         from . import ner_priority
 
+        if field_priority.is_selection(args.get('priority')):
+            return field_priority.preview(request, pk, principal, actor, args)
         if ner_priority.is_selection(args.get('priority')):
             return ner_priority.preview(request, pk, principal, actor, args)
         if 'priority' in args:
@@ -225,19 +248,18 @@ class PreviewAPI(BatchAPI):
 class ListAPI(BatchAPI):
     def get(self, request, pk):
         principal, actor, project, role, _ = self.context(request, pk)
-        from . import ner_priority
 
-        page = self.paginate_queryset(ner_priority.visible_query(project, principal, actor, role).order_by('-pk'))
+        page = guarded.page(self, guarded.visible_query(project, principal, actor, role))
         data = []
         for batch in page:
-            batch = ner_priority.hydrate(batch)
-            if ner_priority.is_plan(batch.plan):
+            batch = guarded.hydrate(batch)
+            if guarded.is_plan(batch.plan):
                 service.check_loaded_batch(batch, project)
             data.append(service.metadata(batch))
         _, current_role, _ = service.guard(pk, principal, actor)
         if current_role != role:
             raise PermissionDenied()
-        return self.finish_ner_read(
+        return self.finish_priority_read(
             request,
             pk,
             self.get_paginated_response({'role': role, 'batches': data}),
@@ -257,6 +279,8 @@ class ListAPI(BatchAPI):
         request_hash = service.digest({**args, 'expected_plan_hash': expected})
         from . import ner_priority
 
+        if field_priority.is_selection(args.get('priority')):
+            return field_priority.create(request, pk, principal, args, expected, key, request_hash)
         if ner_priority.is_selection(args.get('priority')):
             return ner_priority.create(request, pk, principal, args, expected, key, request_hash)
         if 'priority' in args:
@@ -266,7 +290,7 @@ class ListAPI(BatchAPI):
         with transaction.atomic():
             project, actor = lock_project_operation(pk, principal, ORGANIZE_REVIEW)
             service.guard(pk, principal, actor, manager=True)
-            previous = ReviewBatch.objects.filter(project=project, idempotency_key=key).first()
+            previous = ReviewBatch.objects.filter(project=project, idempotency_key=key).defer('plan').first()
             if previous:
                 if (
                     previous.request_hash != request_hash
@@ -315,7 +339,7 @@ class DetailAPI(BatchAPI):
         if 'priority' in batch.plan:
             priority.recheck_read(request, pk, principal, actor, role, batch)
             data['viewer_hash'] = priority.viewer_hash(principal, actor, project, role)
-        return self.finish_ner_read(
+        return self.finish_priority_read(
             request,
             pk,
             Response({**data, 'role': role}),
@@ -347,11 +371,10 @@ class QueueAPI(BatchAPI):
             .exclude(submitted_by=actor)
             .select_related('assignment__project', 'submitted_by', 'review__reviewer')
         )
-        from . import ner_priority
 
         scoped = rows.order_by('pk')
-        page = self.paginate_queryset(scoped.defer('result_snapshot') if ner_priority.is_plan(batch.plan) else scoped)
-        page = self.bounded_ner_page(scoped, page, batch)
+        page = self.paginate_queryset(scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        page = self.bounded_priority_page(scoped, page, batch)
         data = SubmissionSerializer(page, many=True, context={'request': request}).data
         for item in data:
             service.check_representation(item, sources.get(item['id']))
@@ -378,7 +401,7 @@ class QueueAPI(BatchAPI):
         result = self.get_paginated_response(data)
         if 'priority' in batch.plan:
             result.data['viewer_hash'] = priority.viewer_hash(principal, actor, project, role)
-        return self.finish_ner_read(
+        return self.finish_priority_read(
             request, pk, result, principal, actor, role, batch=batch, params={'batch_id': batch_id}
         )
 
@@ -397,11 +420,10 @@ class ReworkAPI(BatchAPI):
         rows = Submission.objects.filter(
             assignment_id=original.assignment_id, revision__gt=original.revision
         ).select_related('assignment__task', 'review__reviewer', 'submitted_by')
-        from . import ner_priority
 
         scoped = rows.order_by('-revision', '-pk')
-        page = self.paginate_queryset(scoped.defer('result_snapshot') if ner_priority.is_plan(batch.plan) else scoped)
-        page = self.bounded_ner_page(scoped, page, batch)
+        page = self.paginate_queryset(scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        page = self.bounded_priority_page(scoped, page, batch)
         for row in page:
             service.check_rework_revision(row, original, project.pk)
         source_data = SubmissionSerializer(original, context={'request': request}).data
@@ -416,7 +438,7 @@ class ReworkAPI(BatchAPI):
         current_query = rows.filter(pk__in=[item['id'] for item in data])
         current_rows = {
             row.pk: row
-            for row in (ner_priority.load(current_query) if ner_priority.is_plan(batch.plan) else current_query)
+            for row in (guarded.load(current_query, plan=batch.plan) if guarded.is_plan(batch.plan) else current_query)
         }
         for item in data:
             row = current_rows.get(item['id'])
@@ -432,7 +454,7 @@ class ReworkAPI(BatchAPI):
         result = self.get_paginated_response({'source': source_data, 'revisions': data})
         if 'priority' in batch.plan:
             result.data['viewer_hash'] = priority.viewer_hash(principal, actor, project, role)
-        return self.finish_ner_read(
+        return self.finish_priority_read(
             request,
             pk,
             result,

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
+import { validFieldPreview } from "./fieldReviewPriority";
 import { useAPI } from "../../providers/ApiProvider";
 
 const strategies = {
+  field_conflict: { algorithm: "field-conflict-ranked/v1", schema: "review-field-priority/v1",
+    api: "fieldBatches", enable: "priorityFieldEnable", batch: "priorityFieldBatch", boundary: "priorityFieldBoundary", name: "priorityField" },
   classification_conflict: { algorithm: "classification-conflict-ranked/v1", schema: "review-classification-priority/v1",
     api: "classificationBatches", enable: "priorityEnable", batch: "priorityBatch", boundary: "priorityBoundary", name: "priorityClassification" },
   ner_conflict: { algorithm: "ner-conflict-ranked/v1", schema: "review-ner-priority/v1",
@@ -12,10 +15,13 @@ const strategies = {
 const hex = (s) => typeof s === "string" && /^[0-9a-f]{64}$/.test(s);
 const id = (n) => Number.isSafeInteger(n) && n > 0;
 export const isNerPriority = (value) => value?.kind === "ner_conflict";
+export const isBoundedPriority = (value) => ["ner_conflict", "field_conflict"].includes(value?.kind);
+export const priorityCapability = (value) => value?.kind === "field_conflict" ? "can_prioritize_field" : "can_prioritize_ner";
 export const validPriorityChoice = (value) => Boolean(strategies[value?.kind])
   && id(value.batch_id) && hex(value.manifest_hash);
 
-export const validPriorityPreview = (result, choice) => {
+export const validPriorityPreview = (result, choice, projectId) => {
+  if (choice?.kind === "field_conflict") return validFieldPreview(result, choice, projectId);
   const p = result?.plan?.priority;
   const candidates = result?.plan?.candidates;
   const evidence = p?.evidence;
@@ -56,6 +62,13 @@ export const ReviewPrioritySelector = ({ projectId, value, onChange, kinds = ["c
     const current = ++generation.current;
     setLoading(true); setFailed(false); setRows([]);
     try {
+      let fieldViewer = null;
+      if (kind === "field_conflict") {
+        const capability = await call.current("fieldBatchCapability", { params: { pk: projectId }, errorFilter: () => true });
+        if (current !== generation.current) return;
+        if (capability?.project_id !== projectId || capability?.schema !== "field-batches/v1" || !hex(capability.viewer)) throw new Error("identity changed");
+        fieldViewer = capability.viewer;
+      }
       const result = await call.current(strategy.api, {
         params: { pk: projectId, page: target }, errorFilter: () => true,
       });
@@ -63,7 +76,7 @@ export const ReviewPrioritySelector = ({ projectId, value, onChange, kinds = ["c
       if (result?.error || result?.$meta?.ok === false || !Array.isArray(result?.results)
         || result.results.some((r) => !validPriorityChoice({ kind, batch_id: r.id, manifest_hash: r.manifest_hash })
           || typeof r.name !== "string")) throw new Error("unavailable");
-      if (kind === "ner_conflict") {
+      if (isBoundedPriority({ kind })) {
         if (result.project_id !== projectId || !hex(result.viewer)) throw new Error("identity changed");
         if (viewer.current && viewer.current !== result.viewer) {
           viewer.current = result.viewer;
@@ -71,11 +84,16 @@ export const ReviewPrioritySelector = ({ projectId, value, onChange, kinds = ["c
         }
         viewer.current = result.viewer;
       }
+      if (kind === "field_conflict") {
+        const capability = await call.current("fieldBatchCapability", { params: { pk: projectId }, errorFilter: () => true });
+        if (current !== generation.current) return;
+        if (fieldViewer !== result.viewer || capability?.project_id !== projectId || capability?.viewer !== fieldViewer) throw new Error("identity changed");
+      }
       setRows(result.results); setPage(target); setNext(Boolean(result.next));
     } catch {
       if (current === generation.current) {
         setFailed(true);
-        if (kind === "ner_conflict") onChange({ kind, batch_id: null, manifest_hash: "" });
+        if (isBoundedPriority({ kind })) onChange({ kind, batch_id: null, manifest_hash: "" });
       }
     } finally { if (current === generation.current) setLoading(false); }
   };

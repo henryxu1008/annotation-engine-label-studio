@@ -67,9 +67,16 @@ class StrictInput(serializers.Serializer):
 
 
 class PriorityInput(StrictInput):
-    kind = serializers.ChoiceField(choices=['classification_conflict', 'ner_conflict'])
+    kind = serializers.ChoiceField(choices=['classification_conflict', 'ner_conflict', 'field_conflict'])
     batch_id = serializers.IntegerField(min_value=1, max_value=2**53 - 1)
     manifest_hash = serializers.RegexField(r'^[0-9a-f]{64}$')
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and data.get('kind') == 'field_conflict':
+            from classification_disagreements.field_api import positive
+            if not positive(data.get('batch_id')):
+                fail('REVIEW_BATCH_INVALID_INPUT', 400)
+        return super().to_internal_value(data)
 
 
 class PlanInput(StrictInput):
@@ -211,9 +218,9 @@ def assemble_plan(project_id, args, candidates, priority_plan=None, algorithm=AL
 
 
 def checked_batch(project, batch_id):
-    from . import ner_priority
-    batch = get_object_or_404(ner_priority.query(project), pk=batch_id)
-    return check_loaded_batch(ner_priority.hydrate(batch), project)
+    from . import guarded
+    batch = get_object_or_404(guarded.query(project), pk=batch_id)
+    return check_loaded_batch(guarded.hydrate(batch), project)
 
 
 def check_loaded_batch(batch, project):
@@ -226,17 +233,17 @@ def check_loaded_batch(batch, project):
 
 
 def checked_sources(batch, actor=None, role=None):
-    from . import ner_priority
+    from . import guarded
     candidates = batch.plan["candidates"]
-    if ner_priority.is_plan(batch.plan):
+    if guarded.is_plan(batch.plan):
         if actor is None or role not in ('manager', 'reviewer'):
             fail('REVIEW_NER_PRIORITY_SCOPE_REQUIRED', 403)
         candidates = visible_candidates(batch, actor, role)
     ids = [item["submission_id"] for item in candidates]
     query = Submission.objects.filter(pk__in=ids).select_related("assignment__task", "review")
-    if ner_priority.is_plan(batch.plan):
+    if guarded.is_plan(batch.plan):
         query = query.filter(assignment__project_id=batch.project_id, assignment__task__project_id=batch.project_id)
-    loaded = ner_priority.load(query) if ner_priority.is_plan(batch.plan) else query
+    loaded = guarded.load(query, plan=batch.plan) if guarded.is_plan(batch.plan) else query
     rows = {row.pk: row for row in loaded}
     for item in batch.plan["candidates"]:
         row = rows.get(item["submission_id"])
@@ -245,12 +252,20 @@ def checked_sources(batch, actor=None, role=None):
             or not valid_source(row, batch.project_id)
         ):
             fail("REVIEW_BATCH_SOURCE_INVALID")
+    from . import field_priority
+    if field_priority.is_plan(batch.plan):
+        for evidence in batch.plan['priority']['evidence']:
+            row = rows.get(evidence['submission_id'])
+            if row is not None and evidence['source_pin'] is not None:
+                from classification_disagreements.field_api import pin
+                if pin(row) != evidence['source_pin']:
+                    fail('REVIEW_BATCH_SOURCE_INVALID')
     return rows
 
 
 def read_sources(batch, actor, role):
-    from . import ner_priority
-    return (checked_sources(batch, actor, role) if ner_priority.is_plan(batch.plan)
+    from . import guarded
+    return (checked_sources(batch, actor, role) if guarded.is_plan(batch.plan)
             else checked_sources(batch))
 
 
@@ -373,6 +388,10 @@ def projection(batch, actor, role):
         if role == 'manager':
             extra['priority_source'] = {k: batch.plan['priority'][k] for k in
                                         ('schema', 'batch_id', 'manifest_hash', 'metric_rule', 'selection')}
+            from . import field_priority
+            if field_priority.is_plan(batch.plan):
+                extra['priority_source'].update({k: batch.plan['priority'][k] for k in
+                    ('kind', 'organization_id', *field_priority.VERSIONS)})
     return {
         **metadata(batch),
         "rule": batch.plan["rule"],
