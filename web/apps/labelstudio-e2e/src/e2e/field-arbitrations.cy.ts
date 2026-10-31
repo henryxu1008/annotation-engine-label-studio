@@ -77,7 +77,7 @@ describe('frozen field revision arbitration', () => {
       action('Recover original command', '恢复原命令').should('be.visible');
       if (!zh) {
         // A mixed resolved projection must not display a winner from another revision.
-        cy.then(() => cy.intercept({ method: 'GET', pathname: `${base}${first.id}/`, times: 1 }, req => {
+        cy.then(() => cy.intercept({ method: 'GET', pathname: new RegExp(`${base}${first.id}/?$`), times: 1 }, req => {
           req.continue(res => res.send({ ...res.body,
             decision: { ...res.body.decision, winner_revision: res.body.decision.winner_revision + 1 } }));
         }).as('mismatchedRevision'));
