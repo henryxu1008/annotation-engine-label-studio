@@ -23,6 +23,11 @@ export default defineConfig({
         );
       };
       on('task', {
+        fieldPrioritySource({ locale, operation }: { locale: string; operation: string }) {
+          if (!['en-US', 'zh-CN'].includes(locale) || !['delete_source', 'restore_source'].includes(operation)) throw new Error('Invalid synthetic field transition');
+          runManagementCommand(['seed_field_review_priority_e2e', '--locale', locale, '--operation', operation]);
+          return null;
+        },
         traceEntityBoundary({ locale, boundary, phase }: { locale: string; boundary: string; phase: string }) {
           if (!['en-US', 'zh-CN'].includes(locale) || !['zh-chars', 'en-spaces', 'zh-punctuation', 'en-punctuation'].includes(boundary)
             || !['start', 'left-adjusted', 'right-adjusted', 'draft-saved', 'reloaded', 'submitted', 'client-settled', 'navigated-away'].includes(phase)) throw new Error('Invalid entity boundary trace');

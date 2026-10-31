@@ -365,5 +365,11 @@
   "fieldArbitrationDispatch": "Dispatch field arbitration",
   "fieldArbitrationAdopt": "Adopt this frozen revision",
   "fieldArbitrationStartHint": "Open a frozen field batch conflict to dispatch an independent reviewer.",
-  "fieldArbitrationFields": "Fields: {{count}}"
+  "fieldArbitrationFields": "Fields: {{count}}",
+  "sampleTable": "Review batch samples",
+  "priorityFieldEnable": "Prioritize frozen field conflicts",
+  "priorityFieldBatch": "Frozen field batch",
+  "priorityFieldBoundary": "Use one existing frozen field batch. Format differences also count as conflicts; missing or empty evidence is unknown. The quota stays unchanged.",
+  "priorityField": "Fields",
+  "priorityFieldProvenance": "Frozen field evidence batch #{{id}}"
 }

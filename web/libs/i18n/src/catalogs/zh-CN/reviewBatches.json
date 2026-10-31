@@ -365,5 +365,11 @@
   "fieldArbitrationDispatch": "派发字段仲裁",
   "fieldArbitrationAdopt": "采纳此冻结修订",
   "fieldArbitrationStartHint": "从冻结字段批次的冲突任务中派发独立审核员。",
-  "fieldArbitrationFields": "字段数：{{count}}"
+  "fieldArbitrationFields": "字段数：{{count}}",
+  "sampleTable": "抽审批次条目",
+  "priorityFieldEnable": "优先抽审冻结字段分歧",
+  "priorityFieldBatch": "冻结字段批次",
+  "priorityFieldBoundary": "使用一个既有冻结字段批次。格式差异也算冲突；缺失或全空依据为未知，抽审配额保持不变。",
+  "priorityField": "字段",
+  "priorityFieldProvenance": "冻结字段依据批次 #{{id}}"
 }

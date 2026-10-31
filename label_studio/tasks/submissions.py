@@ -105,10 +105,19 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
     principal = principal or local_principal(reviewer)
     project, reviewer = lock_project_operation(submission.assignment.project_id, principal, REVIEW)
     authorization.require(authorization.can_review_project(principal, project), 'Project reviewer role is required.')
-    Task.objects.select_for_update().get(pk=submission.assignment.task_id, project=project)
-    TaskAssignment.objects.select_for_update().get(pk=submission.assignment_id, project=project)
+    tasks = Task.objects.select_for_update()
+    assignments = TaskAssignment.objects.select_for_update()
+    submissions = Submission.objects.select_for_update()
+    if review_batch_id is not None:
+        # These rows establish scope and retain the existing lock order. Frozen
+        # evidence is loaded only by require_selected's bounded source loader.
+        tasks = tasks.only('pk')
+        assignments = assignments.only('pk')
+        submissions = submissions.defer('result_snapshot')
+    tasks.get(pk=submission.assignment.task_id, project=project)
+    assignments.get(pk=submission.assignment_id, project=project)
     # submitted_by is nullable; its ID is sufficient for the self-review check.
-    submission = Submission.objects.select_for_update().get(pk=submission.pk)
+    submission = submissions.get(pk=submission.pk)
 
     if review_batch_id is not None:
         from review_batches.service import require_selected
@@ -120,7 +129,9 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
         from task_packages.scope import PackageScope
 
         scope = PackageScope(project, principal, reviewer, task_package_id)
-        get_object_or_404(scope.submissions(Submission.objects.all()), pk=submission.pk)
+        # Only existence in package scope is needed; do not reload a snapshot
+        # outside the batch source guard after its first validation.
+        get_object_or_404(scope.submissions(Submission.objects.only('pk')), pk=submission.pk)
 
     if submission.status != Submission.Status.PENDING:
         raise ValidationError({'detail': 'Only pending submissions can be reviewed.'})

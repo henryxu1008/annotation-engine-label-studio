@@ -10,7 +10,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework.renderers import JSONRenderer
 from rest_framework.test import APITestCase
-from review_batches import priority, service
+from review_batches import field_priority, guarded, ner_priority, priority, service
 from review_batches.models import ReviewBatch
 from tasks.models import ReviewDecision, Submission
 from tasks.submissions import _snapshot_hash
@@ -110,6 +110,76 @@ class TestPriority(APITestCase):
         old = ReviewBatch.objects.get(pk=batch).plan
         self.make_source(assignment=self.first.assignment, revision=2)
         assert ReviewBatch.objects.get(pk=batch).plan == old
+
+    @override_settings(ANNOTATION_FIELD_REVIEW_PRIORITY_ENABLED=False, ANNOTATION_NER_REVIEW_PRIORITY_ENABLED=False)
+    def test_disabled_optional_strategies_preserve_legacy_collection(self):
+        prioritized = self.create()
+        assert prioritized.status_code == 201, prioritized.data
+        args = {key: value for key, value in self.args.items() if key != 'priority'}
+        preview = self.preview(args)
+        assert preview.status_code == 200, preview.data
+        ordinary = self.create({**args, 'expected_plan_hash': preview.data['plan_hash']})
+        assert ordinary.status_code == 201, ordinary.data
+        for actor in (self.manager, self.reviewer):
+            self.client.force_authenticate(actor)
+            result = self.client.get(self.base)
+            assert result.status_code == 200, result.data
+            assert result.data['count'] == 2
+            assert {row['id'] for row in result.data['results']['batches']} == {
+                prioritized.data['id'],
+                ordinary.data['id'],
+            }
+
+    def test_optional_strategy_gate_matrix_only_excludes_explicit_markers(self):
+        from access_control.project_operations import local_principal
+
+        legacy = self.create().data['id']
+        args = {key: value for key, value in self.args.items() if key != 'priority'}
+        preview = self.preview(args)
+        ordinary = self.create({**args, 'expected_plan_hash': preview.data['plan_hash']}).data['id']
+        marked = {}
+        # These deliberately partial plans probe SQL marker classification only;
+        # they must not be decoded or accepted as valid source receipts.
+        for adapter in (ner_priority, field_priority):
+            marked[adapter.KIND] = set()
+            for marker in (
+                {'algorithm': adapter.ALGORITHM},
+                {'priority': {'kind': adapter.KIND}},
+                {'priority': {'schema': adapter.SCHEMA}},
+            ):
+                plan = {
+                    **marker,
+                    'candidates': [
+                        {
+                            'task_id': self.first.assignment.task_id,
+                            'submitter_id': self.worker.pk,
+                        }
+                    ],
+                }
+                row = ReviewBatch.objects.create(
+                    project=self.project,
+                    created_by=self.manager,
+                    actor_id_frozen=self.manager.pk,
+                    creator_principal='synthetic',
+                    name='Partial SQL marker probe',
+                    idempotency_key=uuid4(),
+                    request_hash='a' * 64,
+                    plan=plan,
+                    plan_hash=service.digest(plan),
+                )
+                marked[adapter.KIND].add(row.pk)
+        for ner_enabled, field_enabled in ((False, False), (False, True), (True, False), (True, True)):
+            expected = {legacy, ordinary}
+            if ner_enabled:
+                expected |= marked[ner_priority.KIND]
+            if field_enabled:
+                expected |= marked[field_priority.KIND]
+            with patch.object(ner_priority, 'available', return_value=ner_enabled), patch.object(
+                field_priority, 'available', return_value=field_enabled
+            ):
+                for actor, role in ((self.manager, 'manager'), (self.reviewer, 'reviewer')):
+                    rows = guarded.visible_query(self.project, local_principal(actor), actor, role)
+                    assert set(rows.values_list('pk', flat=True)) == expected
 
     def test_new_revision_is_unknown_and_never_borrows_old_conflict(self):
         newer = self.make_source(assignment=self.first.assignment, revision=2)

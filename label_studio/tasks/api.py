@@ -1285,8 +1285,15 @@ class SubmissionReviewAPI(generics.GenericAPIView):
     queryset = Submission.objects.all()
 
     def post(self, request, *args, **kwargs):
+        from review_batches.scope import requested_batch
+
+        batch_id = requested_batch(request)
+        sources = Submission.objects.select_related('assignment__project', 'submitted_by')
+        if batch_id is not None:
+            # Batch visibility and SQL byte gates must precede snapshot decoding.
+            sources = sources.defer('result_snapshot')
         submission = generics.get_object_or_404(
-            Submission.objects.select_related('assignment__project', 'submitted_by'),
+            sources,
             pk=self.kwargs['pk'],
         )
         principal, actor = resolve_actor(request)
@@ -1297,10 +1304,8 @@ class SubmissionReviewAPI(generics.GenericAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        from review_batches.scope import requested_batch
         from task_packages.scope import requested_package
 
-        batch_id = requested_batch(request)
         # A scoped response is part of the frozen-evidence boundary. Keep the
         # existing write fence until serialization and final access checks pass.
         # Ordinary reviews retain their existing transaction/read contract.
@@ -1314,15 +1319,21 @@ class SubmissionReviewAPI(generics.GenericAPIView):
                 task_package_id=requested_package(request),
                 review_batch_id=batch_id,
             )
-            submission.refresh_from_db()
-            data = SubmissionSerializer(submission, context={'request': request}).data
             if batch_id is not None:
                 from review_batches import service
 
                 source = service.require_selected(
                     submission.assignment.project, batch_id, submission, actor, principal=principal,
+                    for_serialization=True,
+                )
+                data = SubmissionSerializer(source, context={'request': request}).data
+                source = service.require_selected(
+                    submission.assignment.project, batch_id, submission, actor, principal=principal,
                 )
                 service.check_representation(data, source)
+            else:
+                submission.refresh_from_db()
+                data = SubmissionSerializer(submission, context={'request': request}).data
             return Response(data)
 
 

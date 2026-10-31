@@ -509,14 +509,21 @@ def plan_hash(batch):
     )
 
 
-def inspect_items(batch, context):
+def inspect_items(batch, context, *, loaded_rows=None):
     items = visible_items(batch, context[1], context[3])
     task_ids = [i['task_id'] for i in items]
     tasks = dict(Task.objects.filter(pk__in=task_ids).values_list('pk', 'project_id'))
     cohort = [e for i in items for e in i['cohort']]
     assignments = {a.pk: a for a in TaskAssignment.objects.filter(pk__in=[e['assignment_id'] for e in cohort])}
     source_ids = [e['source']['submission_id'] for e in cohort if e['source']]
-    sources = {r.pk: r for r in field_api.load(scoped_sources(context[2], source_ids), validate_source=False)}
+    sources = {
+        r.pk: r
+        for r in (
+            field_api.load(scoped_sources(context[2], source_ids), validate_source=False)
+            if loaded_rows is None
+            else loaded_rows
+        )
+    }
     inspected, missing = {}, set()
     for item in items:
         current_rows, reason = [], None
