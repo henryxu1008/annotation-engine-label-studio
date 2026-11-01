@@ -1378,3 +1378,44 @@ existing paths. `test_mapped_editor_uploaded_image_uses_actor_and_rechecks_revoc
 asserts both the response and wrapped file close before temporary-media cleanup.
 This is an upgrade-sensitive adapter to the existing ranged-response dependency;
 it does not implement a new streaming or authorization policy.
+
+### Low-confidence review sampling V1 design (#84)
+
+Design only: [`review-confidence-v1-design.md`](review-confidence-v1-design.md) and
+[`review-confidence-v1-acceptance.md`](review-confidence-v1-acceptance.md), based on
+actual main `1d4092c87d4e020dbd4f92aa63428679b44590e3`. Reuse the complete existing
+ReviewBatch preview/create/queue/rework flow. A minimal immutable revision-scoped
+confidence fact is a trusted-producer assertion with exact source/profile/artifact/
+score versions and frozen Submission input pins; ordinary mutable Prediction scores
+are not provenance. The proposal separates producer grants from review planning,
+uses fixed-point ranking and Project-first absence fencing, and requires bounded
+hydration, source-free receipt recovery and typed UI guards. No implementation,
+migration, feature activation or functional acceptance is included. Independent
+second review remains a separate design. Fork-only; #81/#84 stay OPEN, with no
+Host/Core, deployment, Docker/#76 or other-worktree operations.
+
+## Revision confidence V1 implementation
+
+Implementation contract: `review-confidence-v1.md`. The prior design and acceptance
+documents remain frozen historical snapshots. The extension adds a default-off
+trusted producer input/append protocol, additive immutable metadata facts, one
+typed ReviewBatch priority source and the existing complete planning/review/rework
+UI. V1 is limited to static inline text classification. Source identity includes
+instance, exact model/evaluator/calibration digest and nine frozen revision pins;
+Prediction scores never become trusted evidence. PROVIDE_REVIEW_CONFIDENCE is
+separate from planning/review and is not auto-granted by legacy project policy.
+
+Project-first fact/batch writes fence absent facts. Fresh batches materialize twice,
+render and fully verify actual sources a third time without another sort. SQL
+row/union CASE gates precede decoding; rendered output is bounded and writes roll
+back on late source/authority/representation change. Original-key recovery verifies
+current authority and immutable local proof independently of fresh registry/source.
+New confidence projections SQL-gate inherited unbounded review reasons and use
+existing minimal user serializers, including original rework sources. Old workflow
+permissions, hash/wire defaults and one review decision per revision are retained.
+
+Local synthetic acceptance and independent implementation review are recorded in
+the external execution report, not represented as real model/quality/platform
+activation. Remote CI, PR, merge and deployment are separate permissions. Second
+review remains a separate design; Fork-only, #81/#84 OPEN, Docker/#76 and other
+worktrees unchanged.

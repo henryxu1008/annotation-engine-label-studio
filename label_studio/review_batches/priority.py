@@ -36,7 +36,10 @@ def viewer_hash(principal, actor, project, role):
 
 
 def read_guard(project_id, principal, actor, plan=None):
-    from . import field_priority, ner_priority
+    from . import confidence_priority, field_priority, ner_priority
+
+    if confidence_priority.is_plan(plan):
+        return confidence_priority.read_guard(project_id, principal, actor, plan)
 
     if field_priority.is_plan(plan):
         project, role = field_priority.read_guard(project_id, principal, actor, plan)
@@ -193,7 +196,10 @@ def freeze(project, candidates, selection):
 
 def validate(plan, batch=None):
     """Receipt recovery checks local frozen structure, without needing live sources."""
-    from . import field_priority, ner_priority
+    from . import confidence_priority, field_priority, ner_priority
+
+    if confidence_priority.is_plan(plan):
+        return confidence_priority.validate(plan, batch)
 
     if field_priority.is_plan(plan):
         return field_priority.validate(plan, batch)
@@ -247,6 +253,10 @@ def validate(plan, batch=None):
 
 
 def summary(plan, candidates):
+    from . import confidence_priority
+
+    if confidence_priority.is_plan(plan):
+        return confidence_priority.summary(plan, candidates)
     states = {e['submission_id']: e['state'] for e in plan['priority']['evidence']}
     conflicts = [c for c in candidates if states[c['submission_id']] == 'conflict']
     return {

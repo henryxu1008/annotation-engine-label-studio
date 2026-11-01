@@ -1,4 +1,5 @@
-"""Frozen local work plans, never a second review-decision ledger."""
+"""Frozen local work plans and input facts, never a second decision ledger."""
+import uuid
 
 from django.conf import settings
 from django.db import models
@@ -20,6 +21,42 @@ class ReviewBatch(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['project', 'idempotency_key'], name='review_batch_project_key_unique'),
+        ]
+
+
+class ReviewConfidenceObservation(models.Model):
+    """Trusted producer assertion on one exact revision. Contains no answers."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    instance_id = models.UUIDField()
+    producer_namespace = models.UUIDField()
+    profile_id = models.UUIDField()
+    profile_digest = models.CharField(max_length=64)
+    event_uuid = models.UUIDField()
+    submission = models.ForeignKey('tasks.Submission', null=True, on_delete=models.SET_NULL)
+    submission_id_frozen = models.PositiveBigIntegerField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    actor_id_frozen = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    creator_source = models.CharField(max_length=128)
+    request_hash = models.CharField(max_length=64)
+    proof = models.JSONField()
+    receipt = models.JSONField()
+    fact_hash = models.CharField(max_length=64)
+    receipt_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=('project', 'instance_id', 'producer_namespace', 'event_uuid'),
+                name='confidence_event_unique',
+            ),
+            models.UniqueConstraint(
+                fields=('project', 'instance_id', 'profile_id', 'profile_digest', 'submission_id_frozen'),
+                name='confidence_subject_unique',
+            ),
         ]
 
 

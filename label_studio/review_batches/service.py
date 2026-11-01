@@ -18,7 +18,7 @@ from tasks.models import Submission
 from tasks.my_work import work_projects
 from tasks.submissions import _snapshot_hash
 
-ALGORITHM = "sha256-ranked-v1"
+ALGORITHM = 'sha256-ranked-v1'
 MAX_CANDIDATES = 1000
 
 
@@ -33,6 +33,18 @@ def digest(value):
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
     ).hexdigest()
+
+
+def submission_serializer(batch):
+    from tasks.serializers import SubmissionSerializer
+
+    from . import confidence_priority
+
+    return (
+        confidence_priority.submission_serializer()
+        if confidence_priority.is_plan(batch.plan)
+        else SubmissionSerializer
+    )
 
 
 def enabled(project):
@@ -72,8 +84,13 @@ class PriorityInput(StrictInput):
     manifest_hash = serializers.RegexField(r'^[0-9a-f]{64}$')
 
     def to_internal_value(self, data):
+        if isinstance(data, dict) and data.get('kind') == 'revision_confidence':
+            from . import confidence_priority
+
+            return confidence_priority.selection(data)
         if isinstance(data, dict) and data.get('kind') == 'field_conflict':
             from classification_disagreements.field_api import positive
+
             if not positive(data.get('batch_id')):
                 fail('REVIEW_BATCH_INVALID_INPUT', 400)
         return super().to_internal_value(data)
@@ -86,13 +103,34 @@ class PlanInput(StrictInput):
     seed = serializers.CharField(max_length=128)
     package_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), max_length=100, default=list)
     submitter_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), max_length=100, default=list)
-    expected_plan_hash = serializers.RegexField(r"^[0-9a-f]{64}$", required=False)
+    expected_plan_hash = serializers.RegexField(r'^[0-9a-f]{64}$', required=False)
     priority = PriorityInput(required=False)
 
+    def to_internal_value(self, data):
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get('priority'), dict)
+            and data['priority'].get('kind') == 'revision_confidence'
+        ):
+            from . import confidence_contract as c
+
+            if (
+                not c.integer(data.get('rate'), 1, 100)
+                or 'per_submitter' in data
+                and type(data['per_submitter']) is not bool
+                or any(
+                    k in data and (not isinstance(data[k], list) or any(not c.positive(v) for v in data[k]))
+                    for k in ('package_ids', 'submitter_ids')
+                )
+            ):
+                c.fail('INVALID_INPUT', 400)
+            c.bounded(data, c.MAX_BODY)
+        return super().to_internal_value(data)
+
     def validate(self, attrs):
-        for key in ("package_ids", "submitter_ids"):
+        for key in ('package_ids', 'submitter_ids'):
             if len(attrs[key]) != len(set(attrs[key])):
-                fail("REVIEW_BATCH_INVALID_INPUT", 400)
+                fail('REVIEW_BATCH_INVALID_INPUT', 400)
             attrs[key].sort()
         return attrs
 
@@ -194,32 +232,43 @@ def build_plan(project, args):
     return assemble_plan(project.pk, args, candidates, priority_plan, algorithm)
 
 
-def assemble_plan(project_id, args, candidates, priority_plan=None, algorithm=ALGORITHM):
-    states = ({e['submission_id']: e['state'] for e in priority_plan['evidence']}
-              if priority_plan is not None else {})
+def assemble_plan(project_id, args, candidates, priority_plan=None, algorithm=ALGORITHM, *, ranking=None):
+    states = {e['submission_id']: e['state'] for e in priority_plan['evidence']} if priority_plan is not None else {}
     groups = {}
     for item in candidates:
-        groups.setdefault(item["submitter_id"] if args["per_submitter"] else "all", []).append(item)
+        groups.setdefault(item['submitter_id'] if args['per_submitter'] else 'all', []).append(item)
     selected = set()
     for group in groups.values():
         ranked = sorted(
-            group, key=lambda item: (0 if states.get(item['submission_id']) == 'conflict' else 1,
-                                    digest([algorithm, project_id, args["seed"], item]), item["submission_id"])
+            group,
+            key=ranking
+            or (
+                lambda item: (
+                    0 if states.get(item['submission_id']) == 'conflict' else 1,
+                    digest([algorithm, project_id, args['seed'], item]),
+                    item['submission_id'],
+                )
+            ),
         )
-        count = (len(group) * args["rate"] + 99) // 100
-        selected.update(item["submission_id"] for item in ranked[:count])
+        count = (len(group) * args['rate'] + 99) // 100
+        selected.update(item['submission_id'] for item in ranked[:count])
     return {
-        "algorithm": algorithm,
-        "project_id": project_id,
-        "rule": {key: args[key] for key in ("rate", "per_submitter", "seed", "package_ids", "submitter_ids")},
-        "candidates": [{**item, "selected": item["submission_id"] in selected} for item in candidates],
+        'algorithm': algorithm,
+        'project_id': project_id,
+        'rule': {key: args[key] for key in ('rate', 'per_submitter', 'seed', 'package_ids', 'submitter_ids')},
+        'candidates': [{**item, 'selected': item['submission_id'] in selected} for item in candidates],
         **({'priority': priority_plan} if priority_plan is not None else {}),
     }
 
 
 def checked_batch(project, batch_id):
     from . import guarded
+
     batch = get_object_or_404(guarded.query(project), pk=batch_id)
+    if getattr(batch, '_confidence_kind', False) and not settings.ANNOTATION_REVIEW_CONFIDENCE_ENABLED:
+        from . import confidence_contract
+
+        confidence_contract.fail('UNAVAILABLE', 403)
     return check_loaded_batch(guarded.hydrate(batch), project)
 
 
@@ -234,31 +283,45 @@ def check_loaded_batch(batch, project):
 
 def checked_sources(batch, actor=None, role=None, *, for_serialization=False):
     from . import guarded
-    candidates = batch.plan["candidates"]
+
+    candidates = batch.plan['candidates']
     if guarded.is_plan(batch.plan):
         if actor is None or role not in ('manager', 'reviewer'):
             fail('REVIEW_NER_PRIORITY_SCOPE_REQUIRED', 403)
         candidates = visible_candidates(batch, actor, role)
-    ids = [item["submission_id"] for item in candidates]
-    query = Submission.objects.filter(pk__in=ids).select_related("assignment__task", "review")
+    ids = [item['submission_id'] for item in candidates]
+    query = Submission.objects.filter(pk__in=ids).select_related('assignment__task', 'review')
     if guarded.is_plan(batch.plan):
         query = query.filter(assignment__project_id=batch.project_id, assignment__task__project_id=batch.project_id)
-    loaded = (guarded.load(query, plan=batch.plan, for_serialization=for_serialization)
-              if guarded.is_plan(batch.plan) else query)
+    from . import confidence_priority
+
+    if confidence_priority.is_plan(batch.plan):
+        if role == 'reviewer':
+            query = query.exclude(assignment__assignee_id=actor.pk)
+        query = confidence_priority.linked_sources(batch, query)
+    loaded = (
+        guarded.load(query, plan=batch.plan, for_serialization=for_serialization)
+        if guarded.is_plan(batch.plan)
+        else query
+    )
     rows = {row.pk: row for row in loaded}
-    for item in batch.plan["candidates"]:
-        row = rows.get(item["submission_id"])
+    for item in batch.plan['candidates']:
+        row = rows.get(item['submission_id'])
         if row is not None and (
-            identity(row) != {k: v for k, v in item.items() if k != "selected"}
+            identity(row) != {k: v for k, v in item.items() if k != 'selected'}
             or not valid_source(row, batch.project_id)
         ):
-            fail("REVIEW_BATCH_SOURCE_INVALID")
+            fail('REVIEW_BATCH_SOURCE_INVALID')
     from . import field_priority
+
+    if confidence_priority.is_plan(batch.plan):
+        confidence_priority.check_sources(batch, rows)
     if field_priority.is_plan(batch.plan):
         for evidence in batch.plan['priority']['evidence']:
             row = rows.get(evidence['submission_id'])
             if row is not None and evidence['source_pin'] is not None:
                 from classification_disagreements.field_api import pin
+
                 if pin(row) != evidence['source_pin']:
                     fail('REVIEW_BATCH_SOURCE_INVALID')
     return rows
@@ -310,11 +373,11 @@ def check_representation(data, source):
         fail('REVIEW_BATCH_SOURCE_INVALID')
 
 
-def rework_source(batch, source_id, actor, role):
+def rework_source(batch, source_id, actor, role, *, for_serialization=False):
     item = next((item for item in visible_candidates(batch, actor, role) if item['submission_id'] == source_id), None)
     if item is None or (role == 'reviewer' and item['submitter_id'] == actor.pk):
         raise NotFound()
-    source = read_sources(batch, actor, role).get(source_id)
+    source = read_sources(batch, actor, role, for_serialization=for_serialization).get(source_id)
     if source is None:
         raise NotFound()
     if source.status != 'rejected':
@@ -338,10 +401,15 @@ def metadata(batch):
 
 
 def visible_candidates(batch, actor, role):
-    candidates = batch.plan["candidates"]
-    if role == "reviewer":
-        candidates = [item for item in candidates if item["submitter_id"] != actor.pk]
+    candidates = batch.plan['candidates']
+    if role == 'reviewer':
+        candidates = [item for item in candidates if item['submitter_id'] != actor.pk]
         if 'priority' in batch.plan:
+            from . import confidence_priority
+
+            if confidence_priority.is_plan(batch.plan):
+                own = {e['submission_id'] for e in batch.plan['priority']['evidence'] if e['assignee_id'] == actor.pk}
+                return [c for c in candidates if c['submission_id'] not in own]
             hidden = {t['task_id'] for t in batch.plan['priority']['participants'] if actor.pk in t['actor_ids']}
             candidates = [item for item in candidates if item['task_id'] not in hidden]
     return candidates
@@ -351,55 +419,62 @@ def projection(batch, actor, role):
     rows = read_sources(batch, actor, role)
     candidates = visible_candidates(batch, actor, role)
     # Minimal successor metadata only: never copy answers into a plan.
-    newest = Submission.objects.filter(assignment_id=OuterRef("assignment_id")).order_by("-revision")
+    newest = Submission.objects.filter(assignment_id=OuterRef('assignment_id')).order_by('-revision')
     successors = {
         row.assignment_id: row
         for row in Submission.objects.filter(
-            assignment_id__in=[item["assignment_id"] for item in candidates],
+            assignment_id__in=[item['assignment_id'] for item in candidates],
             assignment__project_id=batch.project_id,
             assignment__task__project_id=batch.project_id,
-            pk=Subquery(newest.values("pk")[:1]),
-        ).only("pk", "assignment_id", "revision", "status")
+            pk=Subquery(newest.values('pk')[:1]),
+        ).only('pk', 'assignment_id', 'revision', 'status')
     }
     items = []
     for item in candidates:
-        source = rows.get(item["submission_id"])
-        state = source.status if source else "unavailable"
-        successor = successors.get(item["assignment_id"])
+        source = rows.get(item['submission_id'])
+        state = source.status if source else 'unavailable'
+        successor = successors.get(item['assignment_id'])
         items.append(
             {
                 **item,
-                "status": state,
-                "review_reason": source.review.reason if source and hasattr(source, "review") else "",
-                "can_review": bool(item["selected"] and state == "pending" and role == "reviewer"),
-                "successor": (
-                    {"id": successor.pk, "revision": successor.revision, "status": successor.status}
-                    if successor and successor.revision > item["revision"]
+                'status': state,
+                'review_reason': source.review.reason if source and hasattr(source, 'review') else '',
+                'can_review': bool(item['selected'] and state == 'pending' and role == 'reviewer'),
+                'successor': (
+                    {'id': successor.pk, 'revision': successor.revision, 'status': successor.status}
+                    if successor and successor.revision > item['revision']
                     else None
                 ),
             }
         )
     extra = {}
     if 'priority' in batch.plan:
-        from . import priority
+        from . import confidence_priority, priority
+
         evidence = {e['submission_id']: e for e in batch.plan['priority']['evidence']}
         for item in items:
             item['priority_reason'] = evidence[item['submission_id']]['reason']
         extra['priority_summary'] = priority.summary(batch.plan, candidates)
-        if role == 'manager':
-            extra['priority_source'] = {k: batch.plan['priority'][k] for k in
-                                        ('schema', 'batch_id', 'manifest_hash', 'metric_rule', 'selection')}
+        if confidence_priority.is_plan(batch.plan):
+            extra.update(confidence_priority.projection(batch.plan, items, role))
+        elif role == 'manager':
+            extra['priority_source'] = {
+                k: batch.plan['priority'][k]
+                for k in ('schema', 'batch_id', 'manifest_hash', 'metric_rule', 'selection')
+            }
             from . import field_priority
+
             if field_priority.is_plan(batch.plan):
-                extra['priority_source'].update({k: batch.plan['priority'][k] for k in
-                    ('kind', 'organization_id', *field_priority.VERSIONS)})
+                extra['priority_source'].update(
+                    {k: batch.plan['priority'][k] for k in ('kind', 'organization_id', *field_priority.VERSIONS)}
+                )
     return {
         **metadata(batch),
-        "rule": batch.plan["rule"],
-        "algorithm": batch.plan["algorithm"],
-        "candidate_count": len(items),
-        "selected_count": sum(item["selected"] for item in items),
-        "items": items,
-        "as_of": timezone.now(),
+        'rule': batch.plan['rule'],
+        'algorithm': batch.plan['algorithm'],
+        'candidate_count': len(items),
+        'selected_count': sum(item['selected'] for item in items),
+        'items': items,
+        'as_of': timezone.now(),
         **extra,
     }

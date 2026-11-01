@@ -22,6 +22,7 @@
   pre { overflow: auto; max-height: 280px; }
   [data-testid="review-priority-selector"] { grid-column: 1 / -1; display: grid; gap: 8px; }
   [data-testid="review-priority-selector"] select { min-width: 0; max-width: 100%; padding: 8px; }
+  [data-testid="review-confidence-source"] { min-width: 0; overflow-wrap: anywhere; }
   @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } }
 }
 
