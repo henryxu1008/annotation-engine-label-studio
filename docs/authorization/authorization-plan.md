@@ -1326,3 +1326,27 @@ review handoff and independent second review remain separate designs. Preserve
 ### Frozen field conflict priority review sampling (#84)
 
 See [field-review-priority-v1.md](field-review-priority-v1.md). Default-off field strategy consumes one complete existing FieldBatch through the existing ReviewBatch flow. Exact source pins, full Manifest validation, bounded source union, post-calculation replay, current organization/viewer fences and source-free original-key recovery remain separate from review authority. Shared bounded NER read hooks now also cover explicit field plans; legacy shapes and hashes stay unchanged. No new tables, Submission/metric/decision changes, field review-to-arbitration handoff or Host integration. #81/#84 remain open; retained runtime and lint baselines remain separate.
+
+### Frozen field review-to-arbitration handoff design (#84)
+
+See the [field handoff design](field-review-handoff-v1-design.md) and
+[acceptance matrix](field-review-handoff-v1-acceptance.md). Design only, based on
+actual main merge `5757b5a5b65f1637923ad47aba29df915fa267cd`: reuse NER's typed
+handoff lifecycle and the existing field arbitration helpers/workspace. The plan
+requires exact nine-field source pins, all field rule versions, independent
+ORGANIZE_FIELD_ARBITRATION authority, a separate typed immutable parent ledger,
+cumulative predecode metadata guards, two field calculations followed by final
+source replay, and source-free original-key recovery. Existing classification,
+NER, review and standalone field contracts remain unchanged. No implementation,
+migration, flag activation or executed functional acceptance is included in this
+design. Fork-only; #81/#84 stay open, with no Host/Core, deployment or retained
+Docker/#76/worktree/data operations.
+
+Historical field handoff opening requires a bounded metadata-only provenance
+read after the existing target detail, verifying both original Manifests without
+fresh pending/latest eligibility. Only matching current viewer and existing
+target input/task-evidence/identity fields may reach the visible workspace/cache;
+full origins are validated server-side without enlarging Reviewer projections.
+The two-calculation rule applies to eligible
+successful evidence requests; ineligible preflight and partial failures report
+their actual work separately.
