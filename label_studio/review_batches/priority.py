@@ -254,6 +254,7 @@ def validate(plan, batch=None):
 
 def summary(plan, candidates):
     from . import confidence_priority
+
     if confidence_priority.is_plan(plan):
         return confidence_priority.summary(plan, candidates)
     states = {e['submission_id']: e['state'] for e in plan['priority']['evidence']}
