@@ -1,5 +1,16 @@
 /// <reference types="cypress" />
 
+// Cypress 14.5 press supports Tab only. Reuse Chrome's native keyboard protocol
+// for Enter; the dedicated driver smoke test checks trusted native activation.
+const nativeEnter = () => cy.then(async () => {
+  for (const type of ["keyDown", "keyUp"]) {
+    await Cypress.automation("remote:debugger:protocol", { command: "Input.dispatchKeyEvent", params: {
+      type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+      ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+    }});
+  }
+});
+
 describe("frozen field review to arbitration handoff", () => {
   let fixture: any;
   before(() => cy.readFile(".field-review-handoff-e2e.json", { log: false }).then(v => { fixture = v; }));
@@ -38,7 +49,7 @@ describe("frozen field review to arbitration handoff", () => {
       openReview();
       cy.contains("button", zh ? "抽中 · 待审核" : "Selected · pending").click();
       cy.get(`[data-handoff-source="${ids[0]}"]`).click();
-      cy.get('[data-testid="handoff-start"]').focus().type("{enter}");
+      cy.get('[data-testid="handoff-start"]').focus(); nativeEnter();
       workspace().find("select").select(String(fixture.users.reviewer.id));
       cy.intercept({ method: "POST", pathname: new RegExp(`^${base}[0-9]+/sources/[0-9]+/field-arbitration-handoffs/?$`), times: 2 }, req => {
         if (++posts === 1) {
@@ -50,7 +61,7 @@ describe("frozen field review to arbitration handoff", () => {
           req.continue(res => { expect(res.statusCode).to.eq(200); expect(res.body.id).to.eq(saved.id); });
         }
       }).as("handoffWrite");
-      action("Confirm dispatch", "确认派发").focus().type("{enter}");
+      action("Confirm dispatch", "确认派发").focus(); nativeEnter();
       cy.wait("@handoffWrite").its("response.statusCode").should("eq", 503);
       action("Back to handoff history", "返回交接历史").should("be.disabled");
       action("Refresh read-only view", "刷新只读视图").click();
