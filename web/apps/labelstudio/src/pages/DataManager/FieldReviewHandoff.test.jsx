@@ -605,3 +605,21 @@ it.each(["owner", "actor"])("clears an unknown field command when the actual %s 
   view.unmount();
   view.runtime.destroy();
 });
+
+it("keeps standalone field commands on their original viewer-change contract", async () => {
+  mockCall.mockImplementation((method, options) =>
+    method === "createFieldArbitration"
+      ? { error: true, $meta: { ok: false, status: 503 } }
+      : respondHandoff(method, options),
+  );
+  const view = mount("en-US", origin);
+  await dispatch();
+  await screen.findByRole("button", { name: "Recover original command" });
+  viewer = hash("d");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh read-only view" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "Recover original command" })).toBeNull();
+  expect(mockCall.mock.calls.filter(([method]) => method === "createFieldArbitration")).toHaveLength(1);
+  view.unmount();
+  view.runtime.destroy();
+});

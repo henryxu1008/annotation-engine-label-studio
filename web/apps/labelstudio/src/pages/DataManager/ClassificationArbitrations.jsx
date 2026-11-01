@@ -106,7 +106,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     if (adapter && current()) {
       if (viewer.current && viewer.current !== capability.viewer_hash) {
         const original = pending.current;
-        if (!(original?.attempted && handoffTransport?.sameOwner?.(capability, original))) {
+        if (!(original?.action === "handoff" && original.attempted && handoffTransport?.sameOwner?.(capability, original))) {
           forgetIdentity(capability.viewer_hash);
           throw new Error("identity changed");
         }
