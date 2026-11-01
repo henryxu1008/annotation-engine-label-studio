@@ -118,6 +118,14 @@ Frozen selection/hash/denominator never rerank after new facts, revisions, retir
 review. Historical source health remains current and may become unavailable. Existing
 ReviewDecision, ordinary review and release authority remain independent.
 
+An observation still linked to its original submission is checked against the complete
+original input before classifying current eligibility. Recomputed snapshot hashes cannot
+hide content corruption behind unsupported input or reassignment. Only a changed current
+assignee or loss of the original submitter convenience FK can change eligibility to unknown;
+a different non-null submitter is corruption. The canonical input constructor is shared
+with producer ingestion and uses frozen human pins for this original-input check. A null
+observation source FK remains unavailable and never binds to a reused numeric ID.
+
 Creation transport failures retain UNKNOWN and the exact body/key. Explicit original-key
 recovery needs current planning authority and valid local receipt, independently of the
 fresh registry or source size. Capability exposes a separate recovery flag and stable

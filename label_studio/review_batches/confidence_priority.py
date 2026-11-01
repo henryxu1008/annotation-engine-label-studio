@@ -159,6 +159,22 @@ def selected_prefix_valid(plan):
     return True
 
 
+def verify_linked_source(fact, row, current, descriptor):
+    """A later eligibility change cannot conceal damage to the original input."""
+    try:
+        actual = c.source_pins(row, current)
+        frozen = fact.proof['subject']
+        if (
+            any(actual[k] != frozen[k] for k in c.PINS if k not in ('assignee_id', 'submitter_id'))
+            or actual['submitter_id'] not in (None, frozen['submitter_id'])
+            or fact.proof['profile'] != descriptor
+            or c.input_envelope(row.result_snapshot, frozen, current)[1] != fact.proof['input_hash']
+        ):
+            c.fail()
+    except (APIException, KeyError, TypeError, ValueError, UnicodeError):
+        c.fail()
+
+
 def materialize(current, args, *, lock=False, build=True):
     project = current[2]
     registry = c.selected_profile(project, args['priority'])
@@ -204,6 +220,9 @@ def materialize(current, args, *, lock=False, build=True):
     for row in loaded:
         candidates.append(service.identity(row))
         state, reason, packet, pin = 'unknown', 'not_covered', None, None
+        fact = by_source.get(row.pk)
+        if fact is not None and fact.submission_id is not None:
+            verify_linked_source(fact, row, current, registry['descriptor'])
         supported = c.supported(row)
         if not supported:
             reason = 'unsupported_input'
@@ -212,7 +231,6 @@ def materialize(current, args, *, lock=False, build=True):
         else:
             _, input_hash = c.envelope(row, current)
             pin = c.subject(row, current)
-            fact = by_source.get(row.pk)
             if fact is not None:
                 if fact.submission_id is None:
                     reason = 'source_unavailable'

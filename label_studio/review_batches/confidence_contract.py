@@ -310,7 +310,8 @@ def load(query, *, for_serialization=False, single=False):
         service.fail(exc.code, exc.status)
 
 
-def subject(row, current):
+def source_pins(row, current):
+    """Read actual immutable pins, allowing a deleted human convenience FK."""
     snapshot = row.result_snapshot
     if not service.valid_source(row, current[2].pk):
         fail()
@@ -323,6 +324,11 @@ def subject(row, current):
         'task_data_hash': digest(snapshot['task'].get('data')),
         'label_config_sha256': hashlib.sha256(xml.encode('utf-8')).hexdigest(),
     }
+    return pin
+
+
+def subject(row, current):
+    pin = source_pins(row, current)
     if any(not positive(pin[k]) for k in PINS[:6]):
         fail('INPUT_CHANGED')
     return pin
@@ -358,11 +364,15 @@ def supported(row):
         return False
 
 
-def envelope(row, current):
-    pins = subject(row, current)
+def input_envelope(snapshot, pins, current):
+    """One canonical input constructor for ingest and original-fact validation."""
     scope = {'instance_id': instance_id(), 'organization_id': current[2].organization_id, 'project_id': current[2].pk}
-    value = {'schema': INPUT, **scope, 'subject': pins, 'result_snapshot': row.result_snapshot}
+    value = {'schema': INPUT, **scope, 'subject': pins, 'result_snapshot': snapshot}
     return value, digest(value)
+
+
+def envelope(row, current):
+    return input_envelope(row.result_snapshot, subject(row, current), current)
 
 
 def source_query(project):

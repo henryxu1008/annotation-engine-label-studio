@@ -1,7 +1,8 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license.
 """
 from django.urls import include, path
-from review_batches.confidence_api import InputAPI as ConfidenceInputAPI, ObservationAPI as ConfidenceObservationAPI
+from review_batches.confidence_api import InputAPI as ConfidenceInputAPI
+from review_batches.confidence_api import ObservationAPI as ConfidenceObservationAPI
 from tasks.my_work import MyWorkAPI
 
 from . import api, views

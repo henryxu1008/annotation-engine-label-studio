@@ -20,6 +20,10 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       let saved: number, frozenHash: string, original: any, newer: number, key: any, command: any, posts = 0;
       let nativeRecoveryTrusted = false;
       const visit = (role: string) => {
+        // Unmount the annotation editor before invalidating its server session.
+        // Otherwise its pending task request can race logout during role changes.
+        cy.visit('/user/account/personal-info');
+        cy.get('input[type="email"]', { timeout: 30000 }).should('be.visible');
         cy.loginAs(fixture.users[role].email, fixture.password, '/user/account/personal-info');
         cy.setUserLocale(locale); cy.visit(`/projects/${scope.id}/data`);
         cy.get('html').should('have.attr', 'lang', locale);
