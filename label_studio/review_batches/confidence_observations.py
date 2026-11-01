@@ -126,6 +126,7 @@ def validate(row):
 def response(data, *, status=200):
     c.bounded(data, c.MAX_OUTPUT)
     emitted = json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False))
+    expected = strict_json(emitted)
     result = Response(data, status=status)
     result.accepted_renderer, result.accepted_media_type, result.renderer_context = (
         JSONRenderer(),
@@ -133,7 +134,7 @@ def response(data, *, status=200):
         {},
     )
     result.render()
-    result._confidence_expected = emitted
+    result._confidence_expected = expected
     check_response(result)
     return result
 
@@ -141,7 +142,30 @@ def response(data, *, status=200):
 def check_response(result):
     if len(result.content) > c.MAX_OUTPUT:
         c.fail('TOO_LARGE', 422)
-    if json.loads(result.content) != result._confidence_expected or result.data != result._confidence_expected:
+    if (
+        strict_json(rendered_json(result.content)) != result._confidence_expected
+        or strict_json(result.data) != result._confidence_expected
+    ):
+        c.fail('INPUT_CHANGED')
+
+
+def strict_json(value):
+    c.bounded(value, c.MAX_OUTPUT)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode(
+        'utf-8'
+    )
+
+
+def rendered_json(content):
+    def pairs(values):
+        result = dict(values)
+        if len(result) != len(values):
+            c.fail('INPUT_CHANGED')
+        return result
+
+    try:
+        return json.loads(content, object_pairs_hook=pairs, parse_constant=lambda value: c.fail('INPUT_CHANGED'))
+    except (ValueError, TypeError, UnicodeError, RecursionError):
         c.fail('INPUT_CHANGED')
 
 

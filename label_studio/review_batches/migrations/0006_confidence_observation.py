@@ -18,8 +18,17 @@ NULLABLE = ('submission_id', 'created_by_id')
 def install(apps, schema_editor):
     vendor = schema_editor.connection.vendor
     if vendor == 'postgresql':
-        old, new = (', '.join(f'{prefix}.{f}' for f in FROZEN) for prefix in ('OLD', 'NEW'))
+        scalar = tuple(f for f in FROZEN if f not in ('proof', 'receipt'))
+        text_fields = {'profile_digest', 'creator_principal', 'creator_source', 'request_hash', 'fact_hash', 'receipt_hash'}
+        old, new = (', '.join(f'{prefix}.{f}' + (' COLLATE "C"' if f in text_fields else '') for f in scalar)
+                    for prefix in ('OLD', 'NEW'))
         guard = f'ROW({old}) IS DISTINCT FROM ROW({new})'
+        # jsonb numeric equality treats 1 and 1.0 as equal. Its normalized text
+        # retains the scale, which is part of this strict typed JSON contract.
+        guard += ' OR ' + ' OR '.join(
+            f'OLD.{field}::text COLLATE "C" IS DISTINCT FROM NEW.{field}::text COLLATE "C"'
+            for field in ('proof', 'receipt')
+        )
         guard += ' OR ' + ' OR '.join(
             f'(NEW.{f} IS NOT NULL AND NEW.{f} IS DISTINCT FROM OLD.{f})' for f in NULLABLE
         )

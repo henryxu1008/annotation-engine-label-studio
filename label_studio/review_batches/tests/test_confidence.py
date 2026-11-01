@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 from review_batches import confidence_contract as c
 from review_batches import confidence_priority as p
 from review_batches.models import ReviewBatch, ReviewConfidenceObservation
-from tasks.models import ReviewDecision, Submission
+from tasks.models import Prediction, ReviewDecision, Submission, Task
 
 from .confidence_fixtures import ConfidenceFixtures
 
@@ -19,12 +19,16 @@ class TestConfidence(ConfidenceFixtures, APITestCase):
 
     def test_producer_exact_input_fact_and_no_business_writes(self):
         before = list(Submission.objects.values())
+        tasks_before = list(Task.objects.values())
+        predictions_before = list(Prediction.objects.values())
         result = self.publish(self.source)
         assert result.status_code == 201, result.data
         row = ReviewConfidenceObservation.objects.get()
         assert row.proof['subject']['submission_id'] == self.source.pk
         assert row.proof['input_hash'] == self.source_input(self.source).data['input_hash']
         assert list(Submission.objects.values()) == before and not ReviewDecision.objects.exists()
+        assert list(Task.objects.values()) == tasks_before
+        assert list(Prediction.objects.values()) == predictions_before
 
     def test_preview_two_sorts_three_materializations_no_private_publisher_projection(self):
         self.make_source(self.second_worker)

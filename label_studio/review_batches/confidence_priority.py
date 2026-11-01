@@ -560,6 +560,10 @@ def preview(request, pk, principal, actor, args):
 def create(request, pk, principal, args, expected, key, request_hash):
     try:
         return _create(request, pk, principal, args, expected, key, request_hash)
+    except APIException as exc:
+        if getattr(exc, 'display_context', {}).get('reason') == 'REVIEW_BATCH_EMPTY':
+            service.fail('REVIEW_BATCH_PREVIEW_CHANGED')
+        raise
     except IntegrityError as exc:
         name = getattr(getattr(exc.__cause__, 'diag', None), 'constraint_name', None)
         sqlite = 'UNIQUE constraint failed: review_batches_reviewbatch.project_id, review_batches_reviewbatch.idempotency_key'

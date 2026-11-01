@@ -67,7 +67,7 @@ class Command(BaseCommand):
             'version': 'synthetic-v1',
             'evaluator_id': 'synthetic-offline',
             'evaluator_version': '1',
-            'model_id': 'no-model-executed',
+            'model_id': 'no-model-executed-' + 'M' * 140,
             'model_artifact_sha256': 'a' * 64,
             'score_definition': c.SCORE_DEFINITION,
             'calibration_version': 'synthetic-v1',

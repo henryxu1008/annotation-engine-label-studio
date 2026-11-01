@@ -18,6 +18,7 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       const base = `/api/projects/${scope.id}/review-batches/`, name = `Confidence ${locale}`;
       const rejected = scope.sources[0], approved = scope.sources[1], self = scope.sources[4];
       let saved: number, frozenHash: string, original: any, newer: number, key: any, command: any, posts = 0;
+      let nativeRecoveryTrusted = false;
       const visit = (role: string) => {
         cy.loginAs(fixture.users[role].email, fixture.password, '/user/account/personal-info');
         cy.setUserLocale(locale); cy.visit(`/projects/${scope.id}/data`);
@@ -25,6 +26,12 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       };
       const open = () => cy.get('[data-testid="open-review-batches"]', { timeout: 30000 }).click();
       const stage = (name: string) => cy.task('confidenceStage', `${locale}: ${name}`);
+      visit('producer');
+      cy.request({ url: `/api/projects/${scope.id}/review-confidence-inputs/${rejected.id}/`,
+        qs: { profile_id: fixture.profile_id, profile_digest: fixture.profile_digest } }).then(({ body }) => {
+        expect(body.input_hash).to.eq(rejected.body.evaluated_input_hash);
+        expect(body.subject.revision).to.eq(1);
+      });
       visit('manager');
       cy.request(`/api/submissions/${rejected.id}/`).then(({ body }) => { original = body; });
       open();
@@ -52,10 +59,11 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       cy.contains('button', zh ? '创建／重试' : 'Create / retry').click();
       cy.wait('@confidenceCreate').its('response.statusCode').should('eq', 503);
       cy.get('[data-testid="review-priority-recover"]').should('be.focused').then(($button) => {
-        $button[0].addEventListener('click', (event) => { ($button[0] as any).nativeTrusted = event.isTrusted; });
+        $button[0].addEventListener('click', (event) => { nativeRecoveryTrusted = event.isTrusted; });
       });
       nativeEnter();
       cy.wait('@confidenceCreate').its('response.statusCode').should('eq', 200);
+      cy.then(() => expect(nativeRecoveryTrusted, 'trusted native Enter activation').to.eq(true));
       cy.contains('h3', name).scrollIntoView().should('be.visible');
       cy.then(() => cy.request(`${base}${saved}/`)).then(({ body }) => {
         expect(body.algorithm).to.eq('revision-confidence-ranked/v1'); expect(body.selected_count).to.eq(3);
@@ -64,6 +72,7 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       });
       cy.contains('button', zh ? '发起仲裁' : 'Start arbitration').should('not.exist');
       cy.viewport(390, 844);
+      cy.get('[data-testid="review-confidence-source"]').scrollIntoView().should('be.visible');
       cy.get('[data-testid="review-batches"]').should(($root) => {
         expect($root[0].scrollWidth).to.be.at.most($root[0].clientWidth + 2);
       });
@@ -119,6 +128,33 @@ describe('revision confidence V1 reuses the complete review workflow', () => {
       cy.request(`/api/submissions/${rejected.id}/`).then(({ body }) => {
         expect(body.result_hash).to.eq(original.result_hash); expect(body.result_snapshot).to.deep.eq(original.result_snapshot);
       });
+      visit('producer');
+      const producerUrl = `/api/projects/${scope.id}/review-confidence-observations/`;
+      let producerPosts = 0;
+      cy.intercept({ method: 'POST', pathname: new RegExp(`^${producerUrl.replace(/\/$/, '')}/?$`) }, (req) => {
+        producerPosts += 1;
+        expect(req.headers['idempotency-key']).to.eq(rejected.event);
+        expect(req.body).to.deep.eq(rejected.body);
+        req.continue((res) => {
+          expect(res.statusCode).to.eq(200); expect(res.body.replayed).to.eq(true);
+          if (producerPosts === 1) res.send({ statusCode: 503, body: { detail: 'Synthetic producer lost ACK' } });
+        });
+      }).as('producerOriginal');
+      cy.getCookie('csrftoken', { log: false }).then((cookie) => {
+        const send = () => cy.window().then((win) => win.fetch(producerUrl, { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': cookie!.value, 'Idempotency-Key': rejected.event },
+          body: JSON.stringify(rejected.body) }));
+        send().then((res) => expect(res.status).to.eq(503));
+        cy.wait('@producerOriginal');
+        send().then((res) => { expect(res.status).to.eq(200); return res.json(); }).then((receipt) => {
+          expect(receipt.replayed).to.eq(true); expect(receipt.submission_id).to.eq(rejected.id);
+        });
+        cy.wait('@producerOriginal');
+      });
+      stage('Machine HTTP original event recovered after lost ACK and reviewed source');
+      visit('manager');
+      cy.request({ method: 'POST', url: producerUrl, body: rejected.body, headers: { 'Idempotency-Key': rejected.event }, failOnStatusCode: false })
+        .its('status').should('eq', 403);
       cy.request(`/api/projects/${scope.id}/members/?limit=100`).then(({ body }) => {
         const member = (body.results ?? body).find((m: any) => m.user.id === fixture.users.reviewer.id);
         cy.request('DELETE', `/api/projects/${scope.id}/members/${member.id}/`);

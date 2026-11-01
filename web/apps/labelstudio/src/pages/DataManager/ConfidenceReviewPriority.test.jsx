@@ -13,6 +13,7 @@ import {
 } from "./confidenceReviewPriority";
 import { validBatchCapability, validBatchDetail, validBatchList } from "./reviewBatchResponses";
 import { ReviewBatches } from "./ReviewBatches";
+import { ReviewPrioritySummary } from "./ReviewPriority";
 
 const mockCallApi = jest.fn();
 jest.mock("../../providers/ApiProvider", () => ({ useAPI: () => ({ callApi: mockCallApi }) }));
@@ -219,6 +220,13 @@ it.each(["\u0085", "\u001c", "\u001d", "\u001e", "\u001f", "\u3000"])(
 it("preserves FEFF, which Python CharField does not strip", () => {
   expect(confidenceText("\ufeffConfidence\ufeff")).toBe("\ufeffConfidence\ufeff");
 });
+it("validates seed length in Unicode code points like the server", () => {
+  const value = clone(preview);
+  value.plan.rule.seed = "😀".repeat(128);
+  expect(validConfidencePreview(value, choice, 4)).toBe(true);
+  value.plan.rule.seed += "😀";
+  expect(validConfidencePreview(value, choice, 4)).toBe(false);
+});
 it.each([
   "profile",
   "score",
@@ -365,4 +373,76 @@ it("keeps confirmed creation distinct from a failed detail read", async () => {
   expect(writes()).toHaveLength(1);
   expect(view.container.textContent).toContain("9");
   view.finish();
+});
+
+it("a definite changed-preview rejection permits a fresh preview without UNKNOWN", async () => {
+  createResult = {
+    error: true,
+    response: { display_context: { reason: "REVIEW_BATCH_PREVIEW_CHANGED" } },
+    $meta: { ok: false, status: 409 },
+  };
+  const view = mount();
+  await choose();
+  fireEvent.click(screen.getByRole("button", { name: "Create / retry" }));
+  await waitFor(() => expect(screen.queryByTestId("review-batch-preview")).toBeNull());
+  expect(screen.queryByTestId("review-priority-recover")).toBeNull();
+  expect(screen.getByRole("button", { name: "Preview sampling" }).disabled).toBe(false);
+  expect(writes()).toHaveLength(1);
+  view.finish();
+});
+
+it("keeps the same UNKNOWN command after blur and ignores its late ACK", async () => {
+  let resolve;
+  createResult = () =>
+    new Promise((done) => {
+      resolve = done;
+    });
+  const view = mount();
+  await choose();
+  fireEvent.click(screen.getByRole("button", { name: "Create / retry" }));
+  await waitFor(() => expect(resolve).toBeDefined());
+  fireEvent(window, new Event("blur"));
+  await screen.findByTestId("review-priority-recover");
+  await act(async () => {
+    resolve(ack(writes()[0][1]));
+  });
+  expect(screen.queryByRole("heading", { name: "Frozen confidence" })).toBeNull();
+  createResult = (args) => Promise.resolve(ack(args));
+  fireEvent.click(screen.getByTestId("review-priority-recover"));
+  await screen.findByRole("heading", { name: "Frozen confidence" });
+  expect(writes()[0][1].body).toEqual(writes()[1][1].body);
+  expect(writes()[0][1].headers).toEqual(writes()[1][1].headers);
+  view.finish();
+});
+
+it("renders source labels as escaped text", async () => {
+  profiles = [{ ...profile, label: '<img src=x onerror="window.injected=1">', digest: hash }];
+  const view = mount();
+  fireEvent.click(await screen.findByLabelText("Prioritize low confidence revisions"));
+  expect(view.container.textContent).toContain("<img src=x");
+  expect(view.container.querySelector("img")).toBeNull();
+  view.finish();
+});
+
+it.each(["en-US", "zh-CN"])("states zero evidence and seeded fallback explicitly in %s", (locale) => {
+  const runtime = createLocaleRuntime(locale);
+  const Provider = runtime.provider;
+  const view = render(
+    <Provider>
+      <ReviewPrioritySummary
+        summary={{
+          kind: confidenceKind,
+          known_candidates: 0,
+          unknown_candidates: 2,
+          low_confidence_candidates: 0,
+          selected_low_confidence: 0,
+          uncovered_low_confidence: 0,
+          fallback_selected: 1,
+        }}
+      />
+    </Provider>,
+  );
+  expect(view.container.textContent).toContain(locale === "zh-CN" ? "置信证据覆盖为零" : "Confidence coverage is zero");
+  view.unmount();
+  runtime.destroy();
 });

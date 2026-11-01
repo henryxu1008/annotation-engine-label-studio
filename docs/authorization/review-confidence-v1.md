@@ -35,6 +35,9 @@ Second review, model execution/quality, host integration, activation and deploym
 - `label_studio/review_batches/tests/test_confidence.py`, `test_confidence_boundaries.py`,
   `test_confidence_budgets.py`, `test_confidence_acceptance.py`, `test_confidence_concurrency.py`:
   synthetic protocol, negative, byte/decoder and independent-connection regressions.
+- `label_studio/review_batches/tests/test_confidence_final_edges.py`: short-read streams,
+  strict rendered JSON types/keys/time, dynamic final authority, all frozen columns,
+  exact canonical/SQL boundary composition and independent producer namespaces.
 - `web/apps/labelstudio/src/pages/DataManager/ConfidenceReviewPriority.test.jsx`:
   bilingual flow, malformed DTOs, late reads, stable owner and original-key recovery.
 - `label_studio/core/management/commands/seed_review_confidence_e2e.py`,
@@ -154,6 +157,13 @@ SQL-gate the total review reason bytes at 4 MiB and return the existing UserSimp
 with explicit scalar columns, including original rework source and successor pages. The
 old reason write semantics and old strategy wire remain intact. This is a scoped fix,
 not a claim that all legacy serializers are globally bounded.
+
+The confidence batch-context review response is also rendered inside its existing
+transaction, then strictly compared and checked against the same current actor and
+READ_WORK/REVIEW scope. Late response/authority changes roll back its decision.
+Strict rendered JSON distinguishes booleans, integers and floats; only fresh read
+replay ignores the changing as_of clock. The new PostgreSQL observation trigger compares
+proof/receipt jsonb text so equal-valued integer-to-float changes cannot bypass freezing.
 
 The shared authorization path still loads the complete current Project, including
 parsed configuration/control metadata. These inherited authorization-context fields

@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.utils.encoders import JSONEncoder
 from tasks.models import Submission
 
-from . import confidence_contract, confidence_priority, field_priority, guarded, service
+from . import confidence_contract, confidence_observations, confidence_priority, field_priority, guarded, service
 from .models import ReviewBatch
 
 
@@ -91,13 +91,12 @@ class BatchAPI(generics.GenericAPIView):
         if not protected:
             return result
 
-        def normalized(data):
+        def normalized(data, keep_time=False):
             value = json.loads(json.dumps(data, cls=JSONEncoder, ensure_ascii=False, allow_nan=False))
-            if isinstance(value, dict):
+            if isinstance(value, dict) and not keep_time:
                 value.pop('as_of', None)
             return value
 
-        expected = normalized(result.data)
         adapter = guarded.strategy(batch.plan) if batch is not None else ner_priority
         if batch is None and field_priority.available(pk, principal, actor):
             adapter = field_priority
@@ -105,6 +104,22 @@ class BatchAPI(generics.GenericAPIView):
             getattr(self, '_confidence_page', False) or (capability and 'can_read_confidence_priority' in result.data)
         ):
             adapter = confidence_priority
+        expected = normalized(result.data)
+        confidence_read = adapter is confidence_priority
+        render_expected = normalized(result.data, keep_time=True) if confidence_read else expected
+
+        def same(left, right):
+            if adapter is confidence_priority:
+                return confidence_observations.strict_json(left) == confidence_observations.strict_json(right)
+            return left == right
+
+        def parsed():
+            return (
+                confidence_observations.rendered_json(result.content)
+                if adapter is confidence_priority
+                else json.loads(result.content)
+            )
+
         adapter.bounded(expected)
         result.accepted_renderer = JSONRenderer()
         result.accepted_media_type = 'application/json'
@@ -119,7 +134,9 @@ class BatchAPI(generics.GenericAPIView):
                 ),
                 422,
             )
-        if normalized(json.loads(result.content)) != expected or normalized(result.data) != expected:
+        if not same(normalized(parsed(), keep_time=confidence_read), render_expected) or not same(
+            normalized(result.data, keep_time=confidence_read), render_expected
+        ):
             service.fail('REVIEW_PRIORITY_REPRESENTATION_CHANGED')
         current, current_actor = resolve_actor(request)
         if current != principal or current_actor.pk != actor.pk:
@@ -129,9 +146,11 @@ class BatchAPI(generics.GenericAPIView):
             fresh = self.get(request, pk, **(params or {}))
         finally:
             self._ner_verifying = False
-        if normalized(fresh.data) != expected:
+        if not same(normalized(fresh.data), expected):
             service.fail('REVIEW_PRIORITY_READ_CHANGED')
-        if normalized(json.loads(result.content)) != expected or normalized(result.data) != expected:
+        if not same(normalized(parsed(), keep_time=confidence_read), render_expected) or not same(
+            normalized(result.data, keep_time=confidence_read), render_expected
+        ):
             service.fail('REVIEW_PRIORITY_REPRESENTATION_CHANGED')
         current, current_actor = resolve_actor(request)
         current_project, current_role, _ = service.guard(pk, current, current_actor)

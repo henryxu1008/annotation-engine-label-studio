@@ -185,7 +185,10 @@ export const validConfidencePreview = (r, choice, projectId) => {
       .object({
         rate: count.min(1).max(100),
         per_submitter: z.boolean(),
-        seed: z.string().min(1).max(128),
+        seed: z
+          .string()
+          .min(1)
+          .refine((value) => Array.from(value).length <= 128),
         package_ids: z.array(id).max(100),
         submitter_ids: z.array(id).max(100),
       })

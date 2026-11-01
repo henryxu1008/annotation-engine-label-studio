@@ -25,9 +25,16 @@ class ConfidenceJSONParser(BaseParser):
     media_type = 'application/json'
 
     def parse(self, stream, media_type=None, parser_context=None):
-        data = stream.read(c.MAX_BODY + 1)
-        if len(data) > c.MAX_BODY:
-            c.fail('TOO_LARGE', 422)
+        chunks, used = [], 0
+        while True:
+            chunk = stream.read(c.MAX_BODY + 1 - used)
+            if not chunk:
+                break
+            used += len(chunk)
+            if used > c.MAX_BODY:
+                c.fail('TOO_LARGE', 422)
+            chunks.append(chunk)
+        data = b''.join(chunks)
         try:
             return json.load(
                 io.StringIO(data.decode('utf-8')),
