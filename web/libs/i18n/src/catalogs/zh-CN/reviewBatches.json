@@ -371,5 +371,8 @@
   "priorityFieldBatch": "冻结字段批次",
   "priorityFieldBoundary": "使用一个既有冻结字段批次。格式差异也算冲突；缺失或全空依据为未知，抽审配额保持不变。",
   "priorityField": "字段",
-  "priorityFieldProvenance": "冻结字段依据批次 #{{id}}"
+  "priorityFieldProvenance": "冻结字段依据批次 #{{id}}",
+  "fieldHandoffTitle": "字段审核交接仲裁",
+  "fieldHandoffBoundary": "为这份冻结审核来源明确派发或关联独立字段仲裁。仲裁不会批准、返工或发布该提交。",
+  "fieldHandoffIntegrity": "历史仅记录关联；两侧原始来源核对通过后才显示字段证据。来源审核状态与仲裁状态分别保留。"
 }

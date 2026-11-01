@@ -5,9 +5,8 @@ from classification_disagreements import ner_arbitration as a
 from classification_disagreements import ner_batches as b
 from classification_disagreements.models import NerArbitrationDecision, NerArbitrationTask, NerBatch
 from django.conf import settings
-from django.db import connection, models
+from django.db import models
 from django.db.models import Case, F, Sum, Value, When, Window
-from django.db.models.expressions import RawSQL
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import NotFound
@@ -15,6 +14,7 @@ from tasks.models import ReviewDecision, Submission
 
 from . import ner_priority as p
 from . import service
+from .handoff_metadata import BoundedMetadata
 from .models import NerReviewArbitrationHandoff, ReviewBatch
 
 SCHEMA = 'review-ner-arbitration-handoff/v1'
@@ -38,56 +38,9 @@ def guard(pk, principal, actor, *, create=False, **options):
     return project, role
 
 
-class Metadata:
-    """Per-request distinct objects; SQL CASE gates precede JSON decoding."""
-
+class Metadata(BoundedMetadata):
     def __init__(self):
-        self.canonical = self.stored = 0
-        self.cache = {}
-
-    def add(self, key, value, stored):
-        if key in self.cache:
-            return
-        size = ner.bounded(value, MAX_METADATA)
-        if self.canonical + size > MAX_METADATA or self.stored + stored > MAX_STORED_METADATA:
-            error('BUDGET_EXCEEDED', 422)
-        self.canonical += size
-        self.stored += stored
-        self.cache[key] = value
-
-    def load(self, query, identifier, field, canonical, stored, *, lock=False, row_total=False):
-        key = (query.model._meta.db_table, identifier, field)
-        if key in self.cache:
-            return self.cache[key]
-        table = connection.ops.quote_name(query.model._meta.db_table)
-        column = table + '.' + connection.ops.quote_name(field)
-        sql = (
-            f'OCTET_LENGTH(CAST({column} AS TEXT))'
-            if connection.vendor == 'postgresql'
-            else f'LENGTH(CAST({column} AS BLOB))'
-        )
-        ceiling = min(stored, MAX_STORED_METADATA - self.stored)
-        gates = {'_handoff_size__lte': ceiling}
-        if row_total:
-            gates['_target_bytes__lte'] = MAX_STORED_METADATA - self.stored
-        query = query.annotate(_handoff_size=RawSQL(sql, [], output_field=models.BigIntegerField()))
-        query = query.annotate(
-            _handoff_value=Case(When(**gates, then=F(field)), default=Value(None), output_field=models.JSONField())
-        ).defer(field)
-        if lock:
-            query = query.select_for_update()
-        row = get_object_or_404(query, pk=identifier)
-        if type(row._handoff_size) is not int or row._handoff_size < 0 or row._handoff_size > ceiling:
-            error('BUDGET_EXCEEDED', 422)
-        if row_total and row._target_bytes > MAX_STORED_METADATA - self.stored:
-            error('BUDGET_EXCEEDED', 422)
-        value = row._handoff_value
-        ner.bounded(value, canonical)
-        # Cache stores the row to prevent accidental reload of a deferred field.
-        self.add(key, value, row._handoff_size)
-        setattr(row, field, value)
-        self.cache[key] = row
-        return row
+        super().__init__(MAX_METADATA, MAX_STORED_METADATA, ner.bounded, error)
 
 
 def review_batch(context, identifier, budget):
@@ -110,35 +63,7 @@ def analysis(context, identifier, budget, *, lock=False):
 
 
 def metadata_row(query, identifier, fields, budget, *, lock=False):
-    """Reserve every decoded field before dependent ledger validation reads more."""
-    query = a.guarded(query, fields[1:])
-    table = connection.ops.quote_name(query.model._meta.db_table)
-    measure = 'OCTET_LENGTH(CAST({} AS TEXT))' if connection.vendor == 'postgresql' else 'LENGTH(CAST({} AS BLOB))'
-    total = '+'.join(
-        'COALESCE(' + measure.format(table + '.' + connection.ops.quote_name(field)) + ',0)' for field in fields
-    )
-    query = query.annotate(_target_bytes=RawSQL(total, [], output_field=models.BigIntegerField()))
-    remaining = MAX_STORED_METADATA - budget.stored
-    for field in fields[1:]:
-        output = query.model._meta.get_field(field)
-        stored = a.JSON_LIMITS.get(field, (16 * 1024, 16 * 1024))[1]
-        query = query.annotate(
-            **{
-                f'_safe_{field}': Case(
-                    When(
-                        **{'_target_bytes__lte': remaining, f'_size_{field}__lte': stored},
-                        then=F(field),
-                    ),
-                    default=Value(None),
-                    output_field=output,
-                )
-            }
-        )
-    row = budget.load(query, identifier, fields[0], *a.JSON_LIMITS[fields[0]], lock=lock, row_total=True)
-    a.hydrate(row, fields)
-    for field in fields[1:]:
-        budget.add((row._meta.db_table, identifier, field), getattr(row, field), getattr(row, f'_size_{field}') or 0)
-    return row
+    return budget.row(query, identifier, fields, a.JSON_LIMITS, a.guarded, a.hydrate, lock=lock)
 
 
 def target(context, identifier, budget, *, lock=False):

@@ -81,7 +81,8 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const [assignee, setAssignee] = useState(""), [winner, setWinner] = useState(""), [reason, setReason] = useState("");
   const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); };
   const fetch = async (method, params, schema, body, headers) => {
-    const isHandoff = Object.prototype.hasOwnProperty.call(classificationReviewHandoff.methods, method);
+    const isHandoff = Object.prototype.hasOwnProperty.call(classificationReviewHandoff.methods, method)
+      || method === "reviewHandoffProvenance";
     if (isHandoff && !handoffTransport) throw new Error("Unsupported handoff type");
     const mapped = isHandoff ? { method: handoffTransport.methods[method], params, body }
       : adapter ? adapter.request(method, params, body) : { method, params, body };
@@ -104,8 +105,11 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     const capability = await fetch("classificationArbitrationCapability", {}, capsSchema);
     if (adapter && current()) {
       if (viewer.current && viewer.current !== capability.viewer_hash) {
-        forgetIdentity(capability.viewer_hash);
-        throw new Error("identity changed");
+        const original = pending.current;
+        if (!(original?.attempted && handoffTransport?.sameOwner?.(capability, original))) {
+          forgetIdentity(capability.viewer_hash);
+          throw new Error("identity changed");
+        }
       }
       viewer.current = capability.viewer_hash;
     }
@@ -141,6 +145,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
         throw new Error("retained input changed");
       }
       let provenance = null;
+      let acceptEvidence = true;
       if (handoffSource) {
         provenance = await fetch("reviewHandoffDetail", { batch: handoffSource.batch, handoff: handoffId.current }, handoffDetailSchema);
         if (!handoffTransport.scopeMatches(provenance, handoffSource, projectId) || provenance.id !== handoffId.current
@@ -149,12 +154,21 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
           || provenance.target.created_at !== detail.created_at || provenance.target.assignee_id !== detail.assignee_id
           || provenance.target.batch_id !== detail.batch_id
           || (provenance.available && (provenance.arbitration_status !== detail.status || provenance.arbitration_version !== detail.version))) throw new Error("handoff changed");
-        if (!provenance.available || (handoffTransport.kind === 'ner' && !detail.available)) {
+        if (handoffTransport.verifyProvenance) {
+          // B's evidence remains local until the final A/B metadata read succeeds.
+          const finalProof = await fetch("reviewHandoffProvenance", { batch: handoffSource.batch, handoff: handoffId.current });
+          acceptEvidence = handoffTransport.verifyProvenance(finalProof, detail, handoffSource, handoffId.current, projectId);
+        }
+        if (!provenance.available || (handoffTransport.maskUnavailableSource && !detail.available) || !acceptEvidence) {
+          acceptEvidence = false;
           Object.assign(detail, { available: false, report: null, texts: [], decision: null, cancellation: null, can_decide: false, can_cancel: false });
           adapter?.maskUnavailable?.(detail);
         }
       }
-      if (current()) { adapter?.retainDetail?.(detail, projectId); setCaps(capability); setData(detail); setHandoffDetail(provenance); }
+      if (current()) {
+        if (acceptEvidence) adapter?.retainDetail?.(detail, projectId);
+        setCaps(capability); setData(detail); setHandoffDetail(provenance);
+      }
     });
   };
   const loadOrigin = (targetPage = 1) => {
@@ -205,8 +219,16 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
       if (adapter) {
         const authority = await fetch("classificationArbitrationCapability", {}, capsSchema);
         if (current !== generation.current) return;
-        if (authority.viewer_hash !== intent.viewerHash || authority.actor_id !== intent.actorId) {
+        const ownerBound = intent.action === "handoff" && typeof handoffTransport?.sameOwner === "function";
+        const sameOwner = ownerBound && handoffTransport.sameOwner(authority, intent);
+        if (authority.actor_id !== intent.actorId || (ownerBound && !sameOwner)
+          || (authority.viewer_hash !== intent.viewerHash && !(recovering && sameOwner))) {
           forgetIdentity(authority.viewer_hash); throw Object.assign(new Error("identity changed"), { identityChanged: true });
+        }
+        if (ownerBound) {
+          if (authority.can_handoff !== true) throw new Error("handoff authority withdrawn");
+          intent.ackViewerHash = authority.viewer_hash;
+          viewer.current = authority.viewer_hash;
         }
         if (!authority[{ create: "can_create", handoff: "can_create", decision: "can_decide", cancel: "can_cancel" }[intent.action]]) throw new Error("authority withdrawn");
       }
@@ -216,7 +238,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
         const result = await fetch("createReviewHandoff", { batch: handoffSource.batch, source: handoffSource.source },
           handoffReceiptSchema, intent.body, { "Idempotency-Key": intent.key });
         if (current !== generation.current) return;
-        if (!handoffTransport.scopeMatches(result, handoffSource, projectId) || result.viewer_hash !== intent.viewerHash || result.receipt.key !== intent.key
+        if (!handoffTransport.scopeMatches(result, handoffSource, projectId) || result.viewer_hash !== (intent.ackViewerHash ?? intent.viewerHash) || result.receipt.key !== intent.key
           || result.receipt.mode !== intent.body.mode || result.receipt.plan_hash !== intent.body.expected_plan_hash
           || result.input_set_hash !== intent.body.expected_input_set_hash
           || (intent.body.mode === "dispatch" && (result.receipt.arbitration_status_at_commit !== "pending" || result.receipt.arbitration_version_at_commit !== 1))
@@ -255,6 +277,8 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     if (busy || unknown || pending.current) return;
     send({ action, body, identifier, key: uuidv4(), attempted: false, inputHash: action === "create" ? roster?.input_set_hash : data?.input_set_hash,
       projectId, viewerHash: adapter ? caps?.viewer_hash : handoffContext?.viewer_hash, actorId: caps?.actor_id,
+      handoffAssigneeId: handoffContext?.existing_arbitration?.assignee_id,
+      handoffOwnerHash: caps?.handoff_owner_hash,
       winnerRevision: data?.inputs?.find((p) => p.submission_id === body.winner_submission_id)?.revision });
   };
   const beginHandoff = (binding) => {
@@ -263,7 +287,7 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
     const fields = target ? { [handoffTransport.linkField]: target, expected_arbitration_version: binding.expected_arbitration_version } : binding;
     begin("handoff", { mode: target ? "link_existing" : "dispatch",
       expected_plan_hash: handoffContext.expected_plan_hash, expected_input_set_hash: handoffContext.expected_input_set_hash,
-      ...(handoffTransport.kind === "ner" ? { expected_viewer_hash: handoffContext.viewer_hash } : {}), ...fields });
+      ...(handoffTransport.requiresViewerHash ? { expected_viewer_hash: handoffContext.viewer_hash } : {}), ...fields });
   };
   const refresh = () => view === "create" ? loadOrigin(rosterPage) : view === "detail" && selected.current ? openTask(selected.current) : loadList(page);
   const report = data?.available ? { ...data.report, manifest_hash: data.input_set_hash, observed_at: data.observed_at,

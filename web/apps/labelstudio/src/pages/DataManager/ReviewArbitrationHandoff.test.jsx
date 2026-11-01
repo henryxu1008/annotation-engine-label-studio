@@ -10,7 +10,7 @@ jest.mock("@humansignal/ui", () => {
   return { Button: ({ children, ...props }) => React.createElement("button", props, children) };
 });
 const hash = "a".repeat(64), viewer = "b".repeat(64);
-const source = { batch: 7, source: 11, pending: true };
+const source = { batch: 7, source: 11, pending: true, kind: "classification" };
 const batch = { id: 7, name: "Frozen review", role: "manager", viewer_hash: hash, plan_hash: hash,
   as_of: "now", algorithm: "classification-conflict-ranked/v1", rule: { rate: 100, seed: "fixed" }, candidate_count: 1, selected_count: 1,
   items: [{ submission_id: 11, revision: 1, selected: true, status: "pending", can_review: false, priority_reason: "frozen_conflict" }] };
@@ -77,4 +77,11 @@ it("fences a history response that arrives after blur", async () => {
   await act(async () => finish(history()));
   expect(screen.queryByRole("button", { name: "Prepare handoff" })).toBeNull();
   unmount(); runtime.destroy();
+});
+
+it.each([undefined, "unknown", "__proto__", "toString"])("rejects an unsupported handoff kind %s without a classification fallback", async (kind) => {
+  const view = mount(<ReviewArbitrationHandoff projectId={4} source={{ ...source, kind }} onBack={() => {}} />);
+  await screen.findByRole("alert");
+  expect(mockCall).not.toHaveBeenCalled();
+  view.unmount(); view.runtime.destroy();
 });

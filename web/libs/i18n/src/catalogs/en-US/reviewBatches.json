@@ -371,5 +371,8 @@
   "priorityFieldBatch": "Frozen field batch",
   "priorityFieldBoundary": "Use one existing frozen field batch. Format differences also count as conflicts; missing or empty evidence is unknown. The quota stays unchanged.",
   "priorityField": "Fields",
-  "priorityFieldProvenance": "Frozen field evidence batch #{{id}}"
+  "priorityFieldProvenance": "Frozen field evidence batch #{{id}}",
+  "fieldHandoffTitle": "Field arbitration handoff",
+  "fieldHandoffBoundary": "Explicitly dispatch or link independent field arbitration for this frozen review source. Arbitration does not approve, rework or release the submission.",
+  "fieldHandoffIntegrity": "History records the association. Field evidence is shown only after both original sources are checked; the source review and arbitration states remain separate."
 }

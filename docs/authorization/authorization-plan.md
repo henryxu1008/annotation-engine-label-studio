@@ -1350,3 +1350,20 @@ full origins are validated server-side without enlarging Reviewer projections.
 The two-calculation rule applies to eligible
 successful evidence requests; ineligible preflight and partial failures report
 their actual work separately.
+
+### Frozen field review-to-arbitration handoff implementation (#84)
+
+See [field-review-handoff-v1.md](field-review-handoff-v1.md). The optional typed
+field parent ledger and routes reuse the existing field arbitration helpers,
+bounded snapshot pipeline and complete workspace. Shared predecode metadata
+loading is extracted from NER without changing its schemas or command hashes.
+Field writes keep exact nine-field pins, both complete frozen origins, independent
+organization arbitration authority, project-first locks and source-free original
+parent recovery. Successful evidence makes two calculations then current-source
+hydration; historical provenance is metadata-only and follows the B detail before
+display/cache acceptance. A stable current-Manager owner fingerprint permits
+same-owner viewer-salt recovery while actual identity changes discard old intent.
+Legacy classification/NER and standalone field detail wire remain compatible.
+Design-stage snapshots and future matrix requirements are separate from actual
+local evidence; hosted CI is NOT_RUN before publication. #81/#84 remain OPEN,
+Fork-only, with no Host/Core/deployment or retained Docker/#76/worktree operations.
