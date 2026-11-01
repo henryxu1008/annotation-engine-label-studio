@@ -1367,3 +1367,14 @@ Legacy classification/NER and standalone field detail wire remain compatible.
 Design-stage snapshots and future matrix requirements are separate from actual
 local evidence; hosted CI is NOT_RUN before publication. #81/#84 remain OPEN,
 Fork-only, with no Host/Core/deployment or retained Docker/#76/worktree operations.
+# Uploaded-media response lifetime regression
+
+The local field-handoff foundation regression exposed that the existing ranged
+reader does not forward the opened file's close method. Both authenticated
+uploaded-media responses now register the underlying file with Django's response
+resource closers, matching the existing private-export response pattern. Current
+actor/project checks, range handling, bytes and cache headers remain in their
+existing paths. `test_mapped_editor_uploaded_image_uses_actor_and_rechecks_revocation`
+asserts both the response and wrapped file close before temporary-media cleanup.
+This is an upgrade-sensitive adapter to the existing ranged-response dependency;
+it does not implement a new streaming or authorization policy.
