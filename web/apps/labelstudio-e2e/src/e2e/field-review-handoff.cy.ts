@@ -38,7 +38,7 @@ describe("frozen field review to arbitration handoff", () => {
       openReview();
       cy.contains("button", zh ? "抽中 · 待审核" : "Selected · pending").click();
       cy.get(`[data-handoff-source="${ids[0]}"]`).click();
-      cy.get('[data-testid="handoff-start"]').click();
+      cy.get('[data-testid="handoff-start"]').focus().type("{enter}");
       workspace().find("select").select(String(fixture.users.reviewer.id));
       cy.intercept({ method: "POST", pathname: new RegExp(`^${base}[0-9]+/sources/[0-9]+/field-arbitration-handoffs/?$`), times: 2 }, req => {
         if (++posts === 1) {
@@ -50,7 +50,7 @@ describe("frozen field review to arbitration handoff", () => {
           req.continue(res => { expect(res.statusCode).to.eq(200); expect(res.body.id).to.eq(saved.id); });
         }
       }).as("handoffWrite");
-      action("Confirm dispatch", "确认派发").click();
+      action("Confirm dispatch", "确认派发").focus().type("{enter}");
       cy.wait("@handoffWrite").its("response.statusCode").should("eq", 503);
       action("Back to handoff history", "返回交接历史").should("be.disabled");
       action("Refresh read-only view", "刷新只读视图").click();
@@ -106,6 +106,9 @@ describe("frozen field review to arbitration handoff", () => {
       cy.get('[data-testid="handoff-start"]').click();
       action("Confirm association", "确认关联").click();
       workspace().find('[data-testid="field-detail"]').should("exist");
+      workspace().should("contain.text", fixture.html_probe);
+      workspace().find('img[src="x"], script').should("not.exist");
+      cy.window().its("__fieldHandoffInjected").should("not.exist");
       transition("delete_review_origin");
       action("Refresh read-only view", "刷新只读视图").click();
       workspace().find('[data-testid="field-detail"]').should("not.exist");

@@ -417,36 +417,53 @@ it("keeps B evidence invisible until the final provenance request completes", as
   view.runtime.destroy();
 });
 
-it.each(["unavailable", "viewer", "handoff", "input", "evidence", "batch", "task", "version", "timeout"])(
-  "masks B answers for failed final provenance: %s",
-  async (failure) => {
-    mockCall.mockImplementation((method, options) => {
-      if (method !== "fieldReviewHandoffProvenance") return respondHandoff(method, options);
-      const value = provenance();
-      if (failure === "timeout") return Promise.reject(new Error("unknown read"));
-      if (failure === "unavailable")
-        return { ...value, provenance_status: "unavailable", reason: "source_unavailable", target: null };
-      if (failure === "viewer") value.viewer_hash = hash("d");
-      if (failure === "handoff") value.id += 1;
-      if (failure === "input") value.target.input_set_hash = hash("d");
-      if (failure === "evidence") value.target.task_evidence_hash = hash("d");
-      if (failure === "batch") value.target.field_batch_id += 1;
-      if (failure === "task") value.target.task_id += 1;
-      if (failure === "version") value.target.version += 1;
-      return value;
-    });
-    const view = mount("en-US", null, { handoffSource, initialTaskId: 7, initialHandoffId: 9 });
-    await waitFor(() => expect(screen.getByTestId("field-arbitrations").getAttribute("aria-busy")).toBe("false"));
-    expect(screen.queryByTestId("field-detail")).toBeNull();
-    expect(screen.queryByTestId("arbitration-decision")).toBeNull();
-    expect(screen.queryByRole("radio")).toBeNull();
-    expect(mockCall.mock.calls.some(([method]) => method.startsWith("create") || method.startsWith("resolve"))).toBe(
-      false,
-    );
-    view.unmount();
-    view.runtime.destroy();
-  },
-);
+it.each([
+  "unavailable",
+  "viewer",
+  "handoff",
+  "input",
+  "evidence",
+  "batch",
+  "task",
+  "target",
+  "status",
+  "version",
+  "timeout",
+])("masks B answers for failed final provenance: %s", async (failure) => {
+  mockCall.mockImplementation((method, options) => {
+    if (method !== "fieldReviewHandoffProvenance") return respondHandoff(method, options);
+    const value = provenance();
+    if (failure === "timeout") return Promise.reject(new Error("unknown read"));
+    if (failure === "unavailable")
+      return { ...value, provenance_status: "unavailable", reason: "source_unavailable", target: null };
+    if (failure === "viewer") value.viewer_hash = hash("d");
+    if (failure === "handoff") value.id += 1;
+    if (failure === "input") value.target.input_set_hash = hash("d");
+    if (failure === "evidence") value.target.task_evidence_hash = hash("d");
+    if (failure === "batch") value.target.field_batch_id += 1;
+    if (failure === "task") value.target.task_id += 1;
+    if (failure === "target") {
+      value.arbitration_id += 1;
+      value.target.id += 1;
+    }
+    if (failure === "status") {
+      value.target.status = "resolved";
+      value.target.version = 2;
+    }
+    if (failure === "version") value.target.version += 1;
+    return value;
+  });
+  const view = mount("en-US", null, { handoffSource, initialTaskId: 7, initialHandoffId: 9 });
+  await waitFor(() => expect(screen.getByTestId("field-arbitrations").getAttribute("aria-busy")).toBe("false"));
+  expect(screen.queryByTestId("field-detail")).toBeNull();
+  expect(screen.queryByTestId("arbitration-decision")).toBeNull();
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(mockCall.mock.calls.some(([method]) => method.startsWith("create") || method.startsWith("resolve"))).toBe(
+    false,
+  );
+  view.unmount();
+  view.runtime.destroy();
+});
 
 it("does not poison field retention when B succeeds but provenance fails", async () => {
   let accepted = false;
@@ -483,42 +500,101 @@ it("drops a late provenance response after blur without rendering or retaining e
   view.runtime.destroy();
 });
 
-it.each(["schema", "key", "actor", "viewer", "request", "assignee", "cost", "origin", "version"])(
-  "recovers the original command after a contradictory %s ACK",
-  async (failure) => {
-    let writes = 0;
-    mockCall.mockImplementation(async (method, options) => {
-      if (method !== "createFieldReviewHandoff") return respondHandoff(method, options);
-      const value = await reply(options, writes++ > 0);
-      if (writes > 1) return value;
-      if (failure === "schema") value.schema = "review-ner-arbitration-handoff/v1";
-      if (failure === "key") value.receipt.key = "00000000-0000-4000-8000-000000000000";
-      if (failure === "actor") value.actor_id += 1;
-      if (failure === "viewer") value.viewer_hash = hash("d");
-      if (failure === "request") value.receipt.request_hash = hash("d");
-      if (failure === "assignee") value.assignee_id += 1;
-      if (failure === "cost") value.processing_cost = cost(false);
-      if (failure === "origin") value.receipt.origin_hash = "bad";
-      if (failure === "version") value.receipt.arbitration_version_at_commit = 2;
-      return value;
-    });
-    const view = mount("en-US", null, { handoffSource });
-    await dispatch();
-    await screen.findByRole("button", { name: "Recover original command" });
-    expect(screen.queryByTestId("arbitration-saved")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh read-only view" }));
-    await waitFor(() => expect(screen.getByTestId("field-arbitrations").getAttribute("aria-busy")).toBe("false"));
-    expect(writes).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Recover original command" }));
-    await screen.findByTestId("arbitration-saved");
-    await screen.findByTestId("field-detail");
-    const calls = mockCall.mock.calls.filter(([method]) => method === "createFieldReviewHandoff");
-    expect(calls[0][1].body).toEqual(calls[1][1].body);
-    expect(calls[0][1].headers).toEqual(calls[1][1].headers);
-    view.unmount();
-    view.runtime.destroy();
-  },
-);
+it.each([
+  "schema",
+  "kind",
+  "key",
+  "actor",
+  "viewer",
+  "request",
+  "plan",
+  "input",
+  "target",
+  "status",
+  "assignee",
+  "cost",
+  "origin",
+  "version",
+])("recovers the original command after a contradictory %s ACK", async (failure) => {
+  let writes = 0;
+  mockCall.mockImplementation(async (method, options) => {
+    if (method !== "createFieldReviewHandoff") return respondHandoff(method, options);
+    const value = await reply(options, writes++ > 0);
+    if (writes > 1) return value;
+    if (failure === "schema") value.schema = "review-ner-arbitration-handoff/v1";
+    if (failure === "kind") value.kind = "ner";
+    if (failure === "key") value.receipt.key = "00000000-0000-4000-8000-000000000000";
+    if (failure === "actor") value.actor_id += 1;
+    if (failure === "viewer") value.viewer_hash = hash("d");
+    if (failure === "request") value.receipt.request_hash = hash("d");
+    if (failure === "plan") value.receipt.plan_hash = hash("d");
+    if (failure === "input") value.input_set_hash = hash("d");
+    if (failure === "target") value.arbitration_id = 0;
+    if (failure === "status") {
+      value.receipt.arbitration_status_at_commit = "resolved";
+      value.receipt.arbitration_version_at_commit = 2;
+    }
+    if (failure === "assignee") value.assignee_id += 1;
+    if (failure === "cost") value.processing_cost = cost(false);
+    if (failure === "origin") value.receipt.origin_hash = "bad";
+    if (failure === "version") value.receipt.arbitration_version_at_commit = 2;
+    return value;
+  });
+  const view = mount("en-US", null, { handoffSource });
+  await dispatch();
+  await screen.findByRole("button", { name: "Recover original command" });
+  expect(screen.queryByTestId("arbitration-saved")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh read-only view" }));
+  await waitFor(() => expect(screen.getByTestId("field-arbitrations").getAttribute("aria-busy")).toBe("false"));
+  expect(writes).toBe(1);
+  fireEvent.click(screen.getByRole("button", { name: "Recover original command" }));
+  await screen.findByTestId("arbitration-saved");
+  await screen.findByTestId("field-detail");
+  const calls = mockCall.mock.calls.filter(([method]) => method === "createFieldReviewHandoff");
+  expect(calls[0][1].body).toEqual(calls[1][1].body);
+  expect(calls[0][1].headers).toEqual(calls[1][1].headers);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it("retains the original link command when a positive target ID is contradicted by the ACK", async () => {
+  state = "resolved";
+  let writes = 0;
+  mockCall.mockImplementation(async (method, options) => {
+    if (method === "fieldReviewHandoffContext") return { ...context(), existing_arbitration: meta() };
+    if (method !== "createFieldReviewHandoff") return respondHandoff(method, options);
+    const value = await reply(options, writes++ > 0);
+    if (writes === 1) value.arbitration_id += 1;
+    return value;
+  });
+  const view = mount("en-US", null, { handoffSource });
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm association" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Recover original command" }));
+  await screen.findByTestId("arbitration-saved");
+  const calls = mockCall.mock.calls.filter(([method]) => method === "createFieldReviewHandoff");
+  expect(calls[0][1].body).toEqual(calls[1][1].body);
+  expect(calls[0][1].headers).toEqual(calls[1][1].headers);
+  view.unmount();
+  view.runtime.destroy();
+});
+
+it("treats a rolled-back named unique conflict as a definite rejection", async () => {
+  mockCall.mockImplementation((method, options) =>
+    method === "createFieldReviewHandoff"
+      ? {
+          $meta: { ok: false, status: 409 },
+          response: { display_context: { reason: "REVIEW_FIELD_HANDOFF_UNIQUE_CONFLICT" } },
+        }
+      : respondHandoff(method, options),
+  );
+  const view = mount("en-US", null, { handoffSource });
+  await dispatch();
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "Recover original command" })).toBeNull();
+  expect(screen.queryByTestId("arbitration-saved")).toBeNull();
+  view.unmount();
+  view.runtime.destroy();
+});
 
 it("keeps command hashes compatible with server canonical JSON without SubtleCrypto", async () => {
   const nodeCrypto = require("crypto");

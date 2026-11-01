@@ -67,6 +67,12 @@ Actor/answer/status fields reject. The typed command hash includes route IDs and
 the full canonical body. A fresh dispatch uses a separate server-private child
 UUID with the original field create hash. Target and association commit together
 or both roll back through render/final validation; no nested HTTP calls occur.
+After transaction rollback, only the named parent-key, association-binding,
+child-create-key and active-field-input unique constraints map to an explicit
+`REVIEW_FIELD_HANDOFF_UNIQUE_CONFLICT` 409. PostgreSQL constraint names and
+SQLite exact unique-column sets are allowlisted; unrelated database failures
+retain their original handling. The client treats this proven rollback as a
+definite rejection, while transport uncertainty still retains the original key.
 
 Under current write authority, original parent recovery validates the fixed
 local proof, owner/provider/actor, route/body/key before live source, CAS,

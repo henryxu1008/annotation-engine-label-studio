@@ -161,6 +161,7 @@ export const fieldReviewHandoff = {
         "INPUT_SET_CHANGED",
         "ASSIGNEE_UNAVAILABLE",
         "DUPLICATE_ACTIVE",
+        "UNIQUE_CONFLICT",
         "ORIGIN_CHANGED",
         "ORIGIN_INVALID",
         "LEDGER_INVALID",

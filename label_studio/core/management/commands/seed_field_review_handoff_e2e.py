@@ -22,6 +22,9 @@ from .seed_field_e2e import source
 from .seed_field_review_priority_e2e import TEXT
 
 SCHEMA = 'field-review-handoff-e2e/v1'
+HTML_PROBE = (
+    '<img src=x onerror="window.__fieldHandoffInjected=true"><script>window.__fieldHandoffInjected=true</script>'
+)
 
 
 class Command(BaseCommand):
@@ -52,6 +55,7 @@ class Command(BaseCommand):
         call_command('seed_field_review_priority_e2e', output=str(output), stdout=self.stdout)
         fixture = json.loads(output.read_text(encoding='utf-8'))
         fixture['schema'] = SCHEMA
+        fixture['html_probe'] = HTML_PROBE
         for scope in fixture['projects'].values():
             project = Project.objects.get(
                 pk=scope['id'],
@@ -70,7 +74,7 @@ class Command(BaseCommand):
             scope['cases']['empty_winner'] = {'task': task.pk, 'sources': rows}
             task = Task.objects.create(project=project, data={'text': TEXT})
             guarded = []
-            for name, values in (('a', ('Original', 'City', '001')), ('b', ('Other', 'City', '001'))):
+            for name, values in (('a', (HTML_PROBE, 'City', '001')), ('b', ('Other', 'City', '001'))):
                 user = User.objects.get(pk=fixture['users'][name]['id'])
                 row = source(project, task, user, values)
                 row.annotation.project = project

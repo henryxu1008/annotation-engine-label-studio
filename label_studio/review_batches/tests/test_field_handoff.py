@@ -254,8 +254,18 @@ class TestFieldHandoff(FieldHandoffFixtures, APITestCase):
         result = self.handoff()
         assert result.status_code == 201, result.data
         self.client.force_authenticate(self.reviewer)
-        with patch.object(field_api, 'load', side_effect=AssertionError('Self cohort must not load')):
+        original = JSONField.from_db_value
+
+        def decoder(field, value, *args):
+            if isinstance(value, str) and (h.SCHEMA in value or a.SCHEMA in value):
+                raise AssertionError('Self cohort must be excluded before proof or target decode')
+            return original(field, value, *args)
+
+        with patch.object(field_api, 'load', side_effect=AssertionError('Self cohort must not load')), patch.object(
+            JSONField, 'from_db_value', decoder
+        ):
             hidden = self.client.get(self.handoff_url)
+            assert self.handoff_detail(result.data['id']).status_code == 404
         assert hidden.status_code == 200 and hidden.data['count'] == 0
         assert self.handoff_detail(result.data['id']).status_code == 404
         assert self.client.get(self.context_url).status_code == 404
@@ -393,9 +403,12 @@ class TestFieldHandoff(FieldHandoffFixtures, APITestCase):
         self.write(third, ('', '', ''))
         self.refreeze()
         value = self.handoff_body()
-        with patch.object(fields, 'normalize', wraps=fields.normalize) as counter:
+        with patch.object(fields, 'normalize', wraps=fields.normalize) as counter, patch.object(
+            fields, 'equal', wraps=fields.equal
+        ) as equality:
             r = self.handoff(value)
         assert r.status_code == 201 and counter.call_count == 18, r.data
+        assert equality.call_count == 36
         target = FieldArbitrationTask.objects.get()
         self.client.force_authenticate(self.independent)
         saved = self.arbitrate(target)

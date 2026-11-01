@@ -6,10 +6,37 @@ from access_control.project_operations import ORGANIZE_FIELD_ARBITRATION, lock_p
 from classification_disagreements import field_api, fields
 from classification_disagreements import field_arbitration as a
 from classification_disagreements import field_arbitration_api as api
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 
 from . import field_handoff as h
+
+
+def unique_conflict(exc):
+    """Recognize only this command's named uniqueness fences after rollback."""
+    constraints = {
+        'field_handoff_project_key_unique': (h.FieldReviewArbitrationHandoff, ('project', 'idempotency_key')),
+        'field_handoff_binding_unique': (
+            h.FieldReviewArbitrationHandoff,
+            ('project', 'review_batch_id_frozen', 'submission_id_frozen', 'arbitration_id_frozen'),
+        ),
+        'field_arb_project_create_key_unique': (h.FieldArbitrationTask, ('project', 'idempotency_key')),
+        'field_arb_active_input_unique': (h.FieldArbitrationTask, ('project', 'task_id_frozen', 'input_set_hash')),
+    }
+    cause = exc.__cause__
+    if getattr(cause, 'sqlstate', None) == '23505':
+        return getattr(getattr(cause, 'diag', None), 'constraint_name', None) in constraints
+    if getattr(cause, 'sqlite_errorcode', None) == 2067:
+        prefix = 'UNIQUE constraint failed: '
+        message = str(cause)
+        if not message.startswith(prefix):
+            return False
+        columns = tuple(message[len(prefix) :].split(', '))
+        return any(
+            columns == tuple(model._meta.db_table + '.' + model._meta.get_field(name).column for name in names)
+            for model, names in constraints.values()
+        )
+    return False
 
 
 def command(request):
@@ -38,6 +65,8 @@ def command(request):
 
 class HandoffAPI(api.ArbitrationAPI):
     def handle_exception(self, exc):
+        if isinstance(exc, IntegrityError) and unique_conflict(exc):
+            exc = fields.Error('REVIEW_FIELD_HANDOFF_UNIQUE_CONFLICT', 409)
         if isinstance(exc, fields.Error) and not exc.code.startswith('REVIEW_FIELD_HANDOFF_'):
             suffix = exc.code.removeprefix('FIELD_ARBITRATION_').removeprefix('FIELD_BATCH_').removeprefix('FIELD_')
             suffix = {'TOO_LARGE': 'BUDGET_EXCEEDED', 'MANIFEST_INVALID': 'ORIGIN_INVALID'}.get(suffix, suffix)
