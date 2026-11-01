@@ -3,12 +3,13 @@ import { v4 as uuidv4 } from "uuid";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { validFieldAck } from "./fieldReviewPriority";
+import { confidenceAlgorithm, confidenceMarker, confidenceSummary, confidenceText, isConfidence, validConfidenceAck } from "./confidenceReviewPriority";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReworkComparison } from "./ReworkComparison";
 import { ReviewArbitrationHandoff } from "./ReviewArbitrationHandoff";
-import { ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview, isBoundedPriority, priorityCapability } from "./ReviewPriority";
+import { ReviewConfidenceSource, ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview, isBoundedPriority, priorityCapability } from "./ReviewPriority";
 import { batchProgress, filterBatchItems } from "./reviewBatchProgress";
 import { validBatchCapability, validBatchDetail, validBatchList } from "./reviewBatchResponses";
 import "./ReviewBatches.scss";
@@ -18,7 +19,9 @@ import "./ReviewBatches.scss";
 const failed = (r) => !r || r.error || r.$meta?.ok === false || typeof r.status === "number";
 const failedDetail = (r, id) => failed(r) || !validBatchDetail(r, id);
 const priorityViewMatches = (r, capability) => {
-  const permission = r?.algorithm === "field-conflict-ranked/v1" ? "can_read_field_priority"
+  if (confidenceMarker(r) && r.algorithm !== confidenceAlgorithm) return false;
+  const permission = r?.algorithm === confidenceAlgorithm ? "can_read_confidence_priority"
+    : r?.algorithm === "field-conflict-ranked/v1" ? "can_read_field_priority"
     : r?.algorithm === "ner-conflict-ranked/v1" ? "can_read_ner_priority"
     : r?.algorithm === "classification-conflict-ranked/v1" ? "can_read_priority" : null;
   return !permission || (capability?.[permission] === true && typeof r.viewer_hash === "string"
@@ -26,6 +29,8 @@ const priorityViewMatches = (r, capability) => {
 };
 const code = (r) => r?.response?.display_context?.reason ?? r?.display_context?.reason;
 const priorityRejection = (r) => ({
+  REVIEW_CONFIDENCE_TOO_LARGE: 422, REVIEW_CONFIDENCE_PROOF_INVALID: 409,
+  REVIEW_CONFIDENCE_UNAVAILABLE: 403, REVIEW_CONFIDENCE_AUTHORITY_CHANGED: 403,
   REVIEW_BATCH_PREVIEW_CHANGED: 409, REVIEW_PRIORITY_MANIFEST_CHANGED: 409,
   REVIEW_PRIORITY_SOURCE_UNAVAILABLE: 409, CLASSIFICATION_BATCH_SOURCE_INVALID: 409,
   CLASSIFICATION_BATCH_MANIFEST_INVALID: 409, REVIEW_BATCH_TOO_LARGE: 422,
@@ -77,6 +82,9 @@ export const ReviewBatches = ({ projectId }) => {
   const [canPrioritize, setCanPrioritize] = useState(false);
   const [canPrioritizeNer, setCanPrioritizeNer] = useState(false);
   const [canPrioritizeField, setCanPrioritizeField] = useState(false);
+  const [confidenceProfiles, setConfidenceProfiles] = useState([]);
+  const [canPrioritizeConfidence, setCanPrioritizeConfidence] = useState(false);
+  const owner = useRef(null);
   const viewer = useRef(null);
   const nerScope = useRef(false);
   const nerConfirmed = useRef(false);
@@ -101,19 +109,31 @@ export const ReviewBatches = ({ projectId }) => {
   const [filter, setFilter] = useState("all");
 
   nerScope.current = isBoundedPriority(priorityChoice) || isBoundedPriority(creation.current?.body?.priority)
-    || ["ner-conflict-ranked/v1", "field-conflict-ranked/v1"].includes(detail?.algorithm) || nerConfirmed.current;
-  const canUsePriority = priorityChoice?.kind === "field_conflict" ? canPrioritizeField : isBoundedPriority(priorityChoice) ? canPrioritizeNer : canPrioritize;
+    || ["ner-conflict-ranked/v1", "field-conflict-ranked/v1", confidenceAlgorithm].includes(detail?.algorithm) || nerConfirmed.current;
+  const canUsePriority = isConfidence(priorityChoice) ? canPrioritizeConfidence : priorityChoice?.kind === "field_conflict" ? canPrioritizeField : isBoundedPriority(priorityChoice) ? canPrioritizeNer : canPrioritize;
   const acceptViewer = (capability, forceNer = false) => {
     const next = capability?.viewer_hash;
+    const intent = creation.current;
+    const confidenceIntent = isConfidence(intent?.body?.priority);
+    const nextOwner = capability?.confidence_owner_hash;
+    const ownerChanged = (confidenceIntent || isConfidence(priorityChoice)) && owner.current !== null && owner.current !== nextOwner;
+    if (!ownerChanged && confidenceIntent && intent.unknown && capability.can_recover_confidence === true
+      && nextOwner === intent.ownerHash && typeof next === "string" && /^[0-9a-f]{64}$/.test(next)) {
+      if (viewer.current !== next) { setDetail(null); setBatches([]); setReviewing(false); setPreview(null); }
+      viewer.current = next; owner.current = nextOwner; intent.viewerHash = next;
+      return true;
+    }
     if ((forceNer || nerScope.current) && (typeof next !== "string" || !/^[0-9a-f]{64}$/.test(next)
-      || (viewer.current && viewer.current !== next))) {
+      || (viewer.current && viewer.current !== next) || ownerChanged)) {
       creation.current = null; nerConfirmed.current = false; setCreationUnknown(false); setCreatedNotice(null);
       setPriorityChoice(null); setPreview(null); setDetail(null); setBatches([]); setReviewing(false);
       setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setCanPrioritizeField(false);
+      setCanPrioritizeConfidence(false); setConfidenceProfiles([]); owner.current = nextOwner ?? null;
       if (typeof next === "string") viewer.current = next;
       return false;
     }
     if (typeof next === "string") viewer.current = next;
+    owner.current = nextOwner ?? null;
     return true;
   };
   const load = useCallback(async (id = null, targetPage = 1, targetFilter = "all") => {
@@ -132,8 +152,8 @@ export const ReviewBatches = ({ projectId }) => {
       ]);
       if (current !== generation.current) return;
       if (!failed(capability) && validBatchCapability(capability)
-        && !acceptViewer(capability, ["ner-conflict-ranked/v1", "field-conflict-ranked/v1"].includes(selected?.algorithm))) throw new Error("identity changed");
-      if (failed(list) || !validBatchList(list) || failed(capability) || !validBatchCapability(capability)
+        && !acceptViewer(capability, ["ner-conflict-ranked/v1", "field-conflict-ranked/v1", confidenceAlgorithm].includes(selected?.algorithm))) throw new Error("identity changed");
+      if (failed(list) || !validBatchList(list, projectId, capability) || failed(capability) || !validBatchCapability(capability)
         || (id !== null && (failedDetail(selected, id) || !priorityViewMatches(selected, capability)))) {
         setCanCreate(false); setCanPrioritize(false); setCanPrioritizeNer(false); setCanPrioritizeField(false); setPreview(null);
         if (!creation.current?.unknown) creation.current = null;
@@ -142,6 +162,7 @@ export const ReviewBatches = ({ projectId }) => {
       setBatches(list.results?.batches ?? []);
       setCanCreate(capability.can_create === true);
       setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true); setCanPrioritizeField(capability.can_prioritize_field === true);
+      setCanPrioritizeConfidence(capability.can_prioritize_confidence === true); setConfidenceProfiles(capability.confidence_profiles ?? []);
       setCanReadHandoffs(capability.can_read_handoffs === true);
       setCanReadNerHandoffs(capability.can_read_ner_handoffs === true);
       setCanReadFieldHandoffs(capability.can_read_field_handoffs === true);
@@ -168,12 +189,13 @@ export const ReviewBatches = ({ projectId }) => {
       ]);
       if (!isCurrent()) return;
       if (!failed(capability) && validBatchCapability(capability)
-        && !acceptViewer(capability, result?.algorithm === "ner-conflict-ranked/v1")) throw new Error("identity changed");
+        && !acceptViewer(capability, ["ner-conflict-ranked/v1", "field-conflict-ranked/v1", confidenceAlgorithm].includes(result?.algorithm))) throw new Error("identity changed");
       if (failedDetail(result, id) || failed(capability) || !validBatchCapability(capability)
         || !priorityViewMatches(result, capability)) throw new Error("detail unavailable");
       setDetail(result);
       setCanCreate(capability.can_create === true);
       setCanPrioritize(capability.can_prioritize === true); setCanPrioritizeNer(capability.can_prioritize_ner === true); setCanPrioritizeField(capability.can_prioritize_field === true);
+      setCanPrioritizeConfidence(capability.can_prioritize_confidence === true); setConfidenceProfiles(capability.confidence_profiles ?? []);
       setCanReadHandoffs(capability.can_read_handoffs === true);
       setCanReadNerHandoffs(capability.can_read_ner_handoffs === true);
       setCanReadFieldHandoffs(capability.can_read_field_handoffs === true);
@@ -189,19 +211,26 @@ export const ReviewBatches = ({ projectId }) => {
 
   useEffect(() => {
     setPreview(null); creation.current = null; setCreationUnknown(false); setCreatedNotice(null); setPriorityChoice(null);
-    viewer.current = null; nerConfirmed.current = false; setHandoff(null); handoffReturn.current = null; load();
+    viewer.current = null; owner.current = null; nerConfirmed.current = false; setHandoff(null); handoffReturn.current = null; load();
     return () => { generation.current += 1; selection.current = null; };
   }, [load]);
 
   const change = (key, value) => {
     if (creation.current?.unknown) return;
+    generation.current += 1; setBusy(false);
     setForm((prev) => ({ ...prev, [key]: value }));
     setPreview(null); creation.current = null; setError("");
   };
   useEffect(() => {
     if (canUsePriority || creation.current?.unknown || priorityChoice === null) return;
     setPriorityChoice(null); setPreview(null); creation.current = null;
-  }, [canPrioritize, canPrioritizeNer, canPrioritizeField, priorityChoice]);
+  }, [canPrioritize, canPrioritizeNer, canPrioritizeField, canPrioritizeConfidence, priorityChoice]);
+  useEffect(() => {
+    if (!isConfidence(priorityChoice) || creation.current?.unknown || !priorityChoice.profile_id) return;
+    if (!confidenceProfiles.some((p) => p.profile_id === priorityChoice.profile_id && p.digest === priorityChoice.profile_digest)) {
+      generation.current += 1; creation.current = null; setPreview(null); setPriorityChoice(null); setBusy(false);
+    }
+  }, [confidenceProfiles, priorityChoice]);
   const requestPreview = async () => {
     if (creation.current?.unknown) return;
     if (priorityChoice !== null && (!canUsePriority || !validPriorityChoice(priorityChoice))) { setError("priorityChoose"); return; }
@@ -210,6 +239,10 @@ export const ReviewBatches = ({ projectId }) => {
     try {
       const ids = (value) => value.trim() ? value.split(/[\s,]+/).map(Number) : [];
       const body = { ...form, rate: Number(form.rate), package_ids: ids(form.package_ids), submitter_ids: ids(form.submitter_ids) };
+      if (isConfidence(priorityChoice)) {
+        body.name = confidenceText(body.name); body.seed = confidenceText(body.seed);
+        body.package_ids.sort((a, b) => a - b); body.submitter_ids.sort((a, b) => a - b);
+      }
       if (priorityChoice !== null) body.priority = priorityChoice;
       let expectedViewer = null;
       if (isBoundedPriority(body.priority)) {
@@ -225,12 +258,14 @@ export const ReviewBatches = ({ projectId }) => {
         if (current !== generation.current) return;
         if (failed(capability) || !validBatchCapability(capability) || !acceptViewer(capability, true)
           || capability.viewer_hash !== expectedViewer || capability[priorityCapability(body.priority)] !== true
-          || (!failed(result) && result.viewer_hash !== expectedViewer)) throw new Error("authority changed");
+          || (!failed(result) && result.viewer_hash !== expectedViewer)
+          || (isConfidence(body.priority) && result.owner_hash !== capability.confidence_owner_hash)) throw new Error("authority changed");
       }
       if (current !== generation.current) return;
       if (failed(result)) { setError(code(result) === "REVIEW_BATCH_TOO_LARGE" ? "tooLarge" : "previewFailed"); return; }
       if (body.priority && !validPriorityPreview(result, body.priority, projectId)) { setError("previewFailed"); return; }
-      creation.current = { body: { ...body, expected_plan_hash: result.plan_hash }, key: uuidv4(), viewerHash: expectedViewer, processingCost: result.processing_cost };
+      creation.current = { body: { ...body, expected_plan_hash: result.plan_hash }, key: uuidv4(), viewerHash: expectedViewer,
+        actorId: result.actor_id, ownerHash: result.owner_hash, processingCost: result.processing_cost };
       setPreview(result);
     } catch { if (current === generation.current) {
       setError("previewFailed");
@@ -239,7 +274,7 @@ export const ReviewBatches = ({ projectId }) => {
     finally { if (current === generation.current) setBusy(false); }
   };
   const create = async () => {
-    if (!creation.current) return;
+    if (!creation.current || creation.current.inFlight) return;
     const intent = creation.current;
     let posted = false;
     intent.inFlight = true;
@@ -251,7 +286,8 @@ export const ReviewBatches = ({ projectId }) => {
         if (current !== generation.current) return;
         if (failed(capability) || !validBatchCapability(capability) || !acceptViewer(capability, true)
           || capability.viewer_hash !== intent.viewerHash || capability.can_create !== true
-          || capability[priorityCapability(intent.body.priority)] !== true) throw new Error("authority changed");
+          || capability[isConfidence(intent.body.priority) && intent.unknown ? "can_recover_confidence" : priorityCapability(intent.body.priority)] !== true
+          || (isConfidence(intent.body.priority) && capability.confidence_owner_hash !== intent.ownerHash)) throw new Error("authority changed");
       }
       posted = true;
       const result = await call.current("reviewBatchCreate", { params: { pk: projectId },
@@ -271,6 +307,7 @@ export const ReviewBatches = ({ projectId }) => {
       if (intent.body.priority && (!Number.isSafeInteger(result.id) || result.id < 1
         || result.idempotency_key !== intent.key || result.plan_hash !== intent.body.expected_plan_hash
         || (isBoundedPriority(intent.body.priority) && result.viewer_hash !== intent.viewerHash)
+        || (isConfidence(intent.body.priority) && !validConfidenceAck(result, intent, projectId))
         || (intent.body.priority.kind === "field_conflict" && !validFieldAck(result, intent, projectId)))) {
         intent.unknown = true; setCreationUnknown(true); setError("priorityUnknownWrite"); return;
       }
@@ -321,7 +358,7 @@ export const ReviewBatches = ({ projectId }) => {
   const reviewEnabled = detail?.items.some((i) => i.can_review) ?? false;
   const detailContext = selection.current;
   const previewPriority = preview?.plan?.priority;
-  const previewSummary = previewPriority ? {
+  const previewSummary = isConfidence(previewPriority) ? confidenceSummary(preview.plan.candidates, previewPriority.evidence) : previewPriority ? {
     conflict_candidates: previewPriority.evidence.filter((e) => e.state === "conflict").length,
     selected_conflicts: preview.plan.candidates.filter((c) => c.selected
       && previewPriority.evidence.some((e) => e.submission_id === c.submission_id && e.state === "conflict")).length,
@@ -366,16 +403,20 @@ export const ReviewBatches = ({ projectId }) => {
       <label>{t("seed")}<input value={form.seed} onChange={(e) => change("seed", e.target.value)} /></label>
       <label>{t("packages")}<input value={form.package_ids} onChange={(e) => change("package_ids", e.target.value)} /></label>
       <label>{t("submitters")}<input value={form.submitter_ids} onChange={(e) => change("submitter_ids", e.target.value)} /></label>
-      {(canPrioritize || canPrioritizeNer || canPrioritizeField) && <ReviewPrioritySelector projectId={projectId}
-        kinds={[...(canPrioritize ? ["classification_conflict"] : []), ...(canPrioritizeNer ? ["ner_conflict"] : []), ...(canPrioritizeField ? ["field_conflict"] : [])]}
+      {(canPrioritize || canPrioritizeNer || canPrioritizeField || canPrioritizeConfidence) && <ReviewPrioritySelector projectId={projectId}
+        confidenceProfiles={confidenceProfiles}
+        kinds={[...(canPrioritize ? ["classification_conflict"] : []), ...(canPrioritizeNer ? ["ner_conflict"] : []), ...(canPrioritizeField ? ["field_conflict"] : []), ...(canPrioritizeConfidence ? ["revision_confidence"] : [])]}
         value={priorityChoice} onChange={(value) => {
         if (creation.current?.unknown) return;
+        generation.current += 1; setBusy(false);
         setPriorityChoice(value); setPreview(null); creation.current = null; setError("");
       }} />}
       <Button disabled={priorityChoice !== null && !validPriorityChoice(priorityChoice)} onClick={requestPreview}>{t("preview")}</Button>
       {preview && <div data-testid="review-batch-preview">
         <p>{t("sampleCount", { selected: preview.plan.candidates.filter((i) => i.selected).length, total: preview.plan.candidates.length })}</p>
         <code>{preview.plan_hash}</code>
+        <ReviewConfidenceSource source={previewPriority} />
+        {isConfidence(previewPriority) && <p>{t("actualRate", { rate: (100 * preview.plan.candidates.filter((i) => i.selected).length / preview.plan.candidates.length).toFixed(1) })}</p>}
         <ReviewPrioritySummary summary={previewSummary} />
         <Button onClick={create}>{t("create")}</Button>
       </div>}
@@ -390,14 +431,16 @@ export const ReviewBatches = ({ projectId }) => {
     {detail && <section>
       <h3>{detail.name}</h3>
       {detail.role === "reviewer" && <p>{t("visibleScope")}</p>}
-      {detail.role === "reviewer" && ["classification-conflict-ranked/v1", "ner-conflict-ranked/v1", "field-conflict-ranked/v1"].includes(detail.algorithm) && <p>{t("priorityReviewerScope")}</p>}
+      {detail.role === "reviewer" && ["classification-conflict-ranked/v1", "ner-conflict-ranked/v1", "field-conflict-ranked/v1", confidenceAlgorithm].includes(detail.algorithm) && <p>{t("priorityReviewerScope")}</p>}
       <p>{t("sampleCount", { selected: detail.selected_count, total: detail.candidate_count })}
         {" · "}{t("actualRate", { rate: detail.candidate_count ? (100 * detail.selected_count / detail.candidate_count).toFixed(1) : "—" })}</p>
       <code>{detail.plan_hash}</code>
       <p>{t("asOf", { time: detail.as_of })}</p>
       <p>{t("rule", { rate: detail.rule.rate, seed: detail.rule.seed, algorithm: detail.algorithm })}</p>
       <ReviewPrioritySummary summary={detail.priority_summary} />
-      {detail.priority_source && <p>{t(detail.algorithm === "field-conflict-ranked/v1" ? "priorityFieldProvenance" : detail.algorithm === "ner-conflict-ranked/v1" ? "priorityNerProvenance" : "priorityProvenance", { id: detail.priority_source.batch_id })} <code>{detail.priority_source.manifest_hash}</code></p>}
+      {detail.priority_source && (detail.algorithm === confidenceAlgorithm
+        ? <ReviewConfidenceSource source={detail.priority_source} />
+        : <p>{t(detail.algorithm === "field-conflict-ranked/v1" ? "priorityFieldProvenance" : detail.algorithm === "ner-conflict-ranked/v1" ? "priorityNerProvenance" : "priorityProvenance", { id: detail.priority_source.batch_id })} <code>{detail.priority_source.manifest_hash}</code></p>)}
       <dl className={cn("review-batches").elem("progress").toClassName()} data-testid="review-batch-progress">
         <div><dt>{t("selectedTotal")}</dt><dd>{progress.selected}</dd></div>
         <div><dt>{t("uncheckedTotal")}</dt><dd>{progress.unchecked}</dd></div>

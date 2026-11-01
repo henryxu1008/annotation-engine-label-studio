@@ -17,9 +17,8 @@ from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.utils.encoders import JSONEncoder
 from tasks.models import Submission
-from tasks.serializers import SubmissionSerializer
 
-from . import field_priority, guarded, service
+from . import confidence_contract, confidence_priority, field_priority, guarded, service
 from .models import ReviewBatch
 
 
@@ -76,11 +75,17 @@ class BatchAPI(generics.GenericAPIView):
             return result
         protected = batch is not None and guarded.is_plan(batch.plan)
         if collection:
-            protected = ReviewBatch.objects.filter(project_id=pk).filter(guarded.marker()).exists()
+            protected = (
+                bool(getattr(self, '_confidence_page', False))
+                or ReviewBatch.objects.filter(project_id=pk)
+                .filter(ner_priority.marker() | field_priority.marker())
+                .exists()
+            )
         if capability:
             protected = (
                 settings.ANNOTATION_FIELD_REVIEW_PRIORITY_ENABLED
                 or settings.ANNOTATION_NER_REVIEW_PRIORITY_ENABLED
+                or settings.ANNOTATION_REVIEW_CONFIDENCE_ENABLED
                 or bool(result.data.get('can_read_ner_priority'))
             )
         if not protected:
@@ -96,6 +101,10 @@ class BatchAPI(generics.GenericAPIView):
         adapter = guarded.strategy(batch.plan) if batch is not None else ner_priority
         if batch is None and field_priority.available(pk, principal, actor):
             adapter = field_priority
+        if batch is None and (
+            getattr(self, '_confidence_page', False) or (capability and 'can_read_confidence_priority' in result.data)
+        ):
+            adapter = confidence_priority
         adapter.bounded(expected)
         result.accepted_renderer = JSONRenderer()
         result.accepted_media_type = 'application/json'
@@ -103,7 +112,11 @@ class BatchAPI(generics.GenericAPIView):
         result.render()
         if len(result.content) > adapter.MAX_BYTES:
             service.fail(
-                'REVIEW_FIELD_PRIORITY_TOO_LARGE' if adapter is field_priority else 'REVIEW_NER_PRIORITY_TOO_LARGE',
+                'REVIEW_CONFIDENCE_TOO_LARGE'
+                if adapter is confidence_priority
+                else (
+                    'REVIEW_FIELD_PRIORITY_TOO_LARGE' if adapter is field_priority else 'REVIEW_NER_PRIORITY_TOO_LARGE'
+                ),
                 422,
             )
         if normalized(json.loads(result.content)) != expected or normalized(result.data) != expected:
@@ -126,6 +139,8 @@ class BatchAPI(generics.GenericAPIView):
             service.fail('REVIEW_PRIORITY_AUTHORITY_CHANGED', 403)
         if batch is not None and field_priority.is_plan(batch.plan):
             field_priority.read_guard(pk, current, current_actor, batch.plan)
+        if batch is not None and confidence_priority.is_plan(batch.plan):
+            confidence_priority.read_guard(pk, current, current_actor, batch.plan)
         if expected.get('viewer_hash') is not None:
             from . import priority
 
@@ -183,6 +198,12 @@ class CapabilityAPI(BatchAPI):
         data['can_read_field_priority'] = field_priority.available(pk, principal, actor)
         data['can_prioritize_ner'] = can_create and ner_priority.available(pk, principal, actor, create=True)
         data['can_read_ner_priority'] = ner_priority.available(pk, principal, actor)
+        if settings.ANNOTATION_REVIEW_CONFIDENCE_ENABLED:
+            try:
+                data.update(confidence_contract.capability((principal, actor, project, role)))
+            except APIException:
+                data.update(can_read_confidence_priority=False, can_prioritize_confidence=False)
+            confidence_contract.bounded(data, confidence_contract.MAX_CAPABILITY)
         data['can_read_field_handoffs'] = False
         data['can_field_handoff'] = False
         if settings.ANNOTATION_FIELD_REVIEW_ARBITRATION_HANDOFF_ENABLED:
@@ -236,6 +257,8 @@ class PreviewAPI(BatchAPI):
         args = service.payload(request)
         from . import ner_priority
 
+        if confidence_priority.is_selection(args.get('priority')):
+            return confidence_priority.preview(request, pk, principal, actor, args)
         if field_priority.is_selection(args.get('priority')):
             return field_priority.preview(request, pk, principal, actor, args)
         if ner_priority.is_selection(args.get('priority')):
@@ -272,10 +295,20 @@ class ListAPI(BatchAPI):
         _, current_role, _ = service.guard(pk, principal, actor)
         if current_role != role:
             raise PermissionDenied()
+        result = self.get_paginated_response({'role': role, 'batches': data})
+        if getattr(self, '_confidence_page', False):
+            from . import priority
+
+            result.data.update(
+                schema=confidence_contract.SCHEMA,
+                kind=confidence_contract.KIND,
+                project_id=project.pk,
+                viewer_hash=priority.viewer_hash(principal, actor, project, role),
+            )
         return self.finish_priority_read(
             request,
             pk,
-            self.get_paginated_response({'role': role, 'batches': data}),
+            result,
             principal,
             actor,
             role,
@@ -292,6 +325,8 @@ class ListAPI(BatchAPI):
         request_hash = service.digest({**args, 'expected_plan_hash': expected})
         from . import ner_priority
 
+        if confidence_priority.is_selection(args.get('priority')):
+            return confidence_priority.create(request, pk, principal, args, expected, key, request_hash)
         if field_priority.is_selection(args.get('priority')):
             return field_priority.create(request, pk, principal, args, expected, key, request_hash)
         if ner_priority.is_selection(args.get('priority')):
@@ -386,9 +421,16 @@ class QueueAPI(BatchAPI):
         )
 
         scoped = rows.order_by('pk')
-        page = self.paginate_queryset(scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        if confidence_priority.is_plan(batch.plan):
+            scoped = scoped.filter(pk__in=sources)
+        page_query = (
+            scoped.select_related(None).only('pk')
+            if confidence_priority.is_plan(batch.plan)
+            else (scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        )
+        page = self.paginate_queryset(page_query)
         page = self.bounded_priority_page(scoped, page, batch)
-        data = SubmissionSerializer(page, many=True, context={'request': request}).data
+        data = service.submission_serializer(batch)(page, many=True, context={'request': request}).data
         for item in data:
             service.check_representation(item, sources.get(item['id']))
         # Recheck materialized sources and live actor authority before exposing snapshots.
@@ -429,18 +471,26 @@ class ReworkAPI(BatchAPI):
             from . import priority
 
             priority.read_guard(pk, principal, actor, batch.plan)
-        original = service.rework_source(batch, source_id, actor, role)
+        original = service.rework_source(
+            batch, source_id, actor, role, for_serialization=confidence_priority.is_plan(batch.plan)
+        )
         rows = Submission.objects.filter(
             assignment_id=original.assignment_id, revision__gt=original.revision
         ).select_related('assignment__task', 'review__reviewer', 'submitted_by')
 
         scoped = rows.order_by('-revision', '-pk')
-        page = self.paginate_queryset(scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        page_query = (
+            scoped.select_related(None).only('pk')
+            if confidence_priority.is_plan(batch.plan)
+            else (scoped.defer('result_snapshot') if guarded.is_plan(batch.plan) else scoped)
+        )
+        page = self.paginate_queryset(page_query)
         page = self.bounded_priority_page(scoped, page, batch)
         for row in page:
             service.check_rework_revision(row, original, project.pk)
-        source_data = SubmissionSerializer(original, context={'request': request}).data
-        data = SubmissionSerializer(page, many=True, context={'request': request}).data
+        serializer = service.submission_serializer(batch)
+        source_data = serializer(original, context={'request': request}).data
+        data = serializer(page, many=True, context={'request': request}).data
         # Re-read after serialization: revoked access, changed status or evidence
         # must not expose a stale comparison assembled from separate reads.
         current_batch = service.checked_batch(project, batch_id)

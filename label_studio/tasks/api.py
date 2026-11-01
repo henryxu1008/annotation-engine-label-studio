@@ -1291,7 +1291,7 @@ class SubmissionReviewAPI(generics.GenericAPIView):
         sources = Submission.objects.select_related('assignment__project', 'submitted_by')
         if batch_id is not None:
             # Batch visibility and SQL byte gates must precede snapshot decoding.
-            sources = sources.defer('result_snapshot')
+            sources = sources.select_related(None).select_related('assignment__project').defer('result_snapshot')
         submission = generics.get_object_or_404(
             sources,
             pk=self.kwargs['pk'],
@@ -1326,7 +1326,8 @@ class SubmissionReviewAPI(generics.GenericAPIView):
                     submission.assignment.project, batch_id, submission, actor, principal=principal,
                     for_serialization=True,
                 )
-                data = SubmissionSerializer(source, context={'request': request}).data
+                batch = service.checked_batch(submission.assignment.project, batch_id)
+                data = service.submission_serializer(batch)(source, context={'request': request}).data
                 source = service.require_selected(
                     submission.assignment.project, batch_id, submission, actor, principal=principal,
                 )

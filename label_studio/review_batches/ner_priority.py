@@ -106,10 +106,10 @@ def marker():
 
 def query(project, *, protected_marker=None):
     """Only the new schema is SQL-size guarded; legacy plan contracts stay intact."""
-    from . import field_priority
+    from . import confidence_priority, field_priority
 
     if protected_marker is None:
-        protected_marker = marker() | field_priority.marker()
+        protected_marker = marker() | field_priority.marker() | confidence_priority.marker()
     table = connection.ops.quote_name(ReviewBatch._meta.db_table)
     column = table + '.' + connection.ops.quote_name('plan')
     expression = (
@@ -120,6 +120,9 @@ def query(project, *, protected_marker=None):
     return (
         ReviewBatch.objects.filter(project=project)
         .annotate(
+            _confidence_kind=Case(
+                When(confidence_priority.marker(), then=Value(True)), default=Value(False), output_field=BooleanField()
+            ),
             _ner_kind=Case(
                 When(protected_marker, then=Value(True)), default=Value(False), output_field=BooleanField()
             ),
@@ -127,6 +130,11 @@ def query(project, *, protected_marker=None):
         )
         .annotate(
             _ner_plan=Case(
+                When(
+                    confidence_priority.marker() & Q(_ner_plan_size__lte=confidence_priority.c.MAX_PLAN_STORED),
+                    then=F('plan'),
+                ),
+                When(confidence_priority.marker(), then=Value(None)),
                 When(field_priority.marker() & Q(_ner_plan_size__lte=4 * field_priority.V1_BYTES), then=F('plan')),
                 When(field_priority.marker(), then=Value(None)),
                 When(_ner_kind=False, then=F('plan')),
@@ -142,6 +150,10 @@ def query(project, *, protected_marker=None):
 def hydrate(batch):
     if hasattr(batch, '_ner_plan'):
         if batch._ner_plan is None:
+            if getattr(batch, '_confidence_kind', False):
+                from . import confidence_contract
+
+                confidence_contract.fail('TOO_LARGE', 422)
             service.fail('REVIEW_BATCH_PLAN_INVALID')
         batch.plan = batch._ner_plan
     return batch
@@ -177,7 +189,9 @@ def filter_visible(rows, actor, role):
                       json_extract(CASE WHEN c.type='object' THEN c.value ELSE '{{}}' END, '$.task_id')
                   AND EXISTS (SELECT 1 FROM json_each(CASE WHEN p.type='object' THEN p.value ELSE '{{}}' END, '$.actor_ids') a WHERE a.value=%s)))"""
         params = [actor.pk, actor.pk]
-    return rows.annotate(_ner_visible=RawSQL(predicate, params)).filter(Q(_ner_kind=False) | Q(_ner_visible=True))
+    return rows.annotate(_ner_visible=RawSQL(predicate, params)).filter(
+        Q(_confidence_kind=True) | Q(_ner_kind=False) | Q(_ner_visible=True)
+    )
 
 
 def materialize(current, args, *, lock=False):

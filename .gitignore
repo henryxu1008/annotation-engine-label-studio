@@ -116,3 +116,4 @@ web/apps/labelstudio-e2e/.field-arbitration-e2e.json
 web/apps/labelstudio-e2e/.field-review-priority-e2e.json
 
 web/apps/labelstudio-e2e/.field-review-handoff-e2e.json
+web/apps/labelstudio-e2e/.review-confidence-e2e.json

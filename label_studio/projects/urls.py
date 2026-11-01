@@ -1,6 +1,7 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license.
 """
 from django.urls import include, path
+from review_batches.confidence_api import InputAPI as ConfidenceInputAPI, ObservationAPI as ConfidenceObservationAPI
 from tasks.my_work import MyWorkAPI
 
 from . import api, views
@@ -22,6 +23,8 @@ _api_urlpatterns = [
     path('<int:pk>/my-work/', MyWorkAPI.as_view(), name='project-my-work'),
     path('<int:pk>/task-packages/', include(('task_packages.urls', 'task_packages'), namespace='task-packages')),
     path('<int:pk>/review-batches/', include(('review_batches.urls', 'review_batches'), namespace='review-batches')),
+    path('<int:pk>/review-confidence-inputs/<int:source_id>/', ConfidenceInputAPI.as_view()),
+    path('<int:pk>/review-confidence-observations/', ConfidenceObservationAPI.as_view()),
     path('<int:pk>/classification-disagreements/', include('classification_disagreements.urls')),
     path('<int:pk>/field-disagreements/', include('classification_disagreements.field_urls')),
     path('<int:pk>/ner-disagreements/', include('classification_disagreements.ner_urls')),
