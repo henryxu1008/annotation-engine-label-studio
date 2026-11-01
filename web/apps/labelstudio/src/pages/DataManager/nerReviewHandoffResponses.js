@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex } from "@noble/hashes/utils";
+import { handoffCommandHash } from "./reviewHandoffCommands";
 
 const id = z.number().int().positive().safe();
 const hash = z.string().regex(/^[0-9a-f]{64}$/);
@@ -102,17 +101,11 @@ const schemas = {
 const valid = (ok) => {
   if (!ok) throw new Error("NER handoff identity changed");
 };
-const canonical = (value) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(
-        Object.keys(value)
-          .sort()
-          .map((key) => [key, canonical(value[key])]),
-      )
-    : value;
-
 export const nerReviewHandoff = {
   kind: "ner",
+  requiresViewerHash: true,
+  maskUnavailableSource: true,
+  integrity: "nerHandoffIntegrity",
   linkField: "ner_arbitration_id",
   methods,
   listMethod: "nerReviewHandoffs",
@@ -165,15 +158,7 @@ export const nerReviewHandoff = {
     return value;
   },
   async commandHash(projectId, source, body) {
-    const payload = canonical({
-      schema: "review-ner-arbitration-handoff/v1",
-      action: "handoff",
-      project_id: Number(projectId),
-      batch_id: source.batch,
-      source_id: source.source,
-      body,
-    });
-    return bytesToHex(sha256(JSON.stringify(payload)));
+    return handoffCommandHash("review-ner-arbitration-handoff/v1", projectId, source, body);
   },
   validateAcknowledgement(result, intent) {
     valid(

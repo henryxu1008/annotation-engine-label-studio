@@ -6,7 +6,7 @@ from django.utils import timezone
 
 
 class ReviewBatch(models.Model):
-    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="review_batches")
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='review_batches')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     actor_id_frozen = models.PositiveBigIntegerField()
     creator_principal = models.CharField(max_length=512)
@@ -19,17 +19,17 @@ class ReviewBatch(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["project", "idempotency_key"], name="review_batch_project_key_unique"),
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='review_batch_project_key_unique'),
         ]
 
 
 class ReviewArbitrationHandoff(models.Model):
     """Immutable provenance and command receipt, never another decision ledger."""
 
-    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE)
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
     review_batch = models.ForeignKey(ReviewBatch, null=True, on_delete=models.SET_NULL)
     arbitration = models.ForeignKey(
-        "classification_disagreements.ArbitrationTask", null=True, on_delete=models.SET_NULL
+        'classification_disagreements.ArbitrationTask', null=True, on_delete=models.SET_NULL
     )
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     review_batch_id_frozen = models.PositiveBigIntegerField()
@@ -45,16 +45,16 @@ class ReviewArbitrationHandoff(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["project", "idempotency_key"], name="review_handoff_project_key_unique"),
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='review_handoff_project_key_unique'),
             models.UniqueConstraint(
-                fields=["project", "review_batch_id_frozen", "submission_id_frozen", "arbitration_id_frozen"],
-                name="review_handoff_binding_unique",
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen', 'arbitration_id_frozen'],
+                name='review_handoff_binding_unique',
             ),
         ]
         indexes = [
             models.Index(
-                fields=["project", "review_batch_id_frozen", "submission_id_frozen"],
-                name="review_handoff_source_idx",
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen'],
+                name='review_handoff_source_idx',
             ),
         ]
 
@@ -88,6 +88,44 @@ class NerReviewArbitrationHandoff(models.Model):
                 name='ner_handoff_binding_unique',
             ),
         ]
-        indexes = [models.Index(
-            fields=['project', 'review_batch_id_frozen', 'submission_id_frozen'], name='ner_handoff_source_idx'
-        )]
+        indexes = [
+            models.Index(
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen'], name='ner_handoff_source_idx'
+            )
+        ]
+
+
+class FieldReviewArbitrationHandoff(models.Model):
+    """Typed field provenance; never review authority or another decision."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    review_batch = models.ForeignKey(ReviewBatch, null=True, on_delete=models.SET_NULL)
+    field_arbitration = models.ForeignKey(
+        'classification_disagreements.FieldArbitrationTask', null=True, on_delete=models.SET_NULL
+    )
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    review_batch_id_frozen = models.PositiveBigIntegerField()
+    submission_id_frozen = models.PositiveBigIntegerField()
+    arbitration_id_frozen = models.PositiveBigIntegerField()
+    actor_id_frozen = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    creator_source = models.CharField(max_length=128)
+    created_at = models.DateTimeField(default=timezone.now)
+    origin = models.JSONField()
+    origin_hash = models.CharField(max_length=64)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='field_handoff_project_key_unique'),
+            models.UniqueConstraint(
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen', 'arbitration_id_frozen'],
+                name='field_handoff_binding_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['project', 'review_batch_id_frozen', 'submission_id_frozen'], name='field_handoff_source_idx'
+            )
+        ]

@@ -1326,3 +1326,55 @@ review handoff and independent second review remain separate designs. Preserve
 ### Frozen field conflict priority review sampling (#84)
 
 See [field-review-priority-v1.md](field-review-priority-v1.md). Default-off field strategy consumes one complete existing FieldBatch through the existing ReviewBatch flow. Exact source pins, full Manifest validation, bounded source union, post-calculation replay, current organization/viewer fences and source-free original-key recovery remain separate from review authority. Shared bounded NER read hooks now also cover explicit field plans; legacy shapes and hashes stay unchanged. No new tables, Submission/metric/decision changes, field review-to-arbitration handoff or Host integration. #81/#84 remain open; retained runtime and lint baselines remain separate.
+
+### Frozen field review-to-arbitration handoff design (#84)
+
+See the [field handoff design](field-review-handoff-v1-design.md) and
+[acceptance matrix](field-review-handoff-v1-acceptance.md). Design only, based on
+actual main merge `5757b5a5b65f1637923ad47aba29df915fa267cd`: reuse NER's typed
+handoff lifecycle and the existing field arbitration helpers/workspace. The plan
+requires exact nine-field source pins, all field rule versions, independent
+ORGANIZE_FIELD_ARBITRATION authority, a separate typed immutable parent ledger,
+cumulative predecode metadata guards, two field calculations followed by final
+source replay, and source-free original-key recovery. Existing classification,
+NER, review and standalone field contracts remain unchanged. No implementation,
+migration, flag activation or executed functional acceptance is included in this
+design. Fork-only; #81/#84 stay open, with no Host/Core, deployment or retained
+Docker/#76/worktree/data operations.
+
+Historical field handoff opening requires a bounded metadata-only provenance
+read after the existing target detail, verifying both original Manifests without
+fresh pending/latest eligibility. Only matching current viewer and existing
+target input/task-evidence/identity fields may reach the visible workspace/cache;
+full origins are validated server-side without enlarging Reviewer projections.
+The two-calculation rule applies to eligible
+successful evidence requests; ineligible preflight and partial failures report
+their actual work separately.
+
+### Frozen field review-to-arbitration handoff implementation (#84)
+
+See [field-review-handoff-v1.md](field-review-handoff-v1.md). The optional typed
+field parent ledger and routes reuse the existing field arbitration helpers,
+bounded snapshot pipeline and complete workspace. Shared predecode metadata
+loading is extracted from NER without changing its schemas or command hashes.
+Field writes keep exact nine-field pins, both complete frozen origins, independent
+organization arbitration authority, project-first locks and source-free original
+parent recovery. Successful evidence makes two calculations then current-source
+hydration; historical provenance is metadata-only and follows the B detail before
+display/cache acceptance. A stable current-Manager owner fingerprint permits
+same-owner viewer-salt recovery while actual identity changes discard old intent.
+Legacy classification/NER and standalone field detail wire remain compatible.
+Design-stage snapshots and future matrix requirements are separate from actual
+local evidence; hosted CI is NOT_RUN before publication. #81/#84 remain OPEN,
+Fork-only, with no Host/Core/deployment or retained Docker/#76/worktree operations.
+# Uploaded-media response lifetime regression
+
+The local field-handoff foundation regression exposed that the existing ranged
+reader does not forward the opened file's close method. Both authenticated
+uploaded-media responses now register the underlying file with Django's response
+resource closers, matching the existing private-export response pattern. Current
+actor/project checks, range handling, bytes and cache headers remain in their
+existing paths. `test_mapped_editor_uploaded_image_uses_actor_and_rechecks_revocation`
+asserts both the response and wrapped file close before temporary-media cleanup.
+This is an upgrade-sensitive adapter to the existing ranged-response dependency;
+it does not implement a new streaming or authorization policy.

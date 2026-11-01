@@ -385,7 +385,7 @@ def processing(prepared):
     }
 
 
-def evidence(context, frozen, *, pair=None, lock=False, replay=None):
+def evidence(context, frozen, *, pair=None, lock=False, replay=None, batch_loader=None):
     project, item = context[2], frozen['item']
     count = len(item['cohort'])
     fixed_cost = item['result']['cost_per_pass']
@@ -396,10 +396,14 @@ def evidence(context, frozen, *, pair=None, lock=False, replay=None):
     ):
         error('BUDGET_EXCEEDED', 422)
     unavailable = {'source_status': 'unavailable', 'reason': 'source_unavailable', 'comparison': None, 'inputs': []}
-    query = b.query_batches(project)
-    if lock:
-        query = query.select_for_update()
-    batch = query.filter(pk=frozen['field_batch_id']).first()
+    if batch_loader is None:
+        query = b.query_batches(project)
+        if lock:
+            query = query.select_for_update()
+        batch = query.filter(pk=frozen['field_batch_id']).first()
+    else:
+        # Request-local, predecode-budgeted loader; origin below still binds it.
+        batch = batch_loader(frozen['field_batch_id'], lock=lock)
     if batch is None:
         return unavailable, {}
     try:

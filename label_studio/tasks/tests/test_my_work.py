@@ -473,6 +473,7 @@ class TestMyWork(APITestCase):
                         # response with its connection-signal guard. Closing it
                         # again kills PostgreSQL's enclosing TestCase transaction.
                         assert response.closed
+                        assert response.ranged_file.f.closed
                     ProjectMember.objects.filter(project=self.project, user=actor).update(enabled=False)
                     for url in urls:
                         assert self.client.get(url).status_code == 403

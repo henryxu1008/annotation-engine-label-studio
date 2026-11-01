@@ -984,7 +984,11 @@ class UploadedFileResponse(generics.RetrieveAPIView):
         if file.storage.exists(file.name):
             content_type, encoding = mimetypes.guess_type(str(file.name))
             content_type = content_type or 'application/octet-stream'
-            return RangedFileResponse(request, file.open(mode='rb'), content_type=content_type)
+            response = RangedFileResponse(request, file.open(mode='rb'), content_type=content_type)
+            # The ranged reader wraps the file without exposing its close method.
+            # Match PrivateRangeResponse: the response owns the opened file.
+            response._resource_closers.append(file.close)
+            return response
 
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -1080,6 +1084,7 @@ class DownloadStorageData(APIView):
             content_type, _ = mimetypes.guess_type(filepath)
             content_type = content_type or 'application/octet-stream'
             response = RangedFileResponse(request, file_obj.open(mode='rb'), content_type=content_type)
+            response._resource_closers.append(file_obj.close)
             response['Content-Disposition'] = f'inline; filename="{filepath}"'
             response['filename'] = filepath
             return response

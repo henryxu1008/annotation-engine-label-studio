@@ -6,11 +6,16 @@ import { NerArbitrations } from "./NerArbitrations";
 import { nerReviewHandoff } from "./nerReviewHandoffResponses";
 import { ClassificationArbitrations } from "./ClassificationArbitrations";
 import { classificationReviewHandoff } from "./reviewHandoffResponses";
+import { FieldArbitrations } from "./FieldArbitrations";
+import { fieldReviewHandoff } from "./fieldReviewHandoffResponses";
+
+const flows = { classification: classificationReviewHandoff, ner: nerReviewHandoff, field: fieldReviewHandoff };
+const workspaces = { classification: ClassificationArbitrations, ner: NerArbitrations, field: FieldArbitrations };
 
 export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
   const { t } = useLocaleTranslation("reviewBatches"), api = useAPI();
-  const flow = source.kind === "ner" ? nerReviewHandoff : classificationReviewHandoff;
-  const Workspace = source.kind === "ner" ? NerArbitrations : ClassificationArbitrations;
+  const flow = Object.hasOwn(flows, source.kind) ? flows[source.kind] : null;
+  const Workspace = flow ? workspaces[source.kind] : null;
   const call = useRef(api.callApi); call.current = api.callApi;
   const generation = useRef(0), heading = useRef(null);
   const [rows, setRows] = useState(null), [canCreate, setCanCreate] = useState(false), [error, setError] = useState(false);
@@ -24,6 +29,7 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
         call.current(flow.capabilityMethod, { params: { pk: projectId }, errorFilter: () => true }),
       ]);
       const list = flow.listSchema.parse(raw);
+      flow.validateList?.(raw);
       flow.parseCapability(cap);
       if (raw?.$meta?.ok === false || cap?.$meta?.ok === false || cap?.enabled !== true || cap.can_read !== true
         || !flow.scopeMatches(list, source, projectId) || cap.viewer_hash !== list.viewer_hash
@@ -33,18 +39,20 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
     finally { if (current === generation.current) setBusy(false); }
   };
   useEffect(() => {
+    if (!flow) { clear(); setBusy(false); setError(true); return; }
     setTarget(null); load(1); heading.current?.focus();
     const blur = () => { ++generation.current; clear(); setBusy(false); setError(true); };
     window.addEventListener("blur", blur);
     return () => { ++generation.current; window.removeEventListener("blur", blur); };
   }, [projectId, source.batch, source.source, source.kind]);
   useEffect(() => { if (!target && !busy) heading.current?.focus(); }, [target, busy]);
+  if (!flow || !Workspace) return <p role="alert">{t("arbitrationReadFailed")}</p>;
   if (target) return <Workspace projectId={projectId} handoffSource={source}
     initialHandoffId={target.handoff ?? null} initialTaskId={target.arbitration ?? null}
     onBackToReview={() => { setTarget(null); load(page); heading.current?.focus(); }} />;
   return <section data-testid="review-handoff" aria-busy={busy}>
     <h3 ref={heading} tabIndex={-1}>{t(flow.title)}</h3><p>{t(flow.boundary)}</p>
-    {flow.kind === 'ner' && <p>{t('nerHandoffIntegrity')}</p>}
+    {flow.integrity && <p>{t(flow.integrity)}</p>}
     <p>{t("handoffSource", { batch: source.batch, source: source.source })}</p>
     {error && <p role="alert">{t("arbitrationReadFailed")}</p>}
     <Button disabled={busy} onClick={() => load()}>{t("batchRefresh")}</Button>

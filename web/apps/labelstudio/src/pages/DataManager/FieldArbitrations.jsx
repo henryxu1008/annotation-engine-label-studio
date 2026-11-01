@@ -7,6 +7,7 @@ import { cn } from "../../utils/bem";
 import { FrozenArbitrationWorkspace } from "./ClassificationArbitrations";
 import { FieldResult, fieldComparisonSchema, validateFieldComparison } from "./FieldDisagreement";
 import { fieldDigest } from "./fieldEvidence";
+import { fieldReviewHandoff } from "./fieldReviewHandoffResponses";
 import "./FieldArbitrations.scss";
 
 const SCHEMA = "field-arbitrations/v1";
@@ -36,6 +37,8 @@ const caps = z.object({
   can_create: z.boolean(),
   can_decide: z.boolean(),
   can_cancel: z.boolean(),
+  handoff_owner_hash: hash.nullable().optional(),
+  can_handoff: z.boolean().optional(),
 });
 const meta = z.object({
   id,
@@ -237,7 +240,7 @@ const checkedCost = (raw) => {
 
 export const fieldArbitrationAdapter = {
   testId: "field-arbitrations",
-  handoff: null,
+  handoff: fieldReviewHandoff,
   maskUnavailable: (detail) => Object.assign(detail, { comparison: null, inputs: [], source_status: "unavailable" }),
   messages: {
     arbitrationTitle: "fieldArbitrationTitle",

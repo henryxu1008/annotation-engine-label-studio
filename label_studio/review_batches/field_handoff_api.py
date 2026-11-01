@@ -1,0 +1,271 @@
+"""Explicit FIELD handoff commands; parent receipts never borrow child create keys."""
+from uuid import UUID, uuid4
+
+from access_control.identity import resolve_actor
+from access_control.project_operations import ORGANIZE_FIELD_ARBITRATION, lock_project_operation
+from classification_disagreements import field_api, fields
+from classification_disagreements import field_arbitration as a
+from classification_disagreements import field_arbitration_api as api
+from django.db import IntegrityError, transaction
+from django.shortcuts import get_object_or_404
+
+from . import field_handoff as h
+
+
+def unique_conflict(exc):
+    """Recognize only this command's named uniqueness fences after rollback."""
+    constraints = {
+        'field_handoff_project_key_unique': (h.FieldReviewArbitrationHandoff, ('project', 'idempotency_key')),
+        'field_handoff_binding_unique': (
+            h.FieldReviewArbitrationHandoff,
+            ('project', 'review_batch_id_frozen', 'submission_id_frozen', 'arbitration_id_frozen'),
+        ),
+        'field_arb_project_create_key_unique': (h.FieldArbitrationTask, ('project', 'idempotency_key')),
+        'field_arb_active_input_unique': (h.FieldArbitrationTask, ('project', 'task_id_frozen', 'input_set_hash')),
+    }
+    cause = exc.__cause__
+    if getattr(cause, 'sqlstate', None) == '23505':
+        return getattr(getattr(cause, 'diag', None), 'constraint_name', None) in constraints
+    if getattr(cause, 'sqlite_errorcode', None) == 2067:
+        prefix = 'UNIQUE constraint failed: '
+        message = str(cause)
+        if not message.startswith(prefix):
+            return False
+        columns = tuple(message[len(prefix) :].split(', '))
+        return any(
+            columns == tuple(model._meta.db_table + '.' + model._meta.get_field(name).column for name in names)
+            for model, names in constraints.values()
+        )
+    return False
+
+
+def command(request):
+    if len(request.body) > a.MAX_COMMAND:
+        h.error('BUDGET_EXCEEDED', 422)
+    value = request.data
+    base = {'mode', 'expected_plan_hash', 'expected_input_set_hash', 'expected_viewer_hash'}
+    if not isinstance(value, dict) or value.get('mode') not in ('dispatch', 'link_existing'):
+        h.error('INVALID_INPUT', 400)
+    identifiers = (
+        {'assignee_id'} if value['mode'] == 'dispatch' else {'field_arbitration_id', 'expected_arbitration_version'}
+    )
+    if (
+        set(value) != base | identifiers
+        or any(not a.hash_value(value[k]) for k in base - {'mode'})
+        or any(not a.integer(value[k]) for k in identifiers)
+    ):
+        h.error('INVALID_INPUT', 400)
+    fields.bounded(value, a.MAX_COMMAND)
+    try:
+        key = UUID(request.headers.get('Idempotency-Key', ''))
+    except (ValueError, AttributeError):
+        h.error('INVALID_KEY', 400)
+    return value, key
+
+
+class HandoffAPI(api.ArbitrationAPI):
+    def handle_exception(self, exc):
+        if isinstance(exc, IntegrityError) and unique_conflict(exc):
+            exc = fields.Error('REVIEW_FIELD_HANDOFF_UNIQUE_CONFLICT', 409)
+        if isinstance(exc, fields.Error) and not exc.code.startswith('REVIEW_FIELD_HANDOFF_'):
+            suffix = exc.code.removeprefix('FIELD_ARBITRATION_').removeprefix('FIELD_BATCH_').removeprefix('FIELD_')
+            suffix = {'TOO_LARGE': 'BUDGET_EXCEEDED', 'MANIFEST_INVALID': 'ORIGIN_INVALID'}.get(suffix, suffix)
+            exc = fields.Error('REVIEW_FIELD_HANDOFF_' + suffix, exc.status)
+        return field_api.FieldAPI.handle_exception(self, exc)
+
+    def context(self, request, pk, *, create=False, **options):
+        principal, actor = resolve_actor(request)
+        project, role = h.guard(pk, principal, actor, create=create)
+        return principal, actor, project, role
+
+
+class ContextAPI(HandoffAPI):
+    def get(self, request, pk, batch_id, source_id):
+        self.query(request)
+        return self.read(request, pk, lambda c, replay=None: h.context_data(c, batch_id, source_id, replay))
+
+
+class ListAPI(HandoffAPI):
+    def get(self, request, pk, batch_id, source_id):
+        self.query(request, ('page', 'page_size'))
+
+        def materialize(context, replay=None):
+            budget = h.Metadata()
+            identifiers = self.paginate_queryset(
+                h.scoped(context, batch_id, source_id, budget=budget).values_list('pk', flat=True)
+            )
+            result = [h.detail(row, context, budget) for row in h.prepare_page(context, identifiers, budget)]
+            return {
+                **self.get_paginated_response(result).data,
+                'schema': h.SCHEMA,
+                'kind': 'field',
+                'viewer_hash': a.viewer_hash(context),
+                'project_id': pk,
+                'review_batch_id': batch_id,
+                'submission_id': source_id,
+            }, {}
+
+        return self.read(request, pk, materialize)
+
+    def post(self, request, pk, batch_id, source_id):
+        self.query(request)
+        context = self.context(request, pk, create=True)
+        value, key = command(request)
+        request_hash = fields.digest(
+            {
+                'schema': h.SCHEMA,
+                'action': 'handoff',
+                'project_id': pk,
+                'batch_id': batch_id,
+                'source_id': source_id,
+                'body': value,
+            }
+        )
+        principal = context[0]
+        with transaction.atomic():
+            project, actor = lock_project_operation(
+                pk,
+                principal,
+                ORGANIZE_FIELD_ARBITRATION,
+                related_user_ids=[value['assignee_id']] if value['mode'] == 'dispatch' else (),
+            )
+            context = self.recheck(request, pk, context, create=True)
+            if actor.pk != context[1].pk:
+                h.error('AUTHORITY_CHANGED')
+            previous = (
+                h.FieldReviewArbitrationHandoff.objects.filter(project=project, idempotency_key=key)
+                .only(
+                    'pk',
+                    'creator_principal',
+                    'creator_source',
+                    'actor_id_frozen',
+                    'request_hash',
+                    'review_batch_id_frozen',
+                    'submission_id_frozen',
+                )
+                .first()
+            )
+            current = None
+            prepared = {}
+            if previous:
+                api.same_receipt(
+                    context,
+                    request_hash,
+                    previous.creator_principal,
+                    previous.creator_source,
+                    previous.actor_id_frozen,
+                    previous.request_hash,
+                )
+                if previous.review_batch_id_frozen != batch_id or previous.submission_id_frozen != source_id:
+                    h.error('KEY_CONFLICT')
+                row = h.checked(get_object_or_404(h.rows(project), pk=previous.pk), project)
+            else:
+                if value['expected_viewer_hash'] != a.viewer_hash(context):
+                    h.error('AUTHORITY_CHANGED')
+                budget = h.Metadata()
+                target = (
+                    h.target(context, value['field_arbitration_id'], budget, lock=True)
+                    if value['mode'] == 'link_existing'
+                    else None
+                )
+                batch = h.review_batch(context, batch_id, budget)
+                if batch.plan.get('algorithm') != h.p.ALGORITHM:
+                    h.error('UNSUPPORTED_BATCH')
+                # Keep the existing target-before-sources order, then all source batch IDs sorted.
+                ids = {batch.plan.get('priority', {}).get('batch_id')}
+                if target:
+                    ids.add(target.field_batch_id_frozen)
+                if None in ids:
+                    h.error('UNSUPPORTED_BATCH')
+                for identifier in sorted(ids):
+                    h.analysis(context, identifier, budget, lock=True)
+                current = h.source(context, batch_id, source_id, budget, lock=True)
+                if (
+                    current['batch'].plan_hash != value['expected_plan_hash']
+                    or current['input_set_hash'] != value['expected_input_set_hash']
+                ):
+                    h.error('SOURCE_CHANGED')
+                if target:
+                    if (
+                        target.status not in ('pending', 'resolved')
+                        or target.version != value['expected_arbitration_version']
+                    ):
+                        h.error('CAS_CONFLICT')
+                    h.same_input(context, current, target, budget)
+                else:
+                    dispatch = {
+                        'field_batch_id': current['origin']['field_batch_id'],
+                        'task_id': current['origin']['item']['task_id'],
+                        'expected_manifest_hash': current['origin']['batch_manifest_hash'],
+                        'assignee_id': value['assignee_id'],
+                    }
+                    target, _, _ = api.create_task(
+                        context,
+                        dispatch,
+                        uuid4(),
+                        api.command_hash('create', pk, dispatch),
+                        verified=(current['origin'], current['evidence'], current['prepared']),
+                        batch_loader=lambda identifier, **kw: h.analysis(context, identifier, budget, **kw),
+                    )
+                    target = h.target(context, target.pk, budget)
+                row = h.create_record(context, current, target, value['mode'], key, request_hash, budget)
+                prepared = current['prepared']
+            result = {**h.receipt(row, context, previous is not None), 'processing_cost': a.processing(prepared)}
+
+            def verify():
+                fresh_context = self.recheck(request, pk, context, create=True)
+                budget = h.Metadata() if current is not None else None
+                fresh = (
+                    h.record(fresh_context, row.pk, budget)
+                    if budget
+                    else get_object_or_404(h.rows(project), pk=row.pk)
+                )
+                if h.receipt(fresh, fresh_context, previous is not None) != {
+                    k: v for k, v in result.items() if k != 'processing_cost'
+                }:
+                    h.error('RECEIPT_CHANGED')
+                if current is not None:
+                    target = h.target(fresh_context, fresh.field_arbitration_id, budget)
+                    reloaded = h.source(fresh_context, batch_id, source_id, budget, replay=prepared)
+                    h.same_input(fresh_context, reloaded, target, budget)
+                    if (
+                        reloaded['proof'] != current['proof']
+                        or reloaded['evidence'] != current['evidence']
+                        or h.target_pin(target) != fresh.origin['target']
+                    ):
+                        h.error('SOURCE_CHANGED')
+                    if value['mode'] == 'dispatch':
+                        a.assignee(fresh_context, value['assignee_id'], target.origin['item'])
+                self.recheck(request, pk, context, create=True)
+
+            return self.respond(
+                request, result, verify, lambda: a.check_engine(prepared), status=200 if previous else 201
+            )
+
+
+class DetailAPI(HandoffAPI):
+    def get(self, request, pk, batch_id, handoff_id):
+        self.query(request)
+
+        def materialize(context, replay=None):
+            budget = h.Metadata()
+            visible = get_object_or_404(h.scoped(context, batch_id, budget=budget).values('pk'), pk=handoff_id)
+            page = h.prepare_page(context, [visible['pk']], budget)
+            if not page:
+                raise h.NotFound()
+            return h.detail(page[0], context, budget), {}
+
+        return self.read(request, pk, materialize)
+
+
+class ProvenanceAPI(HandoffAPI):
+    def get(self, request, pk, batch_id, handoff_id):
+        self.query(request)
+
+        def materialize(context, replay=None):
+            budget = h.Metadata()
+            visible = get_object_or_404(h.scoped(context, batch_id, budget=budget).values('pk'), pk=handoff_id)
+            row = h.record(context, visible['pk'], budget)
+            return h.provenance(row, context, budget), {}
+
+        return self.read(request, pk, materialize)

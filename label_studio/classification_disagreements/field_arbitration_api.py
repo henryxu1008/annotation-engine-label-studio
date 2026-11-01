@@ -11,11 +11,12 @@ from access_control.project_operations import (
     lock_project_operation,
     project_operation_policy,
 )
+from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 
 from . import field_api, fields
 from . import field_arbitration as a
@@ -85,14 +86,20 @@ def receipt(row, action, key, principal, source, actor, when, request_hash):
     return {**value, 'payload_hash': fields.digest(value)}
 
 
-def create_task(context, value, key, request_hash, *, verified=None):
+def create_task(context, value, key, request_hash, *, verified=None, batch_loader=None):
     """Fresh creation and one bounded evidence pass inside the caller's project fence."""
     principal, actor, project, _ = context
-    batch = get_object_or_404(b.query_batches(project).select_for_update(), pk=value['field_batch_id'])
+    batch = (
+        get_object_or_404(b.query_batches(project).select_for_update(), pk=value['field_batch_id'])
+        if batch_loader is None
+        else batch_loader(value['field_batch_id'], lock=True)
+    )
+    if batch.pk != value['field_batch_id'] or batch.project_id != project.pk:
+        a.error('SOURCE_CHANGED')
     frozen = a.origin(project, batch, value['task_id'], value['expected_manifest_hash'])
     target = a.assignee(context, value['assignee_id'], frozen['item'])
     if verified is None:
-        initial, prepared = a.evidence(context, frozen, lock=True)
+        initial, prepared = a.evidence(context, frozen, lock=True, batch_loader=batch_loader)
     else:
         verified_origin, initial, prepared = verified
         if verified_origin != frozen:
@@ -196,7 +203,7 @@ class CapabilityAPI(ArbitrationAPI):
         def data(context, replay=None):
             policy = project_operation_policy(context[2])
             read = policy.allows(READ_WORK)
-            return {
+            result = {
                 'enabled': True,
                 'schema': a.SCHEMA,
                 'decision_rule': a.RULE,
@@ -213,7 +220,21 @@ class CapabilityAPI(ArbitrationAPI):
                     'equalities_per_pass': a.MAX_EQUALITIES,
                     'reason_characters': a.MAX_REASON,
                 },
-            }, {}
+            }
+            if settings.ANNOTATION_FIELD_REVIEW_ARBITRATION_HANDOFF_ENABLED:
+                from review_batches import field_handoff
+
+                result['handoff_owner_hash'] = None
+                result['can_handoff'] = False
+                if context[3] == 'manager':
+                    try:
+                        field_handoff.guard(pk, context[0], context[1])
+                    except (APIException, fields.Error):
+                        pass
+                    else:
+                        result['handoff_owner_hash'] = field_handoff.owner_hash(context)
+                        result['can_handoff'] = policy.allows(ORGANIZE_FIELD_ARBITRATION)
+            return result, {}
 
         return self.read(request, pk, data, capability=True)
 
