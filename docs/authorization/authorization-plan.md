@@ -1,5 +1,14 @@
 # Authorization integration plan
 
+## #84 independent supervisory review V1
+
+See [implementation and upgrade boundaries](second-review-v1-implementation.md)
+for the accepted supervisory_only effect, explicit operations/default-off modes,
+targeted frozen-origin projection, separate immutable receipts, PostgreSQL/SQLite
+guards and current-scope recovery. Preserve its negative authorization, deleted
+origin/tombstone, byte-gate and real concurrency regressions during upgrades.
+It does not change initial ReviewDecision or release/#79/#80 semantics.
+
 ## #84 local review sampling (first slice)
 
 [Review sampling v1](review-sampling-v1.md) freezes deterministic bounded work
@@ -1481,3 +1490,11 @@ executions using bounded, complete execution fingerprints and a unique older pro
 Latest non-success and intervening failure barriers remain authoritative. Receipts and
 artifacts bind the producer, while both view/producer identities are reported and
 rechecked at the end. Unknown matrix placeholders remain denied.
+
+Second-review CI integration extends that closed inventory with one isolated
+bilingual shard and explicitly adds all seven supervision modules to the SQLite
+gate. [CI integration and acceptance](second-review-ci-integration.md) documents
+the actual pre-migration ownership proof, typed bootstrap/DB graph, 10-shard
+aggregation, unchanged budgets and local-versus-hosted evidence boundaries.
+Product settings, supervision effect, initial review and release policy are
+unchanged by this CI-only slice.

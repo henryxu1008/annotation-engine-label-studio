@@ -969,7 +969,12 @@ class TestApprovedExports(APITestCase):
             storage.path = str(owned)
             storage.save(update_fields=["path"])
             valid = self.client.get(self.localfile_url(own_file))
-            assert valid.status_code == 200 and b"".join(valid.streaming_content) == b"allowed"
+            try:
+                assert valid.status_code == 200 and b"".join(valid.streaming_content) == b"allowed"
+            finally:
+                # The upstream range reader is not itself closeable. Keep the
+                # test-owned response alive without leaving its file open on Windows.
+                valid.ranged_file.f.close()
             sibling = Path(self.root.name) / "owned-other"
             sibling.mkdir()
             forbidden = sibling / "foreign.txt"

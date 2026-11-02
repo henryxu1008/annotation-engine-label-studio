@@ -472,7 +472,7 @@ def _aggregate(ctx, out, client, progress, rows):
         'context': ctx,
         'status': 'success',
         'records': records,
-        'browser_invocations': 24,
+        'browser_invocations': sum(len(calls(shard)) for shard in inventory()['shards']),
         'build_artifact_id': build['id'],
         'build_manifest_sha256': manifest_hash,
     }

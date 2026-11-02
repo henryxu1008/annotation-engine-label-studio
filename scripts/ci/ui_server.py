@@ -232,12 +232,26 @@ def isolation():
     return scope
 
 
+def fixture_mode(scope, *, confidence=False, second_review=False):
+    from ui_inventory import SHARDS
+
+    shard = scope.get('shard')
+    require(shard in SHARDS and not (confidence and second_review), 'Unknown synthetic bootstrap mode')
+    mode = 'second-review' if second_review else 'confidence' if confidence else 'legacy'
+    expected = shard if shard in ('confidence', 'second-review') else 'legacy'
+    require(mode == expected, 'Synthetic CLI mode does not match the scoped shard')
+    return mode
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--confidence', action='store_true')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--confidence', action='store_true')
+    modes.add_argument('--second-review', action='store_true')
     parser.add_argument('--port', type=int, default=8080)
     args = parser.parse_args()
     scope = isolation()
+    mode = fixture_mode(scope, confidence=args.confidence, second_review=args.second_review)
     from ui_common import verify_context
     from ui_run import validate_database_owner
 
@@ -257,7 +271,12 @@ def main():
     fixture_root = ROOT / 'web/apps/labelstudio-e2e'
     configured = {}
     value = None
-    if args.confidence:
+    if mode == 'second-review':
+        from ui_second_review import validate_fixture as validate_second_review
+
+        value = read_json(fixture_root / '.second-review-e2e.json')
+        configured = validate_second_review(value)
+    elif mode == 'confidence':
         value = read_json(fixture_root / '.review-confidence-e2e.json')
         configured = validate_fixture(value)
     else:
@@ -276,7 +295,11 @@ def main():
     configured['LOCALE_PATHS'] = [str(locale_path)]
     with override_settings(**configured):
         django.setup()
-        if value:
+        if mode == 'second-review':
+            from ui_second_review import validate_database as validate_second_review_database
+
+            validate_second_review_database(value)
+        elif value:
             validate_database(value)
         # Autoreload would spawn a child without these in-memory settings.
         call_command('runserver', f'127.0.0.1:{args.port}', use_reloader=False)

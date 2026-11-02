@@ -186,6 +186,7 @@ def validate_database_owner(ctx, private, *, fresh=True):
     from ui_server import isolation
 
     scope = isolation()
+    second_review = scope.get('shard') == 'second-review'
     port = os.environ.get('POSTGRE_PORT', '')
     require(port.isdecimal() and 1024 <= int(port) <= 65535, 'Synthetic PostgreSQL port invalid')
     marker = None
@@ -193,11 +194,17 @@ def validate_database_owner(ctx, private, *, fresh=True):
         require(
             os.environ.get('GITHUB_ACTIONS') == 'true'
             and port == '5432'
-            and os.environ['POSTGRE_NAME'] == 'ui_ci_browser'
+            and os.environ['POSTGRE_NAME'] == ('ui_ci_second_review_browser' if second_review else 'ui_ci_browser')
             and Path(private).parent.resolve() == Path(os.environ['RUNNER_TEMP']).resolve(),
             "Only this job's ephemeral service is supported",
         )
-    else:
+    if second_review:
+        require(
+            os.environ['POSTGRE_HOST'] == '127.0.0.1'
+            and os.environ['POSTGRE_NAME'].startswith('ui_ci_second_review_'),
+            'Second review requires its dedicated loopback database',
+        )
+    if ctx['environment'] != 'github':
         marker_path = Path(os.environ['UI_NATIVE_CLUSTER_FILE'])
         require(
             marker_path.resolve() == Path(private).parent.resolve() / 'native-cluster.json',
@@ -232,11 +239,30 @@ def validate_database_owner(ctx, private, *, fresh=True):
                 and identity == marker['system_identifier'],
                 'Native server identity mismatch',
             )
+        if second_review:
+            directory, actual_port, identifier = db.execute(
+                "SELECT current_setting('data_directory'), current_setting('port'), system_identifier FROM pg_control_system()"
+            ).fetchone()
+            require(int(actual_port) == int(port), 'Second-review server port mismatch')
+            bootstrap = {
+                'schema': 'second-review-owned-native/v1',
+                'database': scope['database'],
+                'port': int(actual_port),
+                'cluster': directory,
+                'system_identifier': str(identifier),
+                'fresh_public_tables': 0,
+            }
         if fresh:
             count = db.execute(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
             ).fetchone()[0]
             require(count == 0, 'Fresh owned database required; never reset a retained schema')
+    if second_review:
+        path = Path(private) / 'second-review-bootstrap.json'
+        if fresh:
+            write_json(path, bootstrap, 4096)
+        else:
+            require(read_json(path, 4096) == bootstrap, 'Second-review bootstrap identity changed')
     proof = {
         'database': scope['database'],
         'fresh_public_tables': 0,
@@ -289,24 +315,34 @@ def seed(ctx, shard, private):
     validate_database_owner(ctx, private)
     compile_catalogs(ctx, private)
     commands = [['migrate', '--noinput'], ['collectstatic', '--noinput']]
-    commands += (
-        [['seed_review_confidence_e2e']]
-        if shard == 'confidence'
-        else [
-            ['seed_enterprise_e2e'],
-            ['seed_review_batches_e2e'],
-            ['seed_classification_e2e'],
-            ['seed_classification_batches_e2e'],
-        ]
-    )
+    if shard == 'second-review':
+        os.environ['SECOND_REVIEW_E2E_OWNERSHIP_FILE'] = str(private / 'second-review-bootstrap.json')
+        commands += [['seed_second_review_e2e']]
+    else:
+        commands += (
+            [['seed_review_confidence_e2e']]
+            if shard == 'confidence'
+            else [
+                ['seed_enterprise_e2e'],
+                ['seed_review_batches_e2e'],
+                ['seed_classification_e2e'],
+                ['seed_classification_batches_e2e'],
+            ]
+        )
     for n, cmd in enumerate(commands):
         require(management(cmd, private / f'seed-{n}.log') == 0, 'Synthetic preparation failed')
     fixtures = ROOT / 'web/apps/labelstudio-e2e'
     if shard == 'confidence':
         validate_fixture(read_json(fixtures / '.review-confidence-e2e.json'))
+    if shard == 'second-review':
+        from ui_second_review import validate_fixture as validate_second_review
+
+        validate_second_review(read_json(fixtures / '.second-review-e2e.json'))
     secrets = []
     for filename in (
-        ('.review-confidence-e2e.json',)
+        ('.second-review-e2e.json',)
+        if shard == 'second-review'
+        else ('.review-confidence-e2e.json',)
         if shard == 'confidence'
         else (
             '.enterprise-e2e.json',
@@ -350,6 +386,8 @@ def browser(ctx, shard, out, build_identity, build_manifest):
     args = [sys.executable, str(ROOT / 'scripts/ci/ui_server.py'), '--port', str(port)]
     if shard == 'confidence':
         args.append('--confidence')
+    if shard == 'second-review':
+        args.append('--second-review')
     flags = (
         {'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
         if os.name == 'nt'

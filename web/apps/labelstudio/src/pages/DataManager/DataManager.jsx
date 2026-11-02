@@ -21,6 +21,7 @@ import { TaskPackageEntry, TaskPackages, TaskPackageTitle } from "./TaskPackages
 import { selectedTaskPackageIds } from "./taskPackageSelection";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { ReviewBatchEntry, ReviewBatches, ReviewBatchTitle } from "./ReviewBatches";
+import { SecondReviewEntry, SecondReviewWorkspace } from "./SecondReviewWorkspace";
 import { ClassificationDisagreement, ClassificationEntry, ClassificationTitle } from "./ClassificationDisagreement";
 import { FieldDisagreement, FieldEntry, FieldTitle } from "./FieldDisagreement";
 import { FieldBatches, FieldBatchEntry, FieldBatchTitle } from "./FieldBatches";
@@ -451,6 +452,23 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openSecondReviews = () => {
+    const trigger = document.activeElement;
+    modal({
+      header: (
+        <CollaborationModalLanguage
+          initialPreference={localePreference.preference}
+          setPreference={localePreference.setPreference}
+        />
+      ),
+      body: <SecondReviewWorkspace projectId={project.id} />,
+      onHidden: () => {
+        if (trigger?.isConnected) trigger.focus();
+      },
+      style: { width: 960, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
+
   const openClassification = () => {
     const trigger = document.activeElement;
     modal({
@@ -619,6 +637,7 @@ DataManagerPage.context = ({ dmRef }) => {
       </Button>
       <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
       <ReviewBatchEntry projectId={project.id} onOpen={openReviewBatches} disabled={!localePreference.ready} />
+      <SecondReviewEntry projectId={project.id} onOpen={openSecondReviews} disabled={!localePreference.ready} />
       <ClassificationEntry projectId={project.id} onOpen={openClassification} disabled={!localePreference.ready} />
       <FieldEntry projectId={project.id} onOpen={openFieldDisagreement} disabled={!localePreference.ready} />
       <NerEntry projectId={project.id} onOpen={openNerDisagreement} disabled={!localePreference.ready} />

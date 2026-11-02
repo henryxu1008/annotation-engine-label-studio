@@ -88,7 +88,7 @@ def report(call):
 class Fixture:
     """Synthetic execution metadata only, never evidence of an actual GitHub run."""
 
-    def __init__(self, root, attempt=1, mixed=False):
+    def __init__(self, root, attempt=1, mixed=False, rerun='confidence'):
         self.context = ctx(attempt)
         self.rows = []
         self.items = []
@@ -99,7 +99,7 @@ class Fixture:
         end = '2026-11-02T01:00:00Z'
         created = '2026-11-02T00:30:00Z'
         for index, (logical, name) in enumerate(JOB_NAMES.items()):
-            a = 1 if mixed and logical != 'confidence' else attempt
+            a = 1 if mixed and logical != rerun else attempt
             job = {
                 'id': index + 1,
                 'run_id': 123,
@@ -237,10 +237,12 @@ class InventoryTests(unittest.TestCase):
             'import-initialization',
         }
         flat = [c for g in groups.values() for c in g]
-        self.assertEqual(len(groups), 9)
-        self.assertEqual(len(flat), 24)
-        self.assertEqual({Path(c['spec']).name.removesuffix('.cy.ts') for c in flat}, old | {'review-confidence'})
-        self.assertEqual(len({c['id'] for c in flat}), 24)
+        self.assertEqual(len(groups), 10)
+        self.assertEqual(len(flat), 25)
+        self.assertEqual(
+            {Path(c['spec']).name.removesuffix('.cy.ts') for c in flat}, old | {'review-confidence', 'second-review'}
+        )
+        self.assertEqual(len({c['id'] for c in flat}), 25)
 
     def test_parameters_languages_resets_and_limits_are_not_weakened(self):
         self.assertEqual(calls('full-en')[0]['env'], {'fullFlowLocale': 'en-US'})
@@ -536,8 +538,8 @@ class AggregateTests(unittest.TestCase):
             f = Fixture(p)
             value = aggregate(f.context, p / 'aggregate', f)
             self.assertEqual(value['status'], 'success')
-            self.assertEqual(len(value['records']), 10)
-            self.assertEqual(value['browser_invocations'], 24)
+            self.assertEqual(len(value['records']), 11)
+            self.assertEqual(value['browser_invocations'], 25)
             self.assertEqual(f.jobs_read, 2)
 
     def test_partial_rerun_can_reuse_proven_old_success_without_relabeling(self):

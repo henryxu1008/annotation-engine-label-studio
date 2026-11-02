@@ -21,6 +21,7 @@ SHARDS = {
     'full-zh': ['full-enterprise-workflow'],
     'packages-import': ['fixed-task-packages', 'import-initialization'],
     'confidence': ['review-confidence'],
+    'second-review': ['second-review'],
 }
 JOB_NAMES = {'prepare': 'Prepare enterprise UI', **{s: 'Enterprise UI / ' + s for s in SHARDS}}
 JEST_UI_PATHS = [
@@ -60,13 +61,17 @@ def calls(shard):
             {
                 'id': name + ('-' + env['fullFlowLocale'] if 'fullFlowLocale' in env else ''),
                 'spec': SPEC_DIR + name + '.cy.ts',
-                'config_file': 'cypress.review-confidence.config.ts' if shard == 'confidence' else BASE_CONFIG,
+                'config_file': 'cypress.second-review.config.ts'
+                if shard == 'second-review'
+                else 'cypress.review-confidence.config.ts'
+                if shard == 'confidence'
+                else BASE_CONFIG,
                 'env': env,
                 'browser': 'electron',
                 'video': True,
                 'reset': shard.startswith('locale-') or shard in ('full-en', 'full-zh', 'packages-import'),
-                'timeout_seconds': 300 if name == 'dm-entity-boundary' else None,
-                'kill_grace_seconds': 15 if name == 'dm-entity-boundary' else None,
+                'timeout_seconds': 300 if name in ('dm-entity-boundary', 'second-review') else None,
+                'kill_grace_seconds': 15 if name in ('dm-entity-boundary', 'second-review') else None,
                 'languages': [env['fullFlowLocale']]
                 if 'fullFlowLocale' in env
                 else (['en-US'] if shard == 'enterprise-ui' else ['en-US', 'zh-CN']),
@@ -85,7 +90,7 @@ def inventory():
         'prepare': [{'id': k, 'command': v, 'kind': t} for k, v, t in PREPARE],
     }
     flat = [c['id'] for group in result['shards'].values() for c in group]
-    if len(result['shards']) != 9 or len(flat) != 24 or len(set(flat)) != 24:
+    if len(result['shards']) != 10 or len(flat) != 25 or len(set(flat)) != 25:
         raise ValueError('Incomplete UI inventory')
     return result
 

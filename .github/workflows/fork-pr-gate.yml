@@ -99,6 +99,9 @@ jobs:
             tasks/tests/test_project_operation_policy.py \
             tasks/tests/test_my_work.py \
             review_batches/tests/test_batches.py review_batches/tests/test_priority.py review_batches/tests/test_handoff.py classification_disagreements/tests/test_comparison.py classification_disagreements/tests/test_batches.py classification_disagreements/tests/test_arbitration.py \
+            review_batches/tests/test_second_review.py review_batches/tests/test_second_review_authority.py \
+            review_batches/tests/test_second_review_budgets.py review_batches/tests/test_second_review_concurrency.py \
+            review_batches/tests/test_second_review_integration.py review_batches/tests/test_second_review_ledger.py review_batches/tests/test_second_review_sources.py \
             task_packages/tests \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \
