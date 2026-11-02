@@ -97,6 +97,28 @@ this server's LOCALE_PATHS override. Repository-tracked .mo files stay unchanged
 Linux uses Django/GNU compilemessages; Windows local acceptance uses Babel and
 records that distinct method. Neither proves the other platform's execution.
 
+The isolated compiler uses the conventional `catalogs/locale/<language>/LC_MESSAGES`
+tree and runs Django discovery from `catalogs`. Django ignores LOCALE_PATHS when
+DJANGO_SETTINGS_MODULE is unset; configuring that setting alone does not make the
+old nonconventional tree discoverable. Discovery regression tests use the actual
+Django command with only the external compiler boundary mocked; they are not
+reported as Linux/GNU execution.
+
+## Controlled dependency cache measurements
+
+Manual dispatch accepts `dependency_cache=warm|cold`, default warm. PR/push keep
+the existing cache behavior. Cold disables setup-python/setup-node cache restore
+and save, and establishes fresh job-private Poetry cache/venvs, pip, Yarn, Cypress
+binary and XDG cache directories before installation. Existing caches are never
+deleted. This isolates project dependencies, not the hosted OS/apt/tool image.
+
+The mode is derived from the actual event payload and bound into the source context.
+Prepare/browser receipts require the same-mode bootstrap proof; cold receipts also
+require the applied environment to still match the controlled directories.
+Aggregation rejects mismatched modes or isolation evidence. Requested warm does
+not prove cache hits: record actual cache metadata and timings separately.
+Cold/warm runs have independent identities and artifacts; no cross-run build reuse.
+
 ## Source index
 
 - `.github/workflows/enterprise-browser-e2e.yml`: prepare / fixed matrix / required aggregate.
@@ -108,6 +130,7 @@ records that distinct method. Neither proves the other platform's execution.
 - `scripts/ci/ui_run.py`: actual prepare/browser execution, ownership and lifecycle.
 - `scripts/ci/ui_server.py`: synthetic-only runtime settings and row verification.
 - `scripts/ci/ui_catalogs.py`: private two-language compilation and verification.
+- `scripts/ci/ui_dependencies.py`: dispatch-only project dependency isolation and proof.
 - `scripts/ci/ui_aggregate.py`: read-only Actions metadata, latest attempts, strict aggregate.
 - `scripts/ci/run_cypress.cjs`: locked Cypress Module API, narrow actual-result projection.
 - `scripts/ci/ui_unit_skips.json`: five pre-existing explicit unit skips.

@@ -97,6 +97,11 @@ class GitHub:
 
 def verify_run(ctx, run):
     require(
+        ctx.get('cache_mode') in ('warm', 'cold')
+        and (ctx['cache_mode'] == 'warm' or ctx['event'] == 'workflow_dispatch'),
+        'Dependency cache mode/event mismatch',
+    )
+    require(
         run.get('id') == ctx['run_id']
         and run.get('event') == ctx['event']
         and run.get('head_sha') == ctx['metadata_head']
@@ -169,6 +174,14 @@ def validate_receipt(
         'Receipt status/identity invalid',
     )
     same_source(ctx, receipt['context'])
+    from ui_common import canonical
+    from ui_dependencies import expected_evidence
+
+    require(
+        canonical(receipt.get('diagnostics', {}).get('dependency_cache'))
+        == canonical(expected_evidence(ctx['cache_mode'])),
+        'Dependency cache evidence invalid',
+    )
     require(receipt['context']['attempt'] == job['run_attempt'], 'Receipt producer attempt mismatch')
     expected = inventory()['prepare'] if logical == 'prepare' else calls(logical)
     records = receipt.get('calls')

@@ -210,6 +210,14 @@ def recipe_digest():
     return digest({p: file_hash(ROOT / p) for p in paths})
 
 
+def dependency_cache_mode(event, payload):
+    inputs = payload.get('inputs', {}) if event == 'workflow_dispatch' else {}
+    require(isinstance(inputs, dict), 'Dependency cache inputs invalid')
+    mode = inputs.get('dependency_cache', 'warm')
+    require(isinstance(mode, str) and mode in ('cold', 'warm'), 'Dependency cache mode invalid')
+    return mode
+
+
 def context(local=False):
     checkout = git('rev-parse', 'HEAD')
     require(sha(checkout), 'Checkout identity invalid')
@@ -231,6 +239,7 @@ def context(local=False):
             'inventory': inventory_digest(),
             'recipe': recipe_digest(),
             'checkout_clean': clean,
+            'cache_mode': 'local_existing',
         }
     require(clean, 'GitHub evidence requires a clean checkout')
     require(
@@ -270,6 +279,7 @@ def context(local=False):
         'inventory': inventory_digest(),
         'recipe': recipe_digest(),
         'checkout_clean': clean,
+        'cache_mode': dependency_cache_mode(event, payload),
     }
 
 
@@ -298,6 +308,7 @@ def same_source(a, b):
         'inventory',
         'recipe',
         'checkout_clean',
+        'cache_mode',
     )
     require(all(a.get(k) == b.get(k) for k in keys), 'Evidence source/run mismatch')
     require(integer(a.get('attempt'), 1, 20) and integer(b.get('attempt'), 1, 20), 'Attempt identity invalid')

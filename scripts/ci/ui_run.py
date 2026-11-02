@@ -78,6 +78,8 @@ def run(argv, log, *, cwd=ROOT, timeout=None):
 
 
 def export_receipt(ctx, logical, out, records, success, build=None):
+    from ui_dependencies import evidence
+
     verify_context(ctx)
     out = Path(out)
     require(
@@ -97,6 +99,7 @@ def export_receipt(ctx, logical, out, records, success, build=None):
             'raw_logs': 'private_not_archived',
             'screenshots_video': 'generated_per_original_config_not_archived',
             'dropped_private_material': True,
+            'dependency_cache': evidence(ctx),
         },
     }
     write_json(out / 'receipt.json', public_evidence(receipt), RECEIPT_LIMIT)

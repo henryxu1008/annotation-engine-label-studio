@@ -1469,3 +1469,9 @@ Local acceptance and independent review evidence are external. Hosted Actions,
 Linux timeout/matrix/cold-warm measurements remain NOT_RUN before separate
 publication authorization. Fork-only, #81/#84 OPEN, no deployment/Host/Core,
 Docker/#76 or other-worktree/runtime/data operations.
+
+CI-only compatibility correction: the private GNU catalog compiler uses a conventional
+locale tree without importing product settings. Dispatch-only cold/warm dependency
+measurements bind the actual input to context and receipts, isolate only new job-private
+cache directories and never delete retained caches. PR/push defaults, required checks,
+permissions, product policies and all second-review design snapshots remain unchanged.

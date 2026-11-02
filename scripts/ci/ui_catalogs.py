@@ -12,7 +12,7 @@ LOCALES = ('en_US', 'zh_Hans')
 
 def validate_catalogs(private):
     private = Path(private)
-    base = private / 'catalogs'
+    base = private / 'catalogs' / 'locale'
     proof = read_json(private / 'catalogs.json')
     require(
         proof.get('schema') == 'ui-catalogs/v1' and set(proof.get('locales', {})) == set(LOCALES),
@@ -35,10 +35,27 @@ def validate_catalogs(private):
     return base
 
 
+def compile_gnu(base):
+    """Use Django discovery from an isolated conventional locale tree."""
+    os.environ.pop('DJANGO_SETTINGS_MODULE', None)
+    from django.conf import settings
+
+    settings.configure(USE_I18N=True, LOCALE_PATHS=[str(base)], INSTALLED_APPS=[], SECRET_KEY='ci-catalogs-only')
+    import django
+
+    django.setup()
+    from django.core.management import call_command
+
+    # compilemessages ignores LOCALE_PATHS without DJANGO_SETTINGS_MODULE.
+    # Its conventional "locale" directory discovery works without product settings.
+    os.chdir(base.parent)
+    call_command('compilemessages', locale=list(LOCALES), verbosity=1)
+
+
 def compile_catalogs(private):
     private = Path(private)
-    base = private / 'catalogs'
-    base.mkdir(exist_ok=False)
+    base = private / 'catalogs' / 'locale'
+    base.mkdir(parents=True, exist_ok=False)
     for locale in LOCALES:
         source = ROOT / 'label_studio/locale' / locale / 'LC_MESSAGES/django.po'
         require(source.is_file(), 'Required root locale source missing')
@@ -58,17 +75,7 @@ def compile_catalogs(private):
         method = 'Babel native Windows acceptance; GNU/Linux execution separate'
     else:
         # Django's existing GNU gettext compiler, isolated from repository/app locale outputs.
-        os.environ.pop('DJANGO_SETTINGS_MODULE', None)
-        from django.conf import settings
-
-        settings.configure(USE_I18N=True, LOCALE_PATHS=[str(base)], INSTALLED_APPS=[], SECRET_KEY='ci-catalogs-only')
-        import django
-
-        django.setup()
-        from django.core.management import call_command
-
-        os.chdir(base)
-        call_command('compilemessages', locale=list(LOCALES), verbosity=1)
+        compile_gnu(base)
         method = 'Django compilemessages / GNU gettext'
     proof = {'schema': 'ui-catalogs/v1', 'method': method, 'locales': {}}
     for locale in LOCALES:

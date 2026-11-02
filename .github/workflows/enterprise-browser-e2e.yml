@@ -8,6 +8,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
     # Required checks run for every PR, including documentation-only changes.
   workflow_dispatch:
+    inputs:
+      dependency_cache:
+        description: Project dependency cache mode for bounded CI acceptance
+        type: choice
+        required: true
+        default: warm
+        options: [warm, cold]
 
 permissions:
   contents: read
@@ -38,6 +45,7 @@ env:
   NX_SKIP_NX_CACHE: "true"
   NX_SKIP_REMOTE_CACHE: "true"
   PYTHONDONTWRITEBYTECODE: "1"
+  UI_DEPENDENCY_CACHE: ${{ github.event_name == 'workflow_dispatch' && inputs.dependency_cache || 'warm' }}
 
 jobs:
   prepare-ui:
@@ -48,12 +56,14 @@ jobs:
       build-id: ${{ steps.build.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
+      - name: Configure project dependency cache mode
+        run: python scripts/ci/ui.py dependencies
       - name: Install Poetry
         run: pipx install "poetry==${{ env.POETRY_VERSION }}"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: poetry
+          cache: ${{ env.UI_DEPENDENCY_CACHE == 'warm' && 'poetry' || '' }}
       - name: Install backend OS dependencies
         run: |
           sudo apt-get update
@@ -65,7 +75,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-          cache: yarn
+          cache: ${{ env.UI_DEPENDENCY_CACHE == 'warm' && 'yarn' || '' }}
           cache-dependency-path: web/yarn.lock
       - name: Install frontend dependencies
         working-directory: web
@@ -123,12 +133,14 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v6
+      - name: Configure project dependency cache mode
+        run: python scripts/ci/ui.py dependencies
       - name: Install Poetry
         run: pipx install "poetry==${{ env.POETRY_VERSION }}"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: poetry
+          cache: ${{ env.UI_DEPENDENCY_CACHE == 'warm' && 'poetry' || '' }}
       - name: Install backend OS dependencies
         run: |
           sudo apt-get update
@@ -140,7 +152,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-          cache: yarn
+          cache: ${{ env.UI_DEPENDENCY_CACHE == 'warm' && 'yarn' || '' }}
           cache-dependency-path: web/yarn.lock
       - name: Install frontend dependencies
         working-directory: web

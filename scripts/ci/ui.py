@@ -9,7 +9,7 @@ from ui_inventory import SHARDS
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['matrix', 'prepare', 'unpack', 'browser', 'aggregate'])
+    parser.add_argument('command', choices=['matrix', 'dependencies', 'prepare', 'unpack', 'browser', 'aggregate'])
     parser.add_argument('--local', action='store_true')
     parser.add_argument('--shard', choices=list(SHARDS))
     parser.add_argument('--out', type=Path)
@@ -22,6 +22,11 @@ def main():
         print(json.dumps({'shard': list(SHARDS)}))
         return
     ctx = context(args.local)
+    if args.command == 'dependencies':
+        from ui_dependencies import configure
+
+        configure(ctx)
+        return
     if args.command == 'unpack':
         from ui_artifacts import unpack_build
 

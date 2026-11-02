@@ -28,6 +28,7 @@ from ui_common import (
     same_source,
     write_json,
 )
+from ui_dependencies import expected_evidence
 from ui_inventory import JOB_NAMES, PREPARE, SHARDS, calls, inventory, prepare_commands
 from ui_results import normalize_node_xml, report_reference, unit_skips, validate_report, validate_unit
 from ui_server import isolation, validate_fixture
@@ -47,6 +48,7 @@ def ctx(attempt=1):
         'workflow': WORKFLOW,
         'inventory': 'b' * 64,
         'recipe': 'c' * 64,
+        'cache_mode': 'warm',
     }
 
 
@@ -143,7 +145,7 @@ class Fixture:
                 'status': 'success',
                 'calls': records,
                 'build': build,
-                'diagnostics': {'policy': 'structured-only'},
+                'diagnostics': {'policy': 'structured-only', 'dependency_cache': expected_evidence('warm')},
             }
             write_json(folder / 'receipt.json', receipt)
             out = io.BytesIO()
@@ -173,7 +175,7 @@ class Fixture:
         self.runs_read += 1
         return {
             'id': 123,
-            'event': 'push',
+            'event': self.context['event'],
             'head_sha': 'a' * 40,
             'run_attempt': self.context['attempt'],
             'name': WORKFLOW,
@@ -281,6 +283,15 @@ class InventoryTests(unittest.TestCase):
             self.assertNotIn('with', checkout)
         for key in ('NX_SKIP_NX_CACHE', 'NX_SKIP_REMOTE_CACHE'):
             self.assertEqual(w['env'][key], 'true')
+        self.assertEqual(w['on']['workflow_dispatch']['inputs']['dependency_cache']['options'], ['warm', 'cold'])
+        for key in ('prepare-ui', 'browser'):
+            steps = jobs[key]['steps']
+            self.assertEqual(steps[1]['run'], 'python scripts/ci/ui.py dependencies')
+            for action, cache in [('setup-python', 'poetry'), ('setup-node', 'yarn')]:
+                step = next(s for s in steps if action in s.get('uses', ''))
+                self.assertEqual(
+                    step['with']['cache'], '$' + "{{ env.UI_DEPENDENCY_CACHE == 'warm' && '" + cache + "' || '' }}"
+                )
         for key, folder in [('prepare-ui', 'prepare'), ('browser', 'browser')]:
             upload = next(s for s in jobs[key]['steps'] if s.get('name', '').startswith('Retain bounded'))
             self.assertEqual(upload['with']['path'], '$' + '{{ runner.temp }}/ui-' + folder + '-evidence-export/')
@@ -906,6 +917,54 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_real_django_discovery_fails_old_layout_and_finds_only_private_new_layout(self):
+        import shutil
+        import subprocess
+
+        driver = r"""
+import os,sys
+from pathlib import Path
+from unittest.mock import patch
+root=Path(sys.argv[1]);base=Path(sys.argv[2]);case=sys.argv[3]
+sys.path.insert(0,str(root/'scripts/ci'))
+from ui_catalogs import compile_gnu,LOCALES
+from django.core.management.base import CommandError
+seen=[]
+def compiler(argv):
+    assert argv[:3]==['msgfmt','--check-format','-o']
+    target,source=Path(argv[3]),Path(argv[4])
+    assert source.parent.parent.parent==base and source.name=='django.po'
+    seen.append(source.resolve())
+    locale=source.parent.parent.name
+    target.write_bytes((root/'label_studio/locale'/locale/'LC_MESSAGES/django.mo').read_bytes())
+    return '', '', 0
+with patch('django.core.management.commands.compilemessages.find_command',return_value='fixture-msgfmt'), \
+     patch('django.core.management.commands.compilemessages.popen_wrapper',side_effect=compiler):
+    try:compile_gnu(base)
+    except CommandError as exc:
+        assert case=='old' and 'settings module specified' in str(exc) and not seen
+    else:
+        assert case=='new'
+        assert set(seen)=={(base/l/'LC_MESSAGES/django.po').resolve() for l in LOCALES}
+assert 'DJANGO_SETTINGS_MODULE' not in os.environ
+print('DJANGO_DISCOVERY_PASS; external GNU compiler mocked')
+"""
+        for case, leaf in [('old', 'catalogs'), ('new', 'catalogs/locale')]:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as d:
+                base = Path(d) / leaf
+                for locale in ('en_US', 'zh_Hans'):
+                    target = base / locale / 'LC_MESSAGES/django.po'
+                    target.parent.mkdir(parents=True)
+                    shutil.copyfile(ROOT / 'label_studio/locale' / locale / 'LC_MESSAGES/django.po', target)
+                result = subprocess.run(
+                    [sys.executable, '-c', driver, str(ROOT), str(base), case],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+                self.assertIn('DJANGO_DISCOVERY_PASS', result.stdout)
+
     def test_actual_root_locales_are_required_and_both_outputs_verified(self):
         import shutil
 
@@ -922,13 +981,13 @@ class CatalogTests(unittest.TestCase):
                 src = ROOT / 'label_studio/locale' / locale / 'LC_MESSAGES/django.po'
                 self.assertTrue(src.is_file())
                 mo = ROOT / 'label_studio/locale' / locale / 'LC_MESSAGES/django.mo'
-                target = p / 'catalogs' / locale / 'LC_MESSAGES/django.mo'
+                target = p / 'catalogs/locale' / locale / 'LC_MESSAGES/django.mo'
                 target.parent.mkdir(parents=True)
                 shutil.copyfile(mo, target)
                 proof['locales'][locale] = {'source_sha256': file_hash(src), 'mo_sha256': file_hash(target)}
             write_json(p / 'catalogs.json', proof)
-            self.assertEqual(validate_catalogs(p), p / 'catalogs')
-            (p / 'catalogs/zh_Hans/LC_MESSAGES/django.mo').write_bytes(b'tampered')
+            self.assertEqual(validate_catalogs(p), p / 'catalogs/locale')
+            (p / 'catalogs/locale/zh_Hans/LC_MESSAGES/django.mo').write_bytes(b'tampered')
             with self.assertRaises(ValueError):
                 validate_catalogs(p)
 
@@ -946,6 +1005,155 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 loads(raw + b' ', cap)
         self.assertEqual(len(canonical({'x': '中'})) - len(canonical({'x': ''})), 3)
+
+
+class DependencyCacheTests(unittest.TestCase):
+    def test_cold_dispatch_aggregate_accepts_bound_isolation_proofs(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            f = Fixture(p)
+            f.context.update(event='workflow_dispatch', cache_mode='cold')
+            for identifier, payload in f.payload.items():
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(payload)) as src, zipfile.ZipFile(buffer, 'w') as out:
+                    for name in src.namelist():
+                        raw = src.read(name)
+                        if name == 'receipt.json':
+                            value = loads(raw)
+                            value['context'].update(event='workflow_dispatch', cache_mode='cold')
+                            value['diagnostics']['dependency_cache'] = expected_evidence('cold')
+                            raw = canonical(value)
+                        out.writestr(name, raw)
+                f.payload[identifier] = buffer.getvalue()
+            self.assertEqual(aggregate(f.context, p / 'aggregate', f)['status'], 'success')
+
+    def test_existing_cold_directory_is_rejected_without_deleting_retained_content(self):
+        from ui_dependencies import configure
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            base = p / 'ui-cold-dependencies'
+            base.mkdir()
+            marker = base / 'preserve'
+            marker.write_text('existing')
+            with patch.dict(
+                os.environ,
+                {
+                    'GITHUB_ACTIONS': 'true',
+                    'UI_DEPENDENCY_CACHE': 'cold',
+                    'RUNNER_TEMP': str(p),
+                    'GITHUB_ENV': str(p / 'env'),
+                },
+            ):
+                with self.assertRaisesRegex(ValueError, 'already exists'):
+                    configure({**ctx(), 'event': 'workflow_dispatch', 'cache_mode': 'cold'})
+                self.assertEqual(marker.read_text(), 'existing')
+                self.assertFalse((p / 'env').exists())
+                self.assertFalse((p / 'ui-dependency-cache-proof.json').exists())
+
+    def test_mode_is_bound_to_dispatch_input_and_other_events_stay_warm(self):
+        from ui_common import dependency_cache_mode
+
+        self.assertEqual(dependency_cache_mode('workflow_dispatch', {'inputs': {'dependency_cache': 'cold'}}), 'cold')
+        self.assertEqual(dependency_cache_mode('pull_request', {'inputs': {'dependency_cache': 'cold'}}), 'warm')
+        self.assertEqual(dependency_cache_mode('push', {}), 'warm')
+        for mode in ('invalid', '', True, None):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                dependency_cache_mode('workflow_dispatch', {'inputs': {'dependency_cache': mode}})
+
+    def test_cold_initializes_all_layers_and_receipt_checks_applied_environment(self):
+        from ui_dependencies import LAYERS, configure, evidence
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            actor = {**ctx(), 'event': 'workflow_dispatch', 'cache_mode': 'cold'}
+            with patch.dict(
+                os.environ,
+                {
+                    'GITHUB_ACTIONS': 'true',
+                    'UI_DEPENDENCY_CACHE': 'cold',
+                    'RUNNER_TEMP': str(p),
+                    'GITHUB_ENV': str(p / 'env'),
+                },
+            ):
+                configure(actor)
+                lines = dict(line.split('=', 1) for line in (p / 'env').read_text(encoding='utf-8').splitlines())
+                self.assertEqual(set(lines), set(LAYERS) | {'POETRY_VIRTUALENVS_IN_PROJECT'})
+                for key in LAYERS:
+                    target = Path(lines[key])
+                    self.assertTrue(target.is_relative_to(p / 'ui-cold-dependencies'))
+                    self.assertEqual(list(target.iterdir()), [])
+                with patch.dict(os.environ, lines):
+                    self.assertEqual(evidence(actor), expected_evidence('cold'))
+                    os.environ['CYPRESS_CACHE_FOLDER'] = str(p / 'wrong')
+                    with self.assertRaisesRegex(ValueError, 'environment changed'):
+                        evidence(actor)
+                with self.assertRaisesRegex(ValueError, 'Never reuse'):
+                    configure(actor)
+
+    def test_warm_does_not_override_or_delete_existing_caches(self):
+        from ui_dependencies import configure, evidence
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            retained = p / 'retained-cache'
+            retained.write_text('preserve')
+            with patch.dict(
+                os.environ,
+                {
+                    'GITHUB_ACTIONS': 'true',
+                    'UI_DEPENDENCY_CACHE': 'warm',
+                    'RUNNER_TEMP': str(p),
+                    'GITHUB_ENV': str(p / 'env'),
+                },
+            ):
+                configure(ctx())
+                self.assertEqual(evidence(ctx()), expected_evidence('warm'))
+                self.assertEqual(retained.read_text(), 'preserve')
+                self.assertFalse((p / 'env').exists())
+                self.assertFalse((p / 'ui-cold-dependencies').exists())
+
+    def test_cache_setup_rejects_input_environment_or_event_mismatch_before_writes(self):
+        from ui_dependencies import configure
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            for event, mode, envmode in [('push', 'cold', 'cold'), ('workflow_dispatch', 'cold', 'warm')]:
+                with patch.dict(
+                    os.environ,
+                    {
+                        'GITHUB_ACTIONS': 'true',
+                        'RUNNER_TEMP': str(p),
+                        'UI_DEPENDENCY_CACHE': envmode,
+                        'GITHUB_ENV': str(p / 'env'),
+                    },
+                ):
+                    with self.assertRaises(ValueError):
+                        configure({**ctx(), 'event': event, 'cache_mode': mode})
+                    self.assertFalse((p / 'ui-dependency-cache-proof.json').exists())
+                    self.assertFalse((p / 'ui-cold-dependencies').exists())
+
+    def test_aggregate_rejects_cache_mode_or_isolation_proof_tampering(self):
+        for mode in ('cold', 'warm'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
+                p = Path(d)
+                f = Fixture(p)
+                if mode == 'cold':
+                    f.context['cache_mode'] = 'cold'
+                else:
+                    original = f.payload[101]
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(io.BytesIO(original)) as src, zipfile.ZipFile(buffer, 'w') as out:
+                        for name in src.namelist():
+                            raw = src.read(name)
+                            if name == 'receipt.json':
+                                v = loads(raw)
+                                v['diagnostics']['dependency_cache']['project_cache_isolated'] = True
+                                raw = canonical(v)
+                            out.writestr(name, raw)
+                    f.payload[101] = buffer.getvalue()
+                with self.assertRaises(ValueError):
+                    aggregate(f.context, p / 'aggregate', f)
 
 
 class DefaultBudgetTests(unittest.TestCase):
