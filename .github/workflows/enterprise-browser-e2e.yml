@@ -107,6 +107,9 @@ jobs:
     needs: prepare-ui
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      POSTGRE_HOST: "127.0.0.1"
+      POSTGRE_NAME: ${{ matrix.shard == 'second-review' && 'ui_ci_second_review_browser' || 'ui_ci_browser' }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -121,15 +124,16 @@ jobs:
           - full-zh
           - packages-import
           - confidence
+          - second-review
     services:
       browser-postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: browser-e2e-test-only
-          POSTGRES_DB: ui_ci_browser
+          POSTGRES_DB: ${{ matrix.shard == 'second-review' && 'ui_ci_second_review_browser' || 'ui_ci_browser' }}
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U postgres -d ui_ci_browser"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v6

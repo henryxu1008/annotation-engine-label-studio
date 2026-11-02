@@ -1490,3 +1490,11 @@ executions using bounded, complete execution fingerprints and a unique older pro
 Latest non-success and intervening failure barriers remain authoritative. Receipts and
 artifacts bind the producer, while both view/producer identities are reported and
 rechecked at the end. Unknown matrix placeholders remain denied.
+
+Second-review CI integration extends that closed inventory with one isolated
+bilingual shard and explicitly adds all seven supervision modules to the SQLite
+gate. [CI integration and acceptance](second-review-ci-integration.md) documents
+the actual pre-migration ownership proof, typed bootstrap/DB graph, 10-shard
+aggregation, unchanged budgets and local-versus-hosted evidence boundaries.
+Product settings, supervision effect, initial review and release policy are
+unchanged by this CI-only slice.
