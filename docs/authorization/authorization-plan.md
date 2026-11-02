@@ -1419,3 +1419,31 @@ the external execution report, not represented as real model/quality/platform
 activation. Remote CI, PR, merge and deployment are separate permissions. Second
 review remains a separate design; Fork-only, #81/#84 OPEN, Docker/#76 and other
 worktrees unchanged.
+
+## CI governance and independent second-review V1 design (#84)
+
+Design-only documents based on actual main merge
+`15ca19c5abf48505042ee6b54bbb7194c5bf8d1e`:
+
+- `ci-governance-v1-design.md` — [CI design](ci-governance-v1-design.md).
+- `ci-governance-v1-acceptance.md` — [24-case CI matrix](ci-governance-v1-acceptance.md).
+- `second-review-v1-design.md` — [second-review design](second-review-v1-design.md).
+- `second-review-v1-acceptance.md` — [56-case second-review matrix](second-review-v1-acceptance.md).
+
+The proposed CI split retains all existing enterprise browser calls and the
+same required check, adds the dedicated confidence journey, and requires exact
+inventory, source/build/attempt receipts and fail-closed aggregation. No workflow
+or ruleset is modified at this stage.
+
+The proposed fixed supervisory_only second review is limited to static text
+classification. It appends a separate independent opinion to an exact selected
+already-reviewed source, preserves the one-initial-decision constraint, and
+does not block or grant release. An approved source with a concern may still
+satisfy legacy release/#79; blocking second review would need a separate complete
+release/#79/#80/Host and historical-artifact policy. This effect is a design
+proposal awaiting user confirmation, not an implemented or already-approved
+policy. Original strategy gates, frozen identities, targeted bounded source
+loading, independent operations, CAS and original-key recovery are required.
+All functional/PG/SQLite/browser/remote-CI cases remain NOT_RUN. Fork-only;
+#81/#84 stay OPEN; no implementation, deployment, Host/Core, Docker/#76 or
+existing-worktree/runtime/data operations.
