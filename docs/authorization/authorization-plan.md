@@ -1419,3 +1419,65 @@ the external execution report, not represented as real model/quality/platform
 activation. Remote CI, PR, merge and deployment are separate permissions. Second
 review remains a separate design; Fork-only, #81/#84 OPEN, Docker/#76 and other
 worktrees unchanged.
+
+## CI governance and independent second-review V1 design (#84)
+
+Design-only documents based on actual main merge
+`15ca19c5abf48505042ee6b54bbb7194c5bf8d1e`:
+
+- `ci-governance-v1-design.md` — [CI design](ci-governance-v1-design.md).
+- `ci-governance-v1-acceptance.md` — [24-case CI matrix](ci-governance-v1-acceptance.md).
+- `second-review-v1-design.md` — [second-review design](second-review-v1-design.md).
+- `second-review-v1-acceptance.md` — [56-case second-review matrix](second-review-v1-acceptance.md).
+
+The proposed CI split retains all existing enterprise browser calls and the
+same required check, adds the dedicated confidence journey, and requires exact
+inventory, source/build/attempt receipts and fail-closed aggregation. No workflow
+or ruleset is modified at this stage.
+
+The proposed fixed supervisory_only second review is limited to static text
+classification. It appends a separate independent opinion to an exact selected
+already-reviewed source, preserves the one-initial-decision constraint, and
+does not block or grant release. An approved source with a concern may still
+satisfy legacy release/#79; blocking second review would need a separate complete
+release/#79/#80/Host and historical-artifact policy. This effect is a design
+proposal awaiting user confirmation, not an implemented or already-approved
+policy. Original strategy gates, frozen identities, targeted bounded source
+loading, independent operations, CAS and original-key recovery are required.
+All functional/PG/SQLite/browser/remote-CI cases remain NOT_RUN. Fork-only;
+#81/#84 stay OPEN; no implementation, deployment, Host/Core, Docker/#76 or
+existing-worktree/runtime/data operations.
+
+## Enterprise UI CI governance V1 implementation
+
+Contract: `ci-governance-v1.md` ([implementation](ci-governance-v1.md)).
+The approved fixed nine-shard inventory and same-name required aggregate preserve
+all old browser calls and add confidence coverage. Fresh structured results,
+explicit immutable build IDs, latest execution/attempt binding, fail-closed
+aggregation and source/dist checks prevent cached, skipped or stale evidence
+from being reported as current acceptance.
+
+The CI-only server checks fresh owned native database scope before management
+writes and loads only validated synthetic configuration. Both actual root
+catalogs compile privately; tracked product catalogs stay unchanged. Existing
+five editor skips remain explicit SKIPPED. No product authorization, schema,
+source test, release policy, ruleset or other workflow is changed.
+
+The user confirmed supervisory_only for future second review, whose design
+snapshots remain unchanged; no second-review implementation is included here.
+Local acceptance and independent review evidence are external. Hosted Actions,
+Linux timeout/matrix/cold-warm measurements remain NOT_RUN before separate
+publication authorization. Fork-only, #81/#84 OPEN, no deployment/Host/Core,
+Docker/#76 or other-worktree/runtime/data operations.
+
+CI-only compatibility correction: the private GNU catalog compiler uses a conventional
+locale tree without importing product settings. Dispatch-only cold/warm dependency
+measurements bind the actual input to context and receipts, isolate only new job-private
+cache directories and never delete retained caches. PR/push defaults, required checks,
+permissions, product policies and all second-review design snapshots remain unchanged.
+
+Partial-rerun producer correction distinguishes latest platform views from actual
+executions using bounded, complete execution fingerprints and a unique older producer.
+Latest non-success and intervening failure barriers remain authoritative. Receipts and
+artifacts bind the producer, while both view/producer identities are reported and
+rechecked at the end. Unknown matrix placeholders remain denied.

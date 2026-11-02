@@ -1,0 +1,331 @@
+{
+  "source": "GitHub REST live API; public job metadata only",
+  "producer": {
+    "id": 125101256986,
+    "run_id": 41390711717,
+    "workflow_name": "Enterprise Browser E2E",
+    "head_branch": "codex/issue84-second-review-ci-design",
+    "run_url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/actions/runs/41390711717",
+    "run_attempt": 1,
+    "node_id": "CR_kwDOUoTYrc8AAAAdIJ2xGg",
+    "head_sha": "9517ae575e49f25427c17357dd004e760d56d0a2",
+    "url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/actions/jobs/125101256986",
+    "html_url": "https://github.com/henryxu1008/annotation-engine-label-studio/actions/runs/41390711717/job/125101256986",
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-11-02T04:51:06Z",
+    "started_at": "2026-11-02T04:51:33Z",
+    "completed_at": "2026-11-02T04:56:40Z",
+    "name": "Prepare enterprise UI",
+    "steps": [
+      {
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 1,
+        "started_at": "2026-11-02T04:51:33Z",
+        "completed_at": "2026-11-02T04:51:34Z"
+      },
+      {
+        "name": "Run actions/checkout@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 2,
+        "started_at": "2026-11-02T04:51:34Z",
+        "completed_at": "2026-11-02T04:51:41Z"
+      },
+      {
+        "name": "Configure project dependency cache mode",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 3,
+        "started_at": "2026-11-02T04:51:41Z",
+        "completed_at": "2026-11-02T04:51:42Z"
+      },
+      {
+        "name": "Install Poetry",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 4,
+        "started_at": "2026-11-02T04:51:42Z",
+        "completed_at": "2026-11-02T04:51:47Z"
+      },
+      {
+        "name": "Run actions/setup-python@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 5,
+        "started_at": "2026-11-02T04:51:47Z",
+        "completed_at": "2026-11-02T04:51:52Z"
+      },
+      {
+        "name": "Install backend OS dependencies",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 6,
+        "started_at": "2026-11-02T04:51:52Z",
+        "completed_at": "2026-11-02T04:52:01Z"
+      },
+      {
+        "name": "Install backend dependencies and generate version",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 7,
+        "started_at": "2026-11-02T04:52:01Z",
+        "completed_at": "2026-11-02T04:52:03Z"
+      },
+      {
+        "name": "Run actions/setup-node@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 8,
+        "started_at": "2026-11-02T04:52:03Z",
+        "completed_at": "2026-11-02T04:52:34Z"
+      },
+      {
+        "name": "Install frontend dependencies",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 9,
+        "started_at": "2026-11-02T04:52:34Z",
+        "completed_at": "2026-11-02T04:53:10Z"
+      },
+      {
+        "name": "Validate CI evidence contracts",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 10,
+        "started_at": "2026-11-02T04:53:10Z",
+        "completed_at": "2026-11-02T04:53:12Z"
+      },
+      {
+        "name": "Run original frontend contracts and production build",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 11,
+        "started_at": "2026-11-02T04:53:12Z",
+        "completed_at": "2026-11-02T04:56:34Z"
+      },
+      {
+        "name": "Upload immutable frontend build",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 12,
+        "started_at": "2026-11-02T04:56:34Z",
+        "completed_at": "2026-11-02T04:56:36Z"
+      },
+      {
+        "name": "Retain bounded prepare evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 13,
+        "started_at": "2026-11-02T04:56:36Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/setup-node@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 24,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/setup-python@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 25,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/checkout@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 26,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 27,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      }
+    ],
+    "check_run_url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/check-runs/125101256986",
+    "labels": [
+      "ubuntu-latest"
+    ],
+    "runner_id": 1000060838,
+    "runner_name": "GitHub Actions 1000060838",
+    "runner_group_id": 0,
+    "runner_group_name": "GitHub Actions"
+  },
+  "copied_view": {
+    "id": 125112911278,
+    "run_id": 41390711717,
+    "workflow_name": "Enterprise Browser E2E",
+    "head_branch": "codex/issue84-second-review-ci-design",
+    "run_url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/actions/runs/41390711717",
+    "run_attempt": 2,
+    "node_id": "CR_kwDOUoTYrc8AAAAdIU-Frg",
+    "head_sha": "9517ae575e49f25427c17357dd004e760d56d0a2",
+    "url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/actions/jobs/125112911278",
+    "html_url": "https://github.com/henryxu1008/annotation-engine-label-studio/actions/runs/41390711717/job/125112911278",
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-11-02T05:31:38Z",
+    "started_at": "2026-11-02T04:51:33Z",
+    "completed_at": "2026-11-02T04:56:40Z",
+    "name": "Prepare enterprise UI",
+    "steps": [
+      {
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 1,
+        "started_at": "2026-11-02T04:51:33Z",
+        "completed_at": "2026-11-02T04:51:34Z"
+      },
+      {
+        "name": "Run actions/checkout@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 2,
+        "started_at": "2026-11-02T04:51:34Z",
+        "completed_at": "2026-11-02T04:51:41Z"
+      },
+      {
+        "name": "Configure project dependency cache mode",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 3,
+        "started_at": "2026-11-02T04:51:41Z",
+        "completed_at": "2026-11-02T04:51:42Z"
+      },
+      {
+        "name": "Install Poetry",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 4,
+        "started_at": "2026-11-02T04:51:42Z",
+        "completed_at": "2026-11-02T04:51:47Z"
+      },
+      {
+        "name": "Run actions/setup-python@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 5,
+        "started_at": "2026-11-02T04:51:47Z",
+        "completed_at": "2026-11-02T04:51:52Z"
+      },
+      {
+        "name": "Install backend OS dependencies",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 6,
+        "started_at": "2026-11-02T04:51:52Z",
+        "completed_at": "2026-11-02T04:52:01Z"
+      },
+      {
+        "name": "Install backend dependencies and generate version",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 7,
+        "started_at": "2026-11-02T04:52:01Z",
+        "completed_at": "2026-11-02T04:52:03Z"
+      },
+      {
+        "name": "Run actions/setup-node@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 8,
+        "started_at": "2026-11-02T04:52:03Z",
+        "completed_at": "2026-11-02T04:52:34Z"
+      },
+      {
+        "name": "Install frontend dependencies",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 9,
+        "started_at": "2026-11-02T04:52:34Z",
+        "completed_at": "2026-11-02T04:53:10Z"
+      },
+      {
+        "name": "Validate CI evidence contracts",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 10,
+        "started_at": "2026-11-02T04:53:10Z",
+        "completed_at": "2026-11-02T04:53:12Z"
+      },
+      {
+        "name": "Run original frontend contracts and production build",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 11,
+        "started_at": "2026-11-02T04:53:12Z",
+        "completed_at": "2026-11-02T04:56:34Z"
+      },
+      {
+        "name": "Upload immutable frontend build",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 12,
+        "started_at": "2026-11-02T04:56:34Z",
+        "completed_at": "2026-11-02T04:56:36Z"
+      },
+      {
+        "name": "Retain bounded prepare evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 13,
+        "started_at": "2026-11-02T04:56:36Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/setup-node@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 24,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/setup-python@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 25,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Post Run actions/checkout@v6",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 26,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      },
+      {
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 27,
+        "started_at": "2026-11-02T04:56:37Z",
+        "completed_at": "2026-11-02T04:56:37Z"
+      }
+    ],
+    "check_run_url": "https://api.github.com/repos/henryxu1008/annotation-engine-label-studio/check-runs/125112911278",
+    "labels": [
+      "ubuntu-latest"
+    ],
+    "runner_id": 1000060838,
+    "runner_name": "GitHub Actions 1000060838",
+    "runner_group_id": null,
+    "runner_group_name": "GitHub Actions"
+  }
+}
