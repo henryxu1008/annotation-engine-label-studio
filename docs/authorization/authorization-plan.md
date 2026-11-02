@@ -1447,3 +1447,25 @@ loading, independent operations, CAS and original-key recovery are required.
 All functional/PG/SQLite/browser/remote-CI cases remain NOT_RUN. Fork-only;
 #81/#84 stay OPEN; no implementation, deployment, Host/Core, Docker/#76 or
 existing-worktree/runtime/data operations.
+
+## Enterprise UI CI governance V1 implementation
+
+Contract: `ci-governance-v1.md` ([implementation](ci-governance-v1.md)).
+The approved fixed nine-shard inventory and same-name required aggregate preserve
+all old browser calls and add confidence coverage. Fresh structured results,
+explicit immutable build IDs, latest execution/attempt binding, fail-closed
+aggregation and source/dist checks prevent cached, skipped or stale evidence
+from being reported as current acceptance.
+
+The CI-only server checks fresh owned native database scope before management
+writes and loads only validated synthetic configuration. Both actual root
+catalogs compile privately; tracked product catalogs stay unchanged. Existing
+five editor skips remain explicit SKIPPED. No product authorization, schema,
+source test, release policy, ruleset or other workflow is changed.
+
+The user confirmed supervisory_only for future second review, whose design
+snapshots remain unchanged; no second-review implementation is included here.
+Local acceptance and independent review evidence are external. Hosted Actions,
+Linux timeout/matrix/cold-warm measurements remain NOT_RUN before separate
+publication authorization. Fork-only, #81/#84 OPEN, no deployment/Host/Core,
+Docker/#76 or other-worktree/runtime/data operations.

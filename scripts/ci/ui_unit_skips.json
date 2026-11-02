@@ -1,0 +1,12 @@
+{
+  "schema": "ui-unit-skips/v1",
+  "commands": {
+    "editor": {
+      "libs/editor/src/tags/control/__tests__/Taxonomy.test.jsx::Taxonomy model findLabel returns label for single-level path (requires FF_TAXONOMY_LABELING)": "Existing explicit it.skip at baseline 15ca19c5a, Taxonomy.test.jsx:284; test declares FF_TAXONOMY_LABELING requirement. Not executed.",
+      "libs/editor/src/tags/control/__tests__/Taxonomy.test.jsx::Taxonomy model needsUpdate sets selected from result mainValue": "Existing explicit it.skip at baseline 15ca19c5a, Taxonomy.test.jsx:292; original cause not established. Not executed.",
+      "libs/editor/src/tags/object/Image/__tests__/ImageEntity.test.js::ImageEntity views imageCrossOrigin returns parent imageCrossOrigin when in a tree with imageCrossOrigin": "Existing explicit it.skip at baseline 15ca19c5a, ImageEntity.test.js:84; original cause not established. Not executed.",
+      "libs/editor/src/core/__tests__/ConfigValidator.test.js::Should fail if tag lacks mandatory attribute toName": "Existing explicit it.skip at baseline 15ca19c5a, ConfigValidator.test.js:50; original cause not established. Not executed.",
+      "libs/editor/src/core/__tests__/ConfigValidator.test.js::Should fail if visual tags have name attribute": "Existing explicit it.skip at baseline 15ca19c5a, ConfigValidator.test.js:104; original cause not established. Not executed."
+    }
+  }
+}
