@@ -39,6 +39,22 @@ cannot be masked by an older success. A failed aggregate emits a bounded static
 error code/stage and sanitized job/attempt map and remains nonzero. Archival is
 attempted even after failure; it never converts a failed check to success.
 
+GitHub partial reruns may create a new successful job view whose creation is
+later than its already-finished execution. Select the latest view first and
+reject its failure, cancellation, incomplete or unknown status before resolving
+any producer. A copied success must match one unique older actual execution:
+same scope, start/end, runner identity, labels and every step. Actual producers
+must have creation <= start <= end; copies must have creation > end. Intervening
+failed, incomplete, newer actual or unproven executions block old-success reuse.
+The observed hosted runner-group sentinel 0/null difference is normalized
+explicitly, with both raw values retained; other execution drift rejects.
+
+Artifacts, receipt attempt and build tuple bind the actual producer, not the
+new API view. The execution map reports both job IDs/attempts and the copied
+success flag. Terminal verification compares both identities and their execution
+fingerprints. Unknown unexpanded matrix placeholders still fail closed and
+require a fresh complete run; they are not silently classified or filtered.
+
 GitHub receipts require an initially clean exact checkout and recheck cleanliness,
 HEAD, inventory and recipe at critical boundaries. Browser execution rechecks
 source and the installed dist after the last spec, before its receipt. Local
@@ -136,6 +152,9 @@ Cold/warm runs have independent identities and artifacts; no cross-run build reu
 - `scripts/ci/ui_unit_skips.json`: five pre-existing explicit unit skips.
 - `scripts/ci/tests/test_ui_contracts.py` and `scripts/ci/tests/run_cypress.test.cjs`:
   local contract/fault-injection regressions; synthetic job metadata is not live CI.
+- `scripts/ci/tests/fixtures/github_partial_views.json`: public live API metadata
+  showing one original execution and its later copied success view, including the
+  observed runner-group sentinel change; no logs, fixture credentials or settings.
 
 Local scope is source/contract/build/native synthetic acceptance. Real GitHub
 matrix execution, required-check behavior, Linux GNU timeout and hosted cold/warm

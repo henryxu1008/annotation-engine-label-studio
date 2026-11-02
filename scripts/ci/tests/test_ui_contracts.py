@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ui_aggregate import GitHub, SafeRedirect, aggregate, latest_jobs, verify_run
+from ui_aggregate import GitHub, SafeRedirect, aggregate, latest_jobs, producer_for_view, verify_run
 from ui_artifacts import pack_build, prepare_export, unpack_build, unpack_evidence_zip
 from ui_common import (
     REPOSITORY,
@@ -110,6 +110,21 @@ class Fixture:
                 'conclusion': 'success',
                 'started_at': start,
                 'completed_at': end,
+                'created_at': start,
+                'runner_id': index + 1000,
+                'runner_name': 'Synthetic runner ' + str(index),
+                'runner_group_id': 0,
+                'labels': ['ubuntu-latest'],
+                'steps': [
+                    {
+                        'number': 1,
+                        'name': 'Synthetic execution fixture',
+                        'status': 'completed',
+                        'conclusion': 'success',
+                        'started_at': start,
+                        'completed_at': end,
+                    }
+                ],
                 'html_url': f'https://github.com/{REPOSITORY}/actions/runs/123/job/{index+1}',
             }
             self.rows.append(job)
@@ -776,6 +791,170 @@ def synthetic_fixture():
         'profile_id': profile,
         'profile_digest': digest(descriptor),
     }
+
+
+class ExecutionViewTests(unittest.TestCase):
+    @staticmethod
+    def copied(row, attempt=2, identifier=999):
+        value = copy.deepcopy(row)
+        value.update(id=identifier, run_attempt=attempt, created_at='2026-11-03T03:00:00Z', runner_group_id=None)
+        value['html_url'] = 'https://github.com/' + REPOSITORY + '/actions/runs/123/job/' + str(identifier)
+        return value
+
+    @staticmethod
+    def add_copied_views(f):
+        f.rows += [ExecutionViewTests.copied(r, 2, 1000 + r['id']) for r in list(f.rows) if r['run_attempt'] == 1]
+
+    def real_samples(self):
+        return read_json(Path(__file__).parent / 'fixtures/github_partial_views.json')
+
+    def test_real_api_copy_resolves_original_without_mutating_either_view(self):
+        sample = self.real_samples()
+        before = copy.deepcopy(sample)
+        actual = producer_for_view(sample['copied_view'], [sample['producer'], sample['copied_view']])
+        self.assertEqual((actual['id'], actual['run_attempt']), (125101256986, 1))
+        self.assertEqual((actual['_view']['id'], actual['_view']['run_attempt']), (125112911278, 2))
+        self.assertEqual(actual['runner_group_id'], 0)
+        self.assertIsNone(actual['_view']['runner_group_id'])
+        self.assertEqual(sample, before)
+
+    def test_actual_platform_copies_keep_producer_artifacts_and_both_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            f = Fixture(p, 2, mixed=True)
+            self.add_copied_views(f)
+            value = aggregate(f.context, p / 'aggregate', f)
+            records = {r['logical']: r for r in value['records']}
+            self.assertEqual(records['prepare']['attempt'], 1)
+            self.assertEqual(records['prepare']['view_attempt'], 2)
+            self.assertTrue(records['prepare']['copied_success'])
+            self.assertEqual(records['confidence']['attempt'], 2)
+            self.assertEqual(records['confidence']['view_attempt'], 2)
+            self.assertFalse(records['confidence']['copied_success'])
+            self.assertEqual(value['build_artifact_id'], 100)
+
+    def test_multilevel_copy_resolves_unique_original(self):
+        s = self.real_samples()
+        first = s['producer']
+        second = s['copied_view']
+        third = self.copied(first, 3, 888)
+        value = producer_for_view(third, [first, second, third])
+        self.assertEqual(value['id'], first['id'])
+        self.assertEqual(value['_view']['id'], 888)
+
+    def test_latest_non_success_always_blocks_old_success(self):
+        s = self.real_samples()
+        for status, conclusion in [
+            ('in_progress', None),
+            ('queued', None),
+            ('completed', 'failure'),
+            ('completed', 'cancelled'),
+            ('completed', 'timed_out'),
+            ('completed', 'neutral'),
+            ('completed', 'skipped'),
+        ]:
+            view = copy.deepcopy(s['copied_view'])
+            view.update(status=status, conclusion=conclusion)
+            with self.subTest(status=status, conclusion=conclusion), self.assertRaises(ValueError):
+                producer_for_view(view, [s['producer'], view])
+
+    def test_missing_or_changed_execution_proof_rejects_copied_success(self):
+        s = self.real_samples()
+        mutations = [
+            lambda v: v.update(runner_id=v['runner_id'] + 1),
+            lambda v: v.update(runner_name='another runner'),
+            lambda v: v.update(labels=['windows-latest']),
+            lambda v: v.update(runner_group_id=7),
+            lambda v: v.update(runner_group_id=True),
+            lambda v: v['steps'][0].update(name='different step'),
+            lambda v: v['steps'][0].pop('completed_at'),
+            lambda v: v.update(steps=[]),
+            lambda v: v.pop('runner_id'),
+            lambda v: v.update(created_at=None),
+            lambda v: v.update(started_at='2026-11-02T04:51:32Z'),
+            lambda v: v.update(created_at='2026-11-02T04:52:00Z'),
+            lambda v: v.update(started_at='2026-11-02T04:51:33'),
+            lambda v: v.update(head_sha='f' * 40),
+            lambda v: v.update(run_id=12345),
+            lambda v: v.update(name='another logical job'),
+        ]
+        for index, mutate in enumerate(mutations):
+            view = copy.deepcopy(s['copied_view'])
+            mutate(view)
+            with self.subTest(case=index), self.assertRaises((ValueError, KeyError)):
+                producer_for_view(view, [s['producer'], view])
+
+    def test_duplicate_actual_producer_candidates_reject(self):
+        s = self.real_samples()
+        duplicate = copy.deepcopy(s['producer'])
+        duplicate.update(id=999, run_attempt=2)
+        view = self.copied(s['producer'], 3, 1000)
+        with self.assertRaisesRegex(ValueError, 'unique actual producer'):
+            producer_for_view(view, [s['producer'], duplicate, view])
+
+    def test_intervening_failure_or_new_actual_execution_cannot_be_hidden(self):
+        s = self.real_samples()
+        first = s['producer']
+        view = self.copied(first, 3, 1000)
+        for conclusion in ('failure', 'cancelled', 'timed_out', 'success'):
+            middle = copy.deepcopy(first)
+            middle.update(
+                id=999,
+                run_attempt=2,
+                created_at='2026-11-02T01:59:00Z',
+                started_at='2026-11-02T02:00:00Z',
+                completed_at='2026-11-02T02:30:00Z',
+                conclusion=conclusion,
+            )
+            for step in middle['steps']:
+                if step['started_at'] is not None:
+                    step['started_at'] = '2026-11-02T02:00:00Z'
+                if step['completed_at'] is not None:
+                    step['completed_at'] = '2026-11-02T02:30:00Z'
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                producer_for_view(view, [first, middle, view])
+
+    def test_intervening_incomplete_or_drifted_copy_rejects(self):
+        s = self.real_samples()
+        view = self.copied(s['producer'], 3, 1000)
+        for change in (
+            lambda v: v.update(status='in_progress', conclusion=None),
+            lambda v: v['steps'][0].update(name='unknown execution'),
+        ):
+            middle = copy.deepcopy(s['copied_view'])
+            change(middle)
+            with self.assertRaises(ValueError):
+                producer_for_view(view, [s['producer'], middle, view])
+
+    def test_missing_original_or_old_artifact_stays_non_green(self):
+        s = self.real_samples()
+        with self.assertRaises(ValueError):
+            producer_for_view(s['copied_view'], [s['copied_view']])
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            f = Fixture(p, 2, mixed=True)
+            self.add_copied_views(f)
+            f.items = [a for a in f.items if a['id'] != 100]
+            with self.assertRaises(ValueError):
+                aggregate(f.context, p / 'aggregate', f)
+
+    def test_view_change_during_download_rejects_even_when_producer_is_identical(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            f = Fixture(p, 2, mixed=True)
+            self.add_copied_views(f)
+            original_jobs = f.jobs
+
+            def changing_jobs():
+                rows = original_jobs()
+                if f.jobs_read == 2:
+                    view = next(r for r in rows if r['name'] == JOB_NAMES['prepare'] and r['run_attempt'] == 2)
+                    view['id'] = 99999
+                return rows
+
+            f.jobs = changing_jobs
+            with self.assertRaisesRegex(ValueError, 'Latest execution changed'):
+                aggregate(f.context, p / 'aggregate', f)
 
 
 class BootstrapTests(unittest.TestCase):

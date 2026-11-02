@@ -1475,3 +1475,9 @@ locale tree without importing product settings. Dispatch-only cold/warm dependen
 measurements bind the actual input to context and receipts, isolate only new job-private
 cache directories and never delete retained caches. PR/push defaults, required checks,
 permissions, product policies and all second-review design snapshots remain unchanged.
+
+Partial-rerun producer correction distinguishes latest platform views from actual
+executions using bounded, complete execution fingerprints and a unique older producer.
+Latest non-success and intervening failure barriers remain authoritative. Receipts and
+artifacts bind the producer, while both view/producer identities are reported and
+rechecked at the end. Unknown matrix placeholders remain denied.

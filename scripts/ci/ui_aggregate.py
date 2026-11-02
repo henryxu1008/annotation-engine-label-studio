@@ -3,7 +3,7 @@ import math
 import os
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ui_artifacts import evidence_files, unpack_evidence_zip
@@ -12,6 +12,7 @@ from ui_common import (
     REPORT_LIMIT,
     REPORT_UNION_LIMIT,
     artifact_name,
+    digest,
     file_hash,
     integer,
     loads,
@@ -114,12 +115,145 @@ def verify_run(ctx, run):
         require(run.get('head_branch') == 'main', 'Push branch mismatch')
 
 
+def job_time(value):
+    require(isinstance(value, str) and len(value) <= 64, 'Job timestamp missing')
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    require(parsed.tzinfo is not None and parsed.utcoffset() is not None, 'Job timestamp timezone missing')
+    return parsed.astimezone(timezone.utc)
+
+
+def job_times(job):
+    created, start, end = (job_time(job.get(k)) for k in ('created_at', 'started_at', 'completed_at'))
+    require(start <= end, 'Job execution interval invalid')
+    require(created <= start or created > end, 'Job creation overlaps an unexplained execution')
+    return created, start, end
+
+
+def execution_fingerprint(job):
+    """Physical execution fields; IDs, attempt and creation describe API views."""
+    _, start, end = job_times(job)
+    require(
+        integer(job.get('runner_id'), 1)
+        and isinstance(job.get('runner_name'), str)
+        and 0 < len(job['runner_name']) <= 256,
+        'Runner execution identity missing',
+    )
+    require(
+        'runner_group_id' in job and (job['runner_group_id'] is None or integer(job['runner_group_id'])),
+        'Runner group metadata invalid',
+    )
+    # Hosted API copies have been observed changing only group sentinel 0 to null.
+    group = job['runner_group_id']
+    group = 0 if group is None else group
+    labels = job.get('labels')
+    require(
+        isinstance(labels, list)
+        and 0 < len(labels) <= 32
+        and all(isinstance(v, str) and 0 < len(v) <= 128 for v in labels)
+        and len(set(labels)) == len(labels),
+        'Runner labels incomplete',
+    )
+    steps = job.get('steps')
+    require(isinstance(steps, list) and 0 < len(steps) <= 256, 'Execution steps missing')
+    normalized = []
+    previous = 0
+    for step in steps:
+        require(
+            isinstance(step, dict)
+            and set(step) == {'number', 'name', 'status', 'conclusion', 'started_at', 'completed_at'},
+            'Execution step fields incomplete',
+        )
+        require(
+            integer(step['number'], previous + 1, 10000)
+            and isinstance(step['name'], str)
+            and 0 < len(step['name'].encode('utf-8')) <= 1024
+            and step['status'] == 'completed'
+            and step['conclusion'] in ('success', 'skipped'),
+            'Execution step identity/status invalid',
+        )
+        previous = step['number']
+        left, right = step['started_at'], step['completed_at']
+        if left is None and right is None:
+            require(step['conclusion'] == 'skipped', 'Executed step timestamps missing')
+        else:
+            left, right = job_time(left), job_time(right)
+            require(start <= left <= right <= end, 'Execution step interval invalid')
+            left, right = left.isoformat(), right.isoformat()
+        normalized.append({**step, 'started_at': left, 'completed_at': right})
+    return digest(
+        {
+            'run_id': job['run_id'],
+            'head_sha': job['head_sha'],
+            'name': job['name'],
+            'status': job['status'],
+            'conclusion': job['conclusion'],
+            'started_at': start.isoformat(),
+            'completed_at': end.isoformat(),
+            'runner_id': job['runner_id'],
+            'runner_name': job['runner_name'],
+            'runner_group_id': group,
+            'labels': sorted(labels),
+            'steps': normalized,
+            **{k: job.get(k) for k in ('workflow_name', 'head_branch', 'run_url', 'runner_group_name')},
+        }
+    )
+
+
+def producer_for_view(view, history):
+    """Resolve only a uniquely proven copied success, never an older green fallback."""
+    require(
+        view.get('status') == 'completed' and view.get('conclusion') == 'success',
+        'Latest required execution not successful',
+    )
+    created, start, _ = job_times(view)
+    fingerprint = execution_fingerprint(view)
+    producer = view
+    if created > start:
+        candidates = []
+        for older in history:
+            if older['run_attempt'] >= view['run_attempt']:
+                continue
+            if older.get('status') != 'completed' or older.get('conclusion') != 'success':
+                continue
+            old_created, old_start, _ = job_times(older)
+            if old_created <= old_start and execution_fingerprint(older) == fingerprint:
+                candidates.append(older)
+        require(len(candidates) == 1, 'Copied success lacks a unique actual producer')
+        producer = candidates[0]
+        for middle in history:
+            if not producer['run_attempt'] < middle['run_attempt'] < view['run_attempt']:
+                continue
+            require(
+                middle.get('status') == 'completed' and middle.get('conclusion') == 'success',
+                'Intervening non-success blocks copied reuse',
+            )
+            mid_created, _, mid_end = job_times(middle)
+            require(
+                mid_created > mid_end and execution_fingerprint(middle) == fingerprint,
+                'Intervening actual or unknown execution blocks copied reuse',
+            )
+    signature = digest(
+        {
+            'producer_id': producer['id'],
+            'producer_attempt': producer['run_attempt'],
+            'producer_created': job_time(producer['created_at']).isoformat(),
+            'view_id': view['id'],
+            'view_attempt': view['run_attempt'],
+            'view_created': created.isoformat(),
+            'producer_execution': execution_fingerprint(producer),
+            'view_execution': fingerprint,
+        }
+    )
+    return {**producer, '_view': view, '_mapping_signature': signature}
+
+
 def latest_jobs(ctx, rows):
     require(isinstance(rows, list) and len(rows) <= 256, 'Job count exceeded')
     expected = set(JOB_NAMES.values())
     require(
         all(r.get('name') in expected | {'Current enterprise UI validation'} for r in rows), 'Unexpected logical job'
     )
+    require(len({r.get('id') for r in rows}) == len(rows), 'Duplicate Actions job identity')
     latest = {}
     for logical, name in JOB_NAMES.items():
         found = [r for r in rows if r.get('name') == name]
@@ -133,6 +267,7 @@ def latest_jobs(ctx, rows):
                 and integer(r.get('id'), 1),
                 'Job source/attempt invalid',
             )
+        require(len({r['run_attempt'] for r in found}) == len(found), 'Ambiguous duplicate logical execution')
         attempt = max(r['run_attempt'] for r in found)
         newest = [r for r in found if r['run_attempt'] == attempt]
         require(len(newest) == 1, 'Ambiguous duplicate logical execution')
@@ -141,7 +276,7 @@ def latest_jobs(ctx, rows):
             r.get('status') == 'completed' and r.get('conclusion') == 'success',
             'Latest required execution not successful: ' + logical,
         )
-        latest[logical] = r
+        latest[logical] = producer_for_view(r, found)
     return latest
 
 
@@ -233,6 +368,11 @@ def validate_receipt(
         'attempt': job['run_attempt'],
         'url': job['html_url'],
         'receipt_sha256': file_hash(Path(folder) / 'receipt.json', RECEIPT_LIMIT),
+        'view_job_id': job['_view']['id'],
+        'view_attempt': job['_view']['run_attempt'],
+        'copied_success': job['_view']['id'] != job['id'],
+        'producer_runner_group_id': job['runner_group_id'],
+        'view_runner_group_id': job['_view']['runner_group_id'],
     }
 
 
@@ -323,7 +463,8 @@ def _aggregate(ctx, out, client, progress, rows):
     progress('final-current')
     verify_run(ctx, api.run())
     require(
-        {k: v['id'] for k, v in latest_jobs(ctx, api.jobs()).items()} == {k: v['id'] for k, v in jobs.items()},
+        {k: v['_mapping_signature'] for k, v in latest_jobs(ctx, api.jobs()).items()}
+        == {k: v['_mapping_signature'] for k, v in jobs.items()},
         'Latest execution changed during aggregation',
     )
     result = {
