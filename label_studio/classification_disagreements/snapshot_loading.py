@@ -4,6 +4,7 @@ from django.db.models import (
     BigIntegerField,
     BinaryField,
     Case,
+    DateTimeField,
     F,
     Func,
     JSONField,
@@ -20,7 +21,7 @@ from tasks.models import Submission
 
 
 def load(query, *, policy, validate, validate_source=True, projection='ner'):
-    if projection not in ('ner', 'review', 'submission'):
+    if projection not in ('ner', 'review', 'submission', 'supervision'):
         raise ValueError('Unknown guarded source projection')
     # Scope first; count bytes in SQL before hydrating a JSONField or live task body.
     column = connection.ops.quote_name(Submission._meta.db_table) + '.' + connection.ops.quote_name('result_snapshot')
@@ -42,8 +43,36 @@ def load(query, *, policy, validate, validate_source=True, projection='ner'):
     # the entire selected payload inside the hydrating statement, so a growing
     # snapshot is never transferred/decoded before its budget is enforced.
     guarded = query.annotate(ner_row_size=size, ner_total=Window(Sum(size)))
-    reason_limit = getattr(policy, 'MAX_REVIEW_REASON_BYTES', None) if projection in ('review', 'submission') else None
+    reason_limit = (
+        getattr(policy, 'MAX_REVIEW_REASON_BYTES', None)
+        if projection in ('review', 'submission', 'supervision')
+        else None
+    )
     allowed = Q(ner_total__lte=policy.MAX_STORED_BYTES, ner_row_size__lte=row_limit)
+    if projection == 'supervision':
+        # The old review table is not an immutable ledger. SQLite can contain
+        # unbounded TEXT in its datetime column; gate the needed scalar in the
+        # same SELECT, without loading unused submitted_at or a User profile.
+        timestamp_limit = policy.MAX_REVIEW_TIMESTAMP_BYTES
+        timestamp_size = Coalesce(
+            Func(
+                F('review__created_at'),
+                function='OCTET_LENGTH',
+                template='OCTET_LENGTH(CAST(%(expressions)s AS TEXT))',
+                output_field=BigIntegerField(),
+            )
+            if connection.vendor == 'postgresql'
+            else Length(Cast(F('review__created_at'), BinaryField())),
+            Value(0),
+            output_field=BigIntegerField(),
+        )
+        guarded = guarded.annotate(ner_review_timestamp_size=timestamp_size)
+        allowed &= Q(ner_review_timestamp_size__lte=timestamp_limit)
+        guarded = guarded.annotate(
+            ner_review_timestamp=Case(
+                When(allowed, then=F('review__created_at')), default=Value(None), output_field=DateTimeField()
+            )
+        )
     if reason_limit is not None:
         reason_size = Coalesce(
             Func(F('review__reason'), function='OCTET_LENGTH', output_field=BigIntegerField())
@@ -89,6 +118,8 @@ def load(query, *, policy, validate, validate_source=True, projection='ner'):
         fields += ('annotation_id', 'submitted_at', 'review__reviewer_id', 'review__created_at')
         if reason_limit is None:
             fields += ('review__reason',)
+    if projection == 'supervision':
+        fields += ('review__reviewer_id',)
     if projection == 'submission':
         related += ('submitted_by', 'review__reviewer')
         user_fields = getattr(policy, 'USER_FIELDS', None)
@@ -99,6 +130,15 @@ def load(query, *, policy, validate, validate_source=True, projection='ner'):
                 f'{relation}__{field}' for relation in ('submitted_by', 'review__reviewer') for field in user_fields
             )
     for row in guarded.select_related(*related).only(*fields).order_by('pk').iterator(chunk_size=1):
+        if projection == 'supervision':
+            if (
+                type(row.ner_review_timestamp_size) is not int
+                or not 0 <= row.ner_review_timestamp_size <= timestamp_limit
+            ):
+                raise policy.Error(policy.TOO_LARGE)
+            review = getattr(row, 'review', None)
+            if review is not None:
+                review.created_at = row.ner_review_timestamp
         if reason_limit is not None:
             if type(row.ner_reason_total) is not int or not 0 <= row.ner_reason_total <= reason_limit:
                 raise policy.Error(policy.TOO_LARGE)

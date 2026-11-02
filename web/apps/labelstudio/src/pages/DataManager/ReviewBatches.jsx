@@ -7,6 +7,7 @@ import { confidenceAlgorithm, confidenceMarker, confidenceSummary, confidenceTex
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
+import { SecondReviewEntry, SecondReviewWorkspace } from "./SecondReviewWorkspace";
 import { ReworkComparison } from "./ReworkComparison";
 import { ReviewArbitrationHandoff } from "./ReviewArbitrationHandoff";
 import { ReviewConfidenceSource, ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview, isBoundedPriority, priorityCapability } from "./ReviewPriority";
@@ -77,6 +78,20 @@ export const ReviewBatches = ({ projectId }) => {
   const returnFocus = useRef(false);
   const root = useRef(null);
   const [batches, setBatches] = useState([]);
+  const [secondSource, setSecondSource] = useState(null);
+  const [secondCapability, setSecondCapability] = useState(null);
+  const secondTrigger = useRef(null);
+  const secondReturnFocus = useRef(false);
+  useEffect(() => {
+    if (secondSource === null && secondReturnFocus.current) {
+      secondReturnFocus.current = false;
+      secondTrigger.current?.focus();
+    }
+  }, [secondSource]);
+  useEffect(() => {
+    setSecondSource(null); setSecondCapability(null);
+    secondReturnFocus.current = false; secondTrigger.current = null;
+  }, [projectId]);
   const [detail, setDetail] = useState(null);
   const [canCreate, setCanCreate] = useState(false);
   const [canPrioritize, setCanPrioritize] = useState(false);
@@ -388,7 +403,12 @@ export const ReviewBatches = ({ projectId }) => {
         returnFocus.current = true; setComparison(null); refreshProgress(detail.id);
       }} viewerHash={detail.viewer_hash} />}
     <div hidden={comparison !== null}>
+    {secondSource && <SecondReviewWorkspace projectId={projectId} initialSource={secondSource.batch ? secondSource : null}
+      onBack={() => { secondReturnFocus.current = true; setSecondSource(null); }} />}
+    <div hidden={secondSource !== null}>
     <p>{t("boundary")}</p>
+    <SecondReviewEntry projectId={projectId} onCapability={setSecondCapability} disabled={controlsBusy || creationUnknown}
+      onOpen={(event) => { secondTrigger.current = event.currentTarget; setSecondSource({}); }} />
     {error && <p role="alert">{t(error)}</p>}
     {createdNotice && <p role="status">{t("prioritySaved", { id: createdNotice })}</p>}
     {creationUnknown && <Button data-testid="review-priority-recover" disabled={controlsBusy} onClick={create}>{t("priorityRecover")}</Button>}
@@ -461,7 +481,7 @@ export const ReviewBatches = ({ projectId }) => {
       <div role="group" aria-label={t("filters")} className={cn("review-batches").elem("filters").toClassName()}>
         <Button disabled={controlsBusy} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{t("allItems")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "selectedPending"} onClick={() => setFilter("selectedPending")}>{t("selectedPending")}</Button>
-        <Button disabled={controlsBusy} aria-pressed={filter === "selectedReviewed"} onClick={() => setFilter("selectedReviewed")}>{t("selectedReviewed")}</Button>
+        <Button data-testid="review-filter-selected-reviewed" disabled={controlsBusy} aria-pressed={filter === "selectedReviewed"} onClick={() => setFilter("selectedReviewed")}>{t("selectedReviewed")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "reworkRelated"} onClick={() => setFilter("reworkRelated")}>{t("reworkRelated")}</Button>
         <Button disabled={controlsBusy} aria-pressed={filter === "unselected"} onClick={() => setFilter("unselected")}>{t("uncheckedTotal")}</Button>
       </div>
@@ -478,6 +498,11 @@ export const ReviewBatches = ({ projectId }) => {
             <p>{t("successorStatus")}: {t(["pending", "approved", "rejected", "superseded"].includes(i.successor.status) ? i.successor.status : "unknownStatus")}</p>
 
           </> : t(i.status === "rejected" ? "noSuccessor" : "notRework")}
+            {secondCapability?.can_organize && i.selected && ["approved", "rejected"].includes(i.status)
+              && ["sha256-ranked-v1", "classification-conflict-ranked/v1", confidenceAlgorithm].includes(detail.algorithm)
+              && <Button data-second-source={i.submission_id} disabled={controlsBusy || creationUnknown || reviewing}
+                onClick={(event) => { secondTrigger.current = event.currentTarget; setSecondSource({ batch: detail.id, source: i.submission_id }); }}>
+                {t("secondDispatch")}</Button>}
             {i.status === "rejected" && <Button disabled={controlsBusy} onClick={(event) => {
               comparisonTrigger.current = event.currentTarget; setComparison(i.submission_id);
             }}>{t("compareRework")}</Button>}
@@ -500,6 +525,7 @@ export const ReviewBatches = ({ projectId }) => {
       </div>
 
     </section>}
+    </div>
     </div>
   </div>;
 };

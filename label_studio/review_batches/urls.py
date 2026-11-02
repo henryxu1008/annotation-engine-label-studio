@@ -1,9 +1,11 @@
 from django.urls import path
 
-from . import field_handoff_api, handoff_api, ner_handoff_api
+from . import field_handoff_api, handoff_api, ner_handoff_api, second_review_api
 from .api import CapabilityAPI, DetailAPI, ListAPI, PreviewAPI, QueueAPI, ReworkAPI
 
 urlpatterns = [
+    path('<int:batch_id>/sources/<int:source_id>/second-review-context/', second_review_api.ContextAPI.as_view()),
+    path('<int:batch_id>/sources/<int:source_id>/second-review-assignees/', second_review_api.AssigneesAPI.as_view()),
     path('<int:batch_id>/sources/<int:source_id>/field-arbitration-context/', field_handoff_api.ContextAPI.as_view()),
     path('<int:batch_id>/sources/<int:source_id>/field-arbitration-handoffs/', field_handoff_api.ListAPI.as_view()),
     path('<int:batch_id>/field-arbitration-handoffs/<int:handoff_id>/', field_handoff_api.DetailAPI.as_view()),

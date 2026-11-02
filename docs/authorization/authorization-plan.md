@@ -1,5 +1,14 @@
 # Authorization integration plan
 
+## #84 independent supervisory review V1
+
+See [implementation and upgrade boundaries](second-review-v1-implementation.md)
+for the accepted supervisory_only effect, explicit operations/default-off modes,
+targeted frozen-origin projection, separate immutable receipts, PostgreSQL/SQLite
+guards and current-scope recovery. Preserve its negative authorization, deleted
+origin/tombstone, byte-gate and real concurrency regressions during upgrades.
+It does not change initial ReviewDecision or release/#79/#80 semantics.
+
 ## #84 local review sampling (first slice)
 
 [Review sampling v1](review-sampling-v1.md) freezes deterministic bounded work

@@ -6,6 +6,7 @@ import { cn } from "../../utils/bem";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { collaborationErrorCode, displayCollaborationDate, displayCollaborationError, displaySubmissionStatus } from "./collaborationDisplay";
 import "./ReviewerWorkspace.scss";
+import { FrozenReviewSnapshot } from "./FrozenReviewSnapshot";
 
 const displayIdentity = (user, t) =>
   user?.email || [user?.first_name, user?.last_name].filter(Boolean).join(" ") || t("unknownSubmitter");
@@ -326,12 +327,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
                 <code data-testid="review-result-hash">{selected.result_hash}</code>
               </div>
 
-              <div>
-                <Typography variant="body" size="medium">{t("immutableSnapshot")}</Typography>
-                <pre data-testid="review-result-snapshot">
-                  {JSON.stringify(selected.result_snapshot, null, 2)}
-                </pre>
-              </div>
+              <FrozenReviewSnapshot snapshot={selected.result_snapshot} />
 
               {selectedIsReviewable && (
                 <>
