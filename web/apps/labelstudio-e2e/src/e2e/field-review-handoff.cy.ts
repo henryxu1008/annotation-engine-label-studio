@@ -1,15 +1,37 @@
 /// <reference types="cypress" />
 
 // Cypress 14.5 press supports Tab only. Reuse Chrome's native keyboard protocol
-// for Enter; the dedicated driver smoke test checks trusted native activation.
-const nativeEnter = () => cy.then(async () => {
-  for (const type of ["keyDown", "keyUp"]) {
-    await Cypress.automation("remote:debugger:protocol", { command: "Input.dispatchKeyEvent", params: {
-      type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-      ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
-    }});
-  }
-});
+// for Enter and verify that the intended AUT button receives trusted activation.
+const nativeEnter = (target: Cypress.Chainable<JQuery<HTMLElement>>) => {
+  let button: HTMLElement;
+  const events: { type: string; trusted: boolean; target: EventTarget | null; active: boolean }[] = [];
+  const record = (event: Event) => events.push({ type: event.type, trusted: event.isTrusted,
+    target: event.target, active: button.ownerDocument.activeElement === button });
+  target.focus().should("have.focus").then(($button) => {
+    button = $button[0];
+    button.addEventListener("keydown", record);
+    button.addEventListener("click", record);
+  });
+  cy.then(async () => {
+    expect(button.ownerDocument.activeElement, "native Enter target").to.eq(button);
+    for (const type of ["keyDown", "keyUp"]) {
+      await Cypress.automation("remote:debugger:protocol", { command: "Input.dispatchKeyEvent", params: {
+        type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+        ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+      }});
+    }
+  });
+  cy.then(() => {
+    button.removeEventListener("keydown", record);
+    button.removeEventListener("click", record);
+    expect(events.map(({ type }) => type), "one native activation").to.deep.eq(["keydown", "click"]);
+    for (const event of events) {
+      expect(event.trusted, `trusted ${event.type}`).to.eq(true);
+      expect(event.target, `${event.type} recipient`).to.eq(button);
+      expect(event.active, `${event.type} focus`).to.eq(true);
+    }
+  });
+};
 
 describe("frozen field review to arbitration handoff", () => {
   let fixture: any;
@@ -49,7 +71,29 @@ describe("frozen field review to arbitration handoff", () => {
       openReview();
       cy.contains("button", zh ? "抽中 · 待审核" : "Selected · pending").click();
       cy.get(`[data-handoff-source="${ids[0]}"]`).click();
-      cy.get('[data-testid="handoff-start"]').focus(); nativeEnter();
+      cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "false")
+        .find("h3").should("have.focus");
+      let releaseHistory: (() => void) | undefined;
+      cy.then(() => {
+        cy.intercept({ method: "GET", times: 1,
+          pathname: new RegExp(`^${base}${batch.id}/sources/${ids[0]}/field-arbitration-handoffs/?$`) }, req =>
+          new Promise<void>(resolve => {
+            releaseHistory = () => { req.continue(); resolve(); };
+          })).as("keyboardRefresh");
+      });
+      const refresh = () => cy.get('[data-testid="review-handoff"]')
+        .contains("button", zh ? "刷新只读视图" : "Refresh read-only view");
+      nativeEnter(refresh());
+      cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "true")
+        .find("h3").should("have.focus");
+      cy.wrap(null).should(() => expect(releaseHistory, "held history request").to.be.a("function"));
+      cy.then(() => releaseHistory!());
+      cy.wait("@keyboardRefresh").its("response.statusCode").should("eq", 200);
+      cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "false")
+        .find("h3").should("have.focus");
+      cy.press(Cypress.Keyboard.Keys.TAB);
+      refresh().should("have.focus");
+      nativeEnter(cy.get('[data-testid="handoff-start"]'));
       workspace().find("select").select(String(fixture.users.reviewer.id));
       cy.intercept({ method: "POST", pathname: new RegExp(`^${base}[0-9]+/sources/[0-9]+/field-arbitration-handoffs/?$`), times: 2 }, req => {
         if (++posts === 1) {
@@ -61,7 +105,7 @@ describe("frozen field review to arbitration handoff", () => {
           req.continue(res => { expect(res.statusCode).to.eq(200); expect(res.body.id).to.eq(saved.id); });
         }
       }).as("handoffWrite");
-      action("Confirm dispatch", "确认派发").focus(); nativeEnter();
+      nativeEnter(action("Confirm dispatch", "确认派发"));
       cy.wait("@handoffWrite").its("response.statusCode").should("eq", 503);
       action("Back to handoff history", "返回交接历史").should("be.disabled");
       action("Refresh read-only view", "刷新只读视图").click();
@@ -70,6 +114,7 @@ describe("frozen field review to arbitration handoff", () => {
       workspace().find('[data-testid="field-detail"]').should("exist");
       workspace().find('[data-testid="handoff-source-status"]').should("contain.text", zh ? "待审核" : "Pending");
       action("Back to handoff history", "返回交接历史").click();
+      cy.get('[data-testid="review-handoff"]').find("h3").should("have.focus");
       cy.get('[data-testid="review-handoff"]').contains("button", zh ? "返回审核批次" : "Back to review batch").click();
       cy.get(`[data-handoff-source="${ids[0]}"]`).should("have.focus");
       cy.contains("button", zh ? "抽中 · 待审核" : "Selected · pending").should("have.attr", "aria-pressed", "true");
