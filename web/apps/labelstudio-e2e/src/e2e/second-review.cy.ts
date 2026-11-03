@@ -26,8 +26,10 @@ describe('independent supervisory_only second review V1', () => {
         cy.setUserLocale(locale);
         // loginAs already opens and verifies the authenticated account page.
         // API-only actor steps do not need to mount the full project editor.
-        if (workspace) cy.visit(`/projects/${project.id}/data`);
-        cy.get('html').should('have.attr', 'lang', locale);
+        if (workspace) {
+          cy.visit(`/projects/${project.id}/data`);
+          cy.get('html').should('have.attr', 'lang', locale);
+        }
       };
       const batch = () => {
         cy.get('[data-testid="open-review-batches"]', { timeout: 30000 }).click();
