@@ -102,6 +102,9 @@ jobs:
             review_batches/tests/test_second_review.py review_batches/tests/test_second_review_authority.py \
             review_batches/tests/test_second_review_budgets.py review_batches/tests/test_second_review_concurrency.py \
             review_batches/tests/test_second_review_integration.py review_batches/tests/test_second_review_ledger.py review_batches/tests/test_second_review_sources.py \
+            review_batches/tests/test_concern_followup.py review_batches/tests/test_concern_followup_boundaries.py \
+            review_batches/tests/test_concern_followup_concurrency.py \
+            review_batches/tests/test_concern_followup_integration.py \
             task_packages/tests \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \

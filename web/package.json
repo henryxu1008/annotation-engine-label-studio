@@ -47,7 +47,6 @@
   },
   "private": true,
   "dependencies": {
-    "diff": ">=8.0.3",
     "@ant-design/colors": "6.0.0",
     "@ant-design/icons": "4.8.1",
     "@humansignal/audio-file-decoder": "0.1.5",
@@ -74,8 +73,10 @@
     "d3-color": "3.1.0",
     "date-fns": "^2.20.1",
     "deep-equal": "^2.0.5",
+    "diff": ">=8.0.3",
     "emoji-regex": "^7.0.3",
     "es-toolkit": "^1.44.0",
+    "fast-json-stable-stringify": "2.1.0",
     "fft.js": "^4.0.4",
     "history": "^4.10.1",
     "html-react-parser": "^1.2.4",

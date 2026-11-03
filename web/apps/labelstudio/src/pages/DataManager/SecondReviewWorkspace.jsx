@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { FrozenReviewSnapshot } from "./FrozenReviewSnapshot";
+import { ConcernFollowupEntry, ConcernFollowupWorkspace } from "./ConcernFollowupWorkspace";
 import { fieldDigest } from "./fieldEvidence";
 import {
   ackMatches,
@@ -55,10 +56,19 @@ export const SecondReviewEntry = ({ projectId, onOpen, disabled, onCapability })
 };
 
 export const SecondReviewWorkspace = (props) => (
-  <ScopedSecondReview key={JSON.stringify([props.projectId, props.initialSource ?? null])} {...props} />
+  <SecondReviewView key={JSON.stringify([props.projectId, props.initialSource ?? null])} {...props} />
 );
 
-const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
+const SecondReviewView = (props) => {
+  const [followups, setFollowups] = useState(false);
+  return followups ? (
+    <ConcernFollowupWorkspace projectId={props.projectId} onBack={() => setFollowups(false)} />
+  ) : (
+    <ScopedSecondReview {...props} onOpenFollowups={() => setFollowups(true)} />
+  );
+};
+
+const ScopedSecondReview = ({ projectId, initialSource = null, onBack, onOpenFollowups }) => {
   const api = useAPI();
   const { t } = useLocaleTranslation("reviewBatches");
   const call = useRef(api.callApi);
@@ -205,15 +215,16 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
       window.removeEventListener("blur", blur);
     };
   }, []);
-  useEffect(() => {
-    if (!busy) heading.current?.focus();
-  }, [taskId, busy]);
+  useLayoutEffect(() => {
+    heading.current?.focus();
+  }, [taskId]);
   useEffect(() => {
     if (unknown && !busy) heading.current?.closest("section")?.querySelector('[data-testid="second-recover"]')?.focus();
   }, [unknown, busy]);
 
   const submit = async (command, outcome = null) => {
     if (busy || (intent.current && !unknown)) return;
+    heading.current?.focus();
     const seq = ++generation.current;
     setBusy(true);
     setError(false);
@@ -312,6 +323,10 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
   };
 
   const savedHere = saved?.taskId === taskId && saved?.owner === owner.current;
+  const read = (...args) => {
+    heading.current?.focus();
+    return load(...args);
+  };
   return (
     <section className={cn("second-review").toClassName()} data-testid="second-review-workspace" aria-busy={busy}>
       <h3 ref={heading} tabIndex={-1}>
@@ -322,7 +337,10 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
       {error && <p role="alert">{t(savedHere ? "secondSavedReadFailed" : "secondReadFailed")}</p>}
       {unknown && <p role="status">{t("secondUnknown")}</p>}
       <nav>
-        <Button disabled={busy} onClick={() => load()}>
+        {!taskId && !initialSource && (
+          <ConcernFollowupEntry projectId={projectId} disabled={busy || unknown} onOpen={onOpenFollowups} />
+        )}
+        <Button disabled={busy} onClick={() => read()}>
           {t("secondRefresh")}
         </Button>
         {onBack && (
@@ -337,7 +355,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
               setTaskId(null);
               setReason("");
               setSaved(null);
-              load(null);
+              read(null);
             }}
           >
             {t(initialSource ? "secondBackSource" : "secondBackQueue")}
@@ -361,7 +379,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
                     setTaskId(row.id);
                     setReason("");
                     setSaved(null);
-                    load(row.id);
+                    read(row.id);
                   }}
                 >
                   #{row.submission_id} / {row.revision} — {t(`secondState_${row.status}`)}
@@ -374,7 +392,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
             disabled={busy || unknown || !cursor}
             onClick={() => {
               setCursor(null);
-              load(null, null);
+              read(null, null);
             }}
           >
             {t("secondFirstPage")}
@@ -383,7 +401,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
             disabled={busy || unknown || !queue.next}
             onClick={() => {
               setCursor(queue.next);
-              load(null, queue.next);
+              read(null, queue.next);
             }}
           >
             {t("next")}
@@ -398,7 +416,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
               disabled={busy || unknown}
               onClick={() => {
                 setTaskId(context.existing.id);
-                load(context.existing.id);
+                read(context.existing.id);
               }}
             >
               {t("secondExisting")}
@@ -423,7 +441,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
                 onClick={() => {
                   setAssignee("");
                   setPeopleCursor(null);
-                  load(null, cursor, null);
+                  read(null, cursor, null);
                 }}
               >
                 {t("secondFirstPage")}
@@ -433,7 +451,7 @@ const ScopedSecondReview = ({ projectId, initialSource = null, onBack }) => {
                 onClick={() => {
                   setAssignee("");
                   setPeopleCursor(people.next);
-                  load(null, cursor, people.next);
+                  read(null, cursor, people.next);
                 }}
               >
                 {t("next")}

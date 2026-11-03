@@ -486,16 +486,32 @@ def projection(plan, items, role):
     return {}
 
 
-def linked_sources(batch, query):
+def linked_sources(batch, query, *, budget=None):
     """Nullable original links cannot rebind to a recreated numeric ID."""
     ids = set(query.values_list('pk', flat=True))
     entries = [e for e in batch.plan['priority']['evidence'] if e['submission_id'] in ids and e['observation']]
-    current = {
-        str(row['pk']): row
-        for row in ReviewConfidenceObservation.objects.filter(
-            project_id=batch.project_id, pk__in=[e['observation']['id'] for e in entries]
-        ).values('pk', 'submission_id', 'fact_hash', 'receipt_hash', 'instance_id')
-    }
+    observations = ReviewConfidenceObservation.objects.filter(
+        project_id=batch.project_id, pk__in=[e['observation']['id'] for e in entries]
+    )
+    if budget is None:
+        current = {
+            str(row['pk']): row
+            for row in observations.values('pk', 'submission_id', 'fact_hash', 'receipt_hash', 'instance_id')
+        }
+    else:
+        current = {
+            str(row.pk): dict(
+                pk=row.pk,
+                submission_id=row.submission_id,
+                fact_hash=row.fact_hash,
+                receipt_hash=row.receipt_hash,
+                instance_id=row.instance_id,
+            )
+            for row in budget.rows(
+                observations.only('id', 'submission_id', 'fact_hash', 'receipt_hash', 'instance_id'),
+                {'fact_hash': (66, 64), 'receipt_hash': (66, 64)},
+            )
+        }
     unavailable = set()
     for e in entries:
         packet = e['observation']

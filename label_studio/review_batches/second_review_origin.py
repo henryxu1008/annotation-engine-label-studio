@@ -148,18 +148,26 @@ class SnapshotPolicy:
     bounded = staticmethod(c.bounded)
 
 
-def load(ctx, batch_id, source_id, *, fresh=False, frozen=None):
-    budget = Budget()
+def load(ctx, batch_id, source_id, *, fresh=False, frozen=None, budget=None, snapshot_loader=None):
+    budget = budget or Budget()
     batch = plan(ctx, batch_id, budget)
     candidate = next((v for v in batch.plan['candidates'] if v['submission_id'] == source_id), None)
     if candidate is None or not candidate['selected']:
         c.fail('SOURCE_INELIGIBLE')
     query = types.source_query(ctx[2]).filter(pk=source_id)
     if confidence_priority.is_plan(batch.plan):
-        query = confidence_priority.linked_sources(batch, query)
+        query = (
+            confidence_priority.linked_sources(batch, query, budget=budget)
+            if snapshot_loader is not None
+            else confidence_priority.linked_sources(batch, query)
+        )
     try:
-        rows = snapshot_loading.load(
-            query, policy=SnapshotPolicy, validate=service.valid_source, projection='supervision'
+        rows = (
+            snapshot_loader(query, budget)
+            if snapshot_loader is not None
+            else snapshot_loading.load(
+                query, policy=SnapshotPolicy, validate=service.valid_source, projection='supervision'
+            )
         )
     except ner.Error as exc:
         service.fail(exc.code, exc.status)
@@ -198,8 +206,9 @@ def load(ctx, batch_id, source_id, *, fresh=False, frozen=None):
     if fresh and newest != row.pk:
         c.fail('SOURCE_CHANGED')
     c.bounded(review.reason, 8192)
-    budget.stored += row.ner_reason_total + row.ner_review_timestamp_size
-    budget.canonical += c.bounded(review.reason, 8192) + c.bounded(utc(review.created_at), 128)
+    if snapshot_loader is None:
+        budget.stored += row.ner_reason_total + row.ner_review_timestamp_size
+        budget.canonical += c.bounded(review.reason, 8192) + c.bounded(utc(review.created_at), 128)
     if budget.stored > budget.stored_limit or budget.canonical > budget.canonical_limit:
         c.fail('TOO_LARGE', 422)
     first = dict(

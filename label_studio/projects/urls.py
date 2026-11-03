@@ -25,6 +25,7 @@ _api_urlpatterns = [
     path('<int:pk>/task-packages/', include(('task_packages.urls', 'task_packages'), namespace='task-packages')),
     path('<int:pk>/review-batches/', include(('review_batches.urls', 'review_batches'), namespace='review-batches')),
     path('<int:pk>/second-reviews/', include('review_batches.second_review_api')),
+    path('<int:pk>/second-review-followups/', include('review_batches.followup_api')),
     path('<int:pk>/review-confidence-inputs/<int:source_id>/', ConfidenceInputAPI.as_view()),
     path('<int:pk>/review-confidence-observations/', ConfidenceObservationAPI.as_view()),
     path('<int:pk>/classification-disagreements/', include('classification_disagreements.urls')),

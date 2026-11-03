@@ -1,5 +1,13 @@
 # Authorization integration plan
 
+## #84 concern controlled follow-up V1
+
+See [the implementation and upgrade boundaries](second-review-concern-followup-v1.md).
+Preserve explicit default-off authority, independent Manager exclusions, complete
+frozen source/opinion/target bindings, source-free receipt recovery, SQL byte
+gates, append-only database guards and Project-first concurrent writes. This is
+`supervisory_only`; initial review and release/#79/#80 authority remain separate.
+
 ## #84 independent supervisory review V1
 
 See [implementation and upgrade boundaries](second-review-v1-implementation.md)

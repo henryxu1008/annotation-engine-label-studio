@@ -6,6 +6,26 @@ const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[0-9a-f]{64}$/);
 const uuid = z.string().uuid();
 const effect = z.literal("supervisory_only");
+// Match the server's str.strip whitespace set, including its C0 separators.
+export const hasReviewReason = (value) => typeof value === "string" && /[^\p{White_Space}\u001c-\u001f]/u.test(value);
+// Python's server limit counts Unicode code points, not UTF-16 code units.
+// Keep the same raw and JSON UTF-8 limits without normalizing the command.
+export const reviewReasonSchema = z.string().refine((value) => {
+  try {
+    return (
+      [...value].length <= 2000 &&
+      !value.includes("\0") &&
+      ![...value].some((c) => {
+        const n = c.codePointAt(0);
+        return n >= 0xd800 && n <= 0xdfff;
+      }) &&
+      new TextEncoder().encode(value).length <= 8192 &&
+      new TextEncoder().encode(JSON.stringify(value)).length <= 8192
+    );
+  } catch {
+    return false;
+  }
+});
 const owner = z.object({ principal: z.string().min(1).max(512), source: z.string().min(1).max(128), actor_id: id });
 const baseReceipt = z.object({
   schema: z.literal("second-review-command-receipt/v1"),
@@ -36,10 +56,14 @@ export const receiptSchema = z.discriminatedUnion("command", [
     first_review_hash: hash,
     decision_id: uuid,
     outcome: z.enum(["confirmed", "concern"]),
-    reason: z.string().max(2000),
+    reason: reviewReasonSchema,
     version: z.literal(2),
   }),
-  baseReceipt.extend({ command: z.literal("cancel"), reason: z.string().min(1).max(2000), version: z.literal(2) }),
+  baseReceipt.extend({
+    command: z.literal("cancel"),
+    reason: reviewReasonSchema.refine(hasReviewReason),
+    version: z.literal(2),
+  }),
 ]);
 export const capabilitySchema = z.object({
   effect,
