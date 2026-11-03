@@ -432,3 +432,47 @@ test("D10 a new same-task command capability failure cannot inherit an earlier s
   expect(captured).toHaveLength(1);
   view.finish();
 });
+
+test("F05 explicit supervisory refresh moves focus before disabling its trigger", async () => {
+  const view = mount();
+  await screen.findByText(/#9 \/ 1/);
+  let finish;
+  mockCall.mockImplementation((method, options) =>
+    method === "secondReviews"
+      ? new Promise((resolve) => {
+          finish = resolve;
+        })
+      : implementation(method, options),
+  );
+  const refresh = screen.getByText("Refresh");
+  refresh.focus();
+  fireEvent.click(refresh);
+  const focusedDuringRead = document.activeElement;
+  await waitFor(() => expect(finish).toBeDefined());
+  await act(async () => finish({ results: [record], count: 1, next: null, ...cap }));
+  expect(focusedDuringRead).toBe(screen.getByRole("heading"));
+  view.finish();
+});
+
+test("F05 supervisory refresh completion keeps the user's later outside focus", async () => {
+  const view = mount();
+  await screen.findByText(/#9 \/ 1/);
+  let finish;
+  mockCall.mockImplementation((method, options) =>
+    method === "secondReviews"
+      ? new Promise((resolve) => {
+          finish = resolve;
+        })
+      : implementation(method, options),
+  );
+  fireEvent.click(screen.getByText("Refresh"));
+  await waitFor(() => expect(finish).toBeDefined());
+  const outside = document.createElement("button");
+  document.body.appendChild(outside);
+  outside.focus();
+  await act(async () => finish({ results: [record], count: 1, next: null, ...cap }));
+  const settled = document.activeElement;
+  outside.remove();
+  view.finish();
+  expect(settled).toBe(outside);
+});

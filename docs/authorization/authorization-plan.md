@@ -1,5 +1,13 @@
 # Authorization integration plan
 
+## #84 concern controlled follow-up V1
+
+See [the implementation and upgrade boundaries](second-review-concern-followup-v1.md).
+Preserve explicit default-off authority, independent Manager exclusions, complete
+frozen source/opinion/target bindings, source-free receipt recovery, SQL byte
+gates, append-only database guards and Project-first concurrent writes. This is
+`supervisory_only`; initial review and release/#79/#80 authority remain separate.
+
 ## #84 independent supervisory review V1
 
 See [implementation and upgrade boundaries](second-review-v1-implementation.md)
@@ -1498,3 +1506,36 @@ the actual pre-migration ownership proof, typed bootstrap/DB graph, 10-shard
 aggregation, unchanged budgets and local-versus-hosted evidence boundaries.
 Product settings, supervision effect, initial review and release policy are
 unchanged by this CI-only slice.
+
+## Issue 84 closeout and concern follow-up design proposal
+
+The [2026-11-03 closeout matrix](issue84-closeout-matrix-20261103.md) maps the five
+original Issue #84 acceptance items to the exact `0143fe04e` source tree and
+historical execution evidence. It preserves frozen design snapshots and keeps
+audit-result download semantics, deployment and real Host acceptance separate.
+
+The [concern follow-up proposal](second-review-concern-followup-v1-design.md) and
+[56-case acceptance matrix](second-review-concern-followup-v1-acceptance.md)
+describe one immutable, independent Manager disposition of a static-classification
+supervisory concern, optionally linked to an existing valid successor revision.
+They do not implement a task system, reopen initial review, relax pending-only
+arbitration handoff or change release/#79/#80 policy. New explicit operation,
+frozen provenance, receipt-only recovery, shared bounded loading and current
+authority checks are proposed requirements awaiting user confirmation.
+No implementation, migration, functional acceptance or independent review has
+run for this proposal. Fork-only; #81/#84 remain OPEN. No push, PR, merge,
+deployment, Docker/#76, primary or preexisting-worktree changes are authorized
+by this documentation phase.
+
+### Fork PR Gate duration correction
+
+PR #134's authorized `72c7fe609` run exhausted the existing 25-minute serial
+authorization job while PostgreSQL tests were still executing. The CI-only
+correction separates SQLite, PostgreSQL review and PostgreSQL comparison into
+three explicit producers, preserving every database-specific selector and option.
+The unchanged required name now fails closed unless all three dependencies
+succeed. No product policy, fixture, source scope or branch protection is relaxed.
+[Duration isolation](ci-governance-v1.md#authorization-gate-duration-isolation)
+records the unchanged per-producer limit, increased runner-capacity upper bound,
+local timing boundaries and required fresh hosted measurements. A cancelled old
+attempt remains cancelled; local checks cannot substitute for new-head remote CI.

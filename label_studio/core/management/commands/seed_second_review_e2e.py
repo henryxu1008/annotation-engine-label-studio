@@ -8,6 +8,7 @@ from uuid import uuid4
 from access_control.project_operations import (
     ORGANIZE_SECOND_REVIEW,
     SECOND_REVIEW,
+    RECORD_SECOND_REVIEW_FOLLOWUP,
     LegacyProjectOperationProvider,
     ProjectOperationPolicy,
 )
@@ -76,7 +77,7 @@ class SecondReviewE2EPolicy:
             and project.title.startswith('Synthetic supervision ')
         ):
             return ProjectOperationPolicy(
-                'synthetic-supervision/v1', 'active', base.allowed_operations | {ORGANIZE_SECOND_REVIEW, SECOND_REVIEW}
+                'synthetic-supervision/v1', 'active', base.allowed_operations | {ORGANIZE_SECOND_REVIEW, SECOND_REVIEW, RECORD_SECOND_REVIEW_FOLLOWUP}
             )
         return base
 
@@ -149,6 +150,7 @@ class Command(BaseCommand):
                     project=project,
                     task=task,
                     completed_by=owner,
+                    lead_time=1.0,
                     result=[
                         dict(
                             id='supervision-' + str(task.pk),
@@ -175,6 +177,7 @@ class Command(BaseCommand):
             projects[locale] = dict(id=project.pk, sources=sources)
         configured = dict(
             ANNOTATION_SECOND_REVIEW_ENABLED=True,
+            ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED=True,
             ANNOTATION_SECOND_REVIEW_INSTANCE_ID=str(uuid4()),
             ANNOTATION_SECOND_REVIEW_MODES=modes,
             ANNOTATION_REVIEW_BATCHES_ENABLED=True,

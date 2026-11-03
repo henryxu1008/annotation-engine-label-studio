@@ -74,7 +74,13 @@ def validate_fixture(value):
         len(project_ids) == len({project['batch_id'] for project in projects.values()}) == 2,
         'Duplicate synthetic project/batch',
     )
-    require(isinstance(configured, dict) and set(configured) == SETTING_KEYS, 'Settings allowlist violation')
+    require(
+        isinstance(configured, dict)
+        and set(configured) in (SETTING_KEYS, SETTING_KEYS | {'ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'}),
+        'Settings allowlist violation',
+    )
+    if 'ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED' in configured:
+        require(configured['ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'] is True, 'Synthetic follow-up flag invalid')
     require(
         configured['ANNOTATION_SECOND_REVIEW_ENABLED'] is True
         and configured['ANNOTATION_REVIEW_BATCHES_ENABLED'] is True,
@@ -100,7 +106,10 @@ def validate_fixture(value):
                     uuid_string(identifier) and identifier not in seen['second_task_id'], 'Synthetic history invalid'
                 )
                 seen['second_task_id'].add(identifier)
-    return deepcopy(configured)
+    result = deepcopy(configured)
+    # A historical six-key fixture must not inherit an ambient operator opt-in.
+    result.setdefault('ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED', False)
+    return result
 
 
 def validate_database(value):

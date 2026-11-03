@@ -83,7 +83,7 @@ class SecondReviewInventoryTests(unittest.TestCase):
         gate = yaml.load(
             (ROOT / '.github/workflows/fork-pr-gate.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader
         )
-        steps = gate['jobs']['authorization-tests']['steps']
+        steps = gate['jobs']['authorization-sqlite']['steps']
         sqlite = next(s['run'] for s in steps if s.get('name') == 'Run authorization regression tests')
         for name in (
             'test_second_review.py',
@@ -98,6 +98,18 @@ class SecondReviewInventoryTests(unittest.TestCase):
 
 
 class SecondReviewFixtureTests(unittest.TestCase):
+    def test_followup_flag_is_explicit_boolean_and_preserves_legacy_fixture(self):
+        from ui_second_review import validate_fixture
+        original = fixture()
+        self.assertIs(validate_fixture(original)['ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'], False)
+        current = copy.deepcopy(original)
+        current['settings']['ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'] = True
+        self.assertIs(validate_fixture(current)['ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'], True)
+        for invalid in (False, 1, 'true', None):
+            current['settings']['ANNOTATION_SECOND_REVIEW_FOLLOWUP_ENABLED'] = invalid
+            with self.assertRaises(ValueError):
+                validate_fixture(current)
+
     def test_valid_fixture_returns_copy_and_no_arbitrary_settings(self):
         from ui_second_review import validate_fixture
 

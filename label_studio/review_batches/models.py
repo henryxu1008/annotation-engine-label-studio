@@ -120,6 +120,59 @@ class SecondReviewDecision(models.Model):
         ]
 
 
+class SecondReviewConcernFollowup(models.Model):
+    """Append-only independent disposition, with project cleanup enforced in SQL.
+
+    DO_NOTHING deliberately prevents Django's collector deleting this evidence
+    before its project. The project AFTER DELETE trigger performs the cascade;
+    a direct child DELETE while the project exists cannot release the subject.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey('projects.Project', on_delete=models.DO_NOTHING)
+    organization_id_frozen = models.PositiveBigIntegerField()
+    instance_id = models.UUIDField()
+    second_review_task = models.ForeignKey(SecondReviewTask, null=True, on_delete=models.SET_NULL)
+    task_id_frozen = models.UUIDField()
+    opinion = models.ForeignKey(SecondReviewDecision, null=True, on_delete=models.SET_NULL)
+    opinion_id_frozen = models.UUIDField()
+    opinion_created_at = models.DateTimeField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    actor_id_frozen = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    creator_source = models.CharField(max_length=128)
+    created_at = models.DateTimeField(default=timezone.now)
+    concern_hash = models.CharField(max_length=64)
+    origin_ref = models.JSONField()
+    disposition = models.CharField(max_length=32)
+    reason = models.TextField()
+    related_submission = models.ForeignKey('tasks.Submission', null=True, on_delete=models.SET_NULL)
+    related_submission_id_frozen = models.PositiveBigIntegerField(null=True)
+    target_ref = models.JSONField(null=True)
+    version = models.PositiveIntegerField(default=1)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    receipt = models.JSONField()
+    receipt_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=('project', 'idempotency_key'), name='concern_followup_key_unique'),
+            models.UniqueConstraint(
+                fields=('project', 'instance_id', 'opinion_id_frozen'), name='concern_followup_subject_unique'
+            ),
+            models.CheckConstraint(check=models.Q(version=1), name='concern_followup_version'),
+            models.CheckConstraint(
+                check=(
+                    models.Q(disposition='no_change', target_ref__isnull=True, related_submission_id_frozen__isnull=True)
+                    | models.Q(disposition='revision_linked', target_ref__isnull=False, related_submission_id_frozen__isnull=False)
+                ),
+                name='concern_followup_target',
+            ),
+        ]
+        indexes = [models.Index(fields=('project', 'instance_id', 'created_at'), name='concern_followup_history_idx')]
+
+
 class ReviewConfidenceObservation(models.Model):
     """Trusted producer assertion on one exact revision. Contains no answers."""
 

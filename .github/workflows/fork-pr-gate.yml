@@ -32,8 +32,8 @@ env:
   JSON_LOG: "0"
 
 jobs:
-  authorization-tests:
-    name: Authorization foundation tests
+  authorization-sqlite:
+    name: Authorization regressions / SQLite
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -102,6 +102,9 @@ jobs:
             review_batches/tests/test_second_review.py review_batches/tests/test_second_review_authority.py \
             review_batches/tests/test_second_review_budgets.py review_batches/tests/test_second_review_concurrency.py \
             review_batches/tests/test_second_review_integration.py review_batches/tests/test_second_review_ledger.py review_batches/tests/test_second_review_sources.py \
+            review_batches/tests/test_concern_followup.py review_batches/tests/test_concern_followup_boundaries.py \
+            review_batches/tests/test_concern_followup_concurrency.py \
+            review_batches/tests/test_concern_followup_integration.py \
             task_packages/tests \
             tasks/tests/test_enterprise_collaboration_acceptance.py \
             tasks/tests/test_submission_review_workflow.py \
@@ -110,6 +113,55 @@ jobs:
       - name: Run annotation/task API smoke tests
         working-directory: label_studio
         run: poetry run pytest -v tasks/tests/test_api.py -m "not integration_tests"
+
+      - name: Run request locale and translated template regressions
+        working-directory: label_studio
+        run: poetry run pytest -q users/tests/test_locale.py users/tests/test_locale_templates.py users/tests/test_locale_migration.py
+
+      - name: Reject missing or unsafe failure artifacts
+        run: poetry run python -m unittest discover -s scripts -p test_i18n_failure_artifact_audit.py
+
+  authorization-postgres-review:
+    name: Authorization regressions / PostgreSQL review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      session-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: session-security-test-only
+          POSTGRES_DB: session_security
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout PR merge commit or pushed main commit
+        uses: actions/checkout@v6
+
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+
+      - name: Install OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+
+      - name: Install Python dependencies
+        run: poetry install --with test
+
+      - name: Generate version file
+        run: poetry run python label_studio/core/version.py
 
       - name: Run PostgreSQL session and submission regressions
         working-directory: label_studio
@@ -126,13 +178,80 @@ jobs:
             tasks/tests/test_task_assignment_authorization.py
           poetry run pytest -q \
             tasks/tests/test_project_write_concurrency.py \
-            review_batches/tests classification_disagreements/tests \
+            review_batches/tests
+
+
+  authorization-postgres-comparison:
+    name: Authorization regressions / PostgreSQL comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      session-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: session-security-test-only
+          POSTGRES_DB: session_security
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout PR merge commit or pushed main commit
+        uses: actions/checkout@v6
+
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+
+      - name: Install OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+
+      - name: Install Python dependencies
+        run: poetry install --with test
+
+      - name: Generate version file
+        run: poetry run python label_studio/core/version.py
+
+      - name: Run PostgreSQL comparison and package regressions
+        working-directory: label_studio
+        env:
+          DJANGO_DB: postgresql
+          POSTGRE_HOST: localhost
+          POSTGRE_NAME: session_security
+          POSTGRE_USER: postgres
+          POSTGRE_PASSWORD: session-security-test-only
+        run: |
+          poetry run pytest -q \
+            classification_disagreements/tests \
             task_packages/tests \
             tasks/tests/test_project_operation_policy.py tasks/tests/test_my_work.py
 
-      - name: Run request locale and translated template regressions
-        working-directory: label_studio
-        run: poetry run pytest -q users/tests/test_locale.py users/tests/test_locale_templates.py users/tests/test_locale_migration.py
 
-      - name: Reject missing or unsafe failure artifacts
-        run: poetry run python -m unittest discover -s scripts -p test_i18n_failure_artifact_audit.py
+  authorization-tests:
+    # Keep the unique required name; every explicit producer must succeed.
+    name: Authorization foundation tests
+    needs: [authorization-sqlite, authorization-postgres-review, authorization-postgres-comparison]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Require every authorization producer to succeed
+        env:
+          AUTHORIZATION_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python scripts/ci/authorization_gate.py

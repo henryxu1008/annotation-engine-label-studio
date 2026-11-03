@@ -6,6 +6,19 @@ from django.db.models.expressions import RawSQL
 from . import second_review_contract as c
 
 
+def typed_rows(query):
+    """Malformed SQLite datetime/UUID storage must not escape as a 500.
+
+    SQL gates have already bounded the physical values. Django converters run
+    before model validation, so their type/format failures need the same typed
+    corruption response as a malformed JSON envelope.
+    """
+    try:
+        yield from query.iterator(chunk_size=1)
+    except (TypeError, ValueError, AttributeError, OverflowError, UnicodeError):
+        c.fail()
+
+
 class Budget:
     def __init__(self, canonical=8 * c.MIB, stored=32 * c.MIB):
         self.canonical_limit, self.stored_limit = canonical, stored
@@ -64,7 +77,7 @@ class Budget:
                     }
                 )
         query = query.annotate(_sr_row=RawSQL('+'.join(expressions), [], output_field=BigIntegerField()))
-        payload = '+'.join(expressions[: len(payload_fields)])
+        payload = '+'.join(expressions[: len(payload_fields)]) or '0'
         query = query.annotate(_sr_payload=RawSQL(payload, [], output_field=BigIntegerField()))
         query = query.annotate(_sr_union=Window(Sum(F('_sr_row'))))
         remaining = self.stored_limit - self.stored
@@ -102,7 +115,7 @@ class Budget:
         # These model PKs are native integers or new insert-guarded frozen UUIDs.
         query = query.only('pk')
         result = []
-        for row in query.iterator(chunk_size=1):
+        for row in typed_rows(query):
             if connection.vendor == 'sqlite' and any(getattr(row, f'_sr_integer_{f}') != 1 for f in integer_fields):
                 c.fail()
             if row._sr_union > remaining or row._sr_payload > row_stored:
