@@ -58,6 +58,60 @@ class TestConcernFollowupIntegration(ConcernFixtures, APITestCase):
         assert self.followup_context(task, target, actor=self.producer).status_code == 403
         assert self.record_followup(self.followup_body(task, target)).status_code == 201
 
+    def test_E08_actual_thousand_candidate_batch_reads_only_exact_subject_and_no_replay_origin(self):
+        from django.db.models import JSONField
+        from review_batches import followup_origin, second_review_service
+        from review_batches.models import ReviewBatch
+        from review_batches.second_review_bounded import Budget
+
+        from . import test_confidence_budgets as existing_budgets
+
+        self.source = self.make_source()
+        others = existing_budgets.TestConfidenceBudgets.bulk_sources(self, 999)
+        args = dict(name='Thousand exact frozen candidates', rate=100, seed='fixed')
+        preview = self.preview(args)
+        assert preview.status_code == 200, preview.data
+        assert len(preview.data['plan']['candidates']) == 1000
+        saved = self.create_batch({**args, 'expected_plan_hash': preview.data['plan_hash']})
+        assert saved.status_code == 201, saved.data
+        review_submission(submission=self.source, reviewer=self.reviewer, decision='approved')
+        dispatched, _ = self.dispatch(self.source, saved.data['id'])
+        task = dispatched.data['receipt']['task_id']
+        assert self.decide(task, self.opinion_body(task, 'concern', 'Concern on exact subject')).status_code == 201
+        marker = 'NEVER_OTHER_THOUSAND_SNAPSHOT'
+        Submission.objects.filter(pk__in=[v.pk for v in others]).update(result_snapshot={marker: True})
+        Submission.objects.filter(pk=others[0].pk).update(result_snapshot={marker: 'x' * (2 * 1024 * 1024)})
+        decoder, decoded, snapshots, rows = JSONField.from_db_value, [], [], Budget.rows
+
+        def decode(field, value, *args):
+            if value and marker in str(value):
+                decoded.append(True)
+            return decoder(field, value, *args)
+
+        def read(budget, query, limits, **kwargs):
+            values = rows(budget, query, limits, **kwargs)
+            if query.model is Submission and 'result_snapshot' in limits:
+                snapshots.extend(v.pk for v in values)
+            return values
+
+        with (
+            patch.object(JSONField, 'from_db_value', decode),
+            patch.object(Budget, 'rows', read),
+            patch.object(service, 'read_sources', side_effect=AssertionError('no whole batch')),
+        ):
+            body = self.followup_body(task)
+            response = self.record_followup(body, key=uuid4())
+        assert response.status_code == 201, response.data
+        assert len(ReviewBatch.objects.get(pk=saved.data['id']).plan['candidates']) == 1000
+        assert snapshots == [self.source.pk] * 4 and not decoded
+        key = response.data['receipt']['key']
+        with (
+            patch.object(followup_origin, 'load', side_effect=AssertionError('no source on replay')),
+            patch.object(second_review_service, 'task', side_effect=AssertionError('no old task on replay')),
+        ):
+            recovered = self.record_followup(body, key=key)
+        assert recovered.status_code == 200 and recovered.data['receipt'] == response.data['receipt']
+
     def test_A06_retired_confidence_is_historical_without_new_producer_or_scoring(self):
         source, batch, task = self.concerned(confidence=True)
         count = ReviewConfidenceObservation.objects.count()

@@ -433,3 +433,39 @@ class TestConcernFollowup(ConcernFixtures, APITestCase):
             last = self.client.get(self.followup_base, {'page_size': 100, 'cursor': first.data['next']})
             assert last.status_code == 200 and len(last.data['results']) == 1 and last.data['next'] is None
         assert not {r['task_id'] for r in first.data['results']} & {r['task_id'] for r in last.data['results']}
+
+    def test_B05_E07_project_object_target_and_owner_cursor_cannot_be_substituted(self):
+        import time
+
+        from projects.tests.factories import ProjectFactory
+        from tasks.models import Task, TaskAssignment
+
+        source, batch, task = self.concerned()
+        self.concerned()
+        body = self.followup_body(task)
+        saved = self.record_followup(body)
+        detail = saved.data['receipt']['followup_id']
+        first = self.client.get(self.followup_base, {'page_size': 1})
+        cursor = first.data['next']
+        assert cursor
+        self.client.force_authenticate(self.producer)
+        assert self.client.get(self.followup_base, {'cursor': cursor}).status_code == 400
+        self.client.force_authenticate(self.manager)
+        with patch('django.core.signing.time.time', return_value=time.time() + 7200):
+            assert self.client.get(self.followup_base, {'cursor': cursor}).status_code == 400
+        other = ProjectFactory(organization=self.org, created_by=self.manager)
+        modes = {f'{self.org.pk}:{project.pk}': 'fork_review' for project in (self.project, other)}
+        foreign = f'/api/projects/{other.pk}/second-review-followups/'
+        with self.settings(ANNOTATION_SECOND_REVIEW_MODES=modes):
+            assert self.client.get(foreign).data['count'] == 0
+            assert self.client.get(foreign + detail + '/').status_code == 404
+            assert self.client.get(foreign + f'context/{task}/').status_code == 404
+            response = self.client.post(foreign, body, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4()))
+            assert response.status_code == 404, response.data
+            assert self.client.get(foreign, {'cursor': cursor}).status_code == 400
+        another, batch, other_task = self.concerned()
+        target = self.successor(self.make_source())
+        TaskAssignment.objects.filter(pk=target.assignment_id).update(project=other)
+        Task.objects.filter(pk=target.assignment.task_id).update(project=other)
+        response = self.followup_context(other_task, target)
+        assert response.status_code in (404, 409) and 'original' not in response.data
