@@ -21,10 +21,12 @@ describe('independent supervisory_only second review V1', () => {
       const api = `/api/projects/${project.id}/second-reviews/`;
       const source = project.sources[0], rejected = project.sources[1], cancelled = project.sources[2], historical = project.sources[3];
       let firstTask: string, secondTask: string, originalBody: any, originalKey: any, posts = 0, trusted = false;
-      const visit = (role: string) => {
-        cy.visit('/user/account/personal-info');
+      const visit = (role: string, workspace = true) => {
         cy.loginAs(fixture.users[role].email, fixture.password, '/user/account/personal-info');
-        cy.setUserLocale(locale); cy.visit(`/projects/${project.id}/data`);
+        cy.setUserLocale(locale);
+        // loginAs already opens and verifies the authenticated account page.
+        // API-only actor steps do not need to mount the full project editor.
+        if (workspace) cy.visit(`/projects/${project.id}/data`);
         cy.get('html').should('have.attr', 'lang', locale);
       };
       const batch = () => {
@@ -145,7 +147,7 @@ describe('independent supervisory_only second review V1', () => {
       cy.contains(zh ? '所选后继修订当前审核状态：待初审' : 'Selected successor current review state: Pending initial review').scrollIntoView().should('be.visible');
       // Use the existing review API as the actual independent initial reviewer;
       // the follow-up interface cannot approve or change the successor itself.
-      visit('initial');
+      visit('initial', false);
       cy.then(() => cy.request('POST', `/api/submissions/${successor}/review/`, { decision: 'approved', reason: 'Successor initial review' }));
       visit('manager'); openFollowups();
       cy.get(`[data-concern-task="${historical.second_task_id}"]`).click();
@@ -153,7 +155,7 @@ describe('independent supervisory_only second review V1', () => {
       cy.contains(zh ? '所选后继修订当前审核状态：已批准' : 'Selected successor current review state: Approved').scrollIntoView().should('be.visible');
       // The original owner uses the existing Editor write endpoint to submit
       // a later revision. Follow-up cannot create or approve that revision.
-      visit(historical.owner);
+      visit(historical.owner, false);
       cy.request(`/api/projects/${project.id}/my-work/`).then(({ body }) => {
         const own = body.results.find((v: any) => v.assignment_id === historical.assignment_id);
         expect(own).to.exist;
@@ -166,7 +168,7 @@ describe('independent supervisory_only second review V1', () => {
       cy.request(`/api/projects/${project.id}/my-work/`).then(({ body }) => {
         successor = body.results.find((v: any) => v.assignment_id === historical.assignment_id).latest_submission_id;
       });
-      visit('initial');
+      visit('initial', false);
       cy.then(() => cy.request('POST', `/api/submissions/${successor}/review/`, { decision: 'rejected', reason: 'Independent successor rejection' }));
       visit('manager'); openFollowups();
       cy.get(`[data-concern-task="${historical.second_task_id}"]`).click();
@@ -180,7 +182,7 @@ describe('independent supervisory_only second review V1', () => {
       cy.request(`/api/submissions/${source.id}/release/`).its('status').should('eq', 200);
       cy.request({ url: `/api/submissions/${rejected.id}/release/`, failOnStatusCode: false }).its('status').should('eq', 400);
       cy.screenshot(`concern-followup-${locale}`);
-      visit('initial'); cy.request(api).its('body.count').should('eq', 0);
+      visit('initial', false); cy.request(api).its('body.count').should('eq', 0);
       cy.request({ url: followups, failOnStatusCode: false }).its('status').should('be.oneOf', [403, 404]);
       visit('a'); cy.get('[data-testid="open-second-reviews"]').should('not.exist');
       cy.request({ url: api, failOnStatusCode: false }).its('status').should('be.oneOf', [403, 404]);
