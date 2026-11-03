@@ -76,7 +76,7 @@ describe("frozen field review to arbitration handoff", () => {
       let releaseHistory: (() => void) | undefined;
       cy.then(() => {
         cy.intercept({ method: "GET", times: 1,
-          pathname: `${base}${batch.id}/sources/${ids[0]}/field-arbitration-handoffs/` }, req =>
+          pathname: new RegExp(`^${base}${batch.id}/sources/${ids[0]}/field-arbitration-handoffs/?$`) }, req =>
           new Promise<void>(resolve => {
             releaseHistory = () => { req.continue(); resolve(); };
           })).as("keyboardRefresh");
