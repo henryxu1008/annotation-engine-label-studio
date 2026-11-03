@@ -1498,3 +1498,23 @@ the actual pre-migration ownership proof, typed bootstrap/DB graph, 10-shard
 aggregation, unchanged budgets and local-versus-hosted evidence boundaries.
 Product settings, supervision effect, initial review and release policy are
 unchanged by this CI-only slice.
+
+## Issue 84 closeout and concern follow-up design proposal
+
+The [2026-11-03 closeout matrix](issue84-closeout-matrix-20261103.md) maps the five
+original Issue #84 acceptance items to the exact `0143fe04e` source tree and
+historical execution evidence. It preserves frozen design snapshots and keeps
+audit-result download semantics, deployment and real Host acceptance separate.
+
+The [concern follow-up proposal](second-review-concern-followup-v1-design.md) and
+[56-case acceptance matrix](second-review-concern-followup-v1-acceptance.md)
+describe one immutable, independent Manager disposition of a static-classification
+supervisory concern, optionally linked to an existing valid successor revision.
+They do not implement a task system, reopen initial review, relax pending-only
+arbitration handoff or change release/#79/#80 policy. New explicit operation,
+frozen provenance, receipt-only recovery, shared bounded loading and current
+authority checks are proposed requirements awaiting user confirmation.
+No implementation, migration, functional acceptance or independent review has
+run for this proposal. Fork-only; #81/#84 remain OPEN. No push, PR, merge,
+deployment, Docker/#76, primary or preexisting-worktree changes are authorized
+by this documentation phase.
