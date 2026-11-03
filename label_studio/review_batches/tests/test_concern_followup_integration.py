@@ -22,6 +22,42 @@ class TestConcernFollowupIntegration(ConcernFixtures, APITestCase):
     def setUp(self):
         self.followup_setup()
 
+    def test_A08_existing_owner_editor_and_mywork_rework_create_only_normal_revision(self):
+        from review_batches.models import ReviewBatch
+
+        for initial in ('approved', 'rejected'):
+            source, batch, task = self.concerned(decision=initial)
+            frozen = ReviewBatch.objects.get(pk=batch).plan
+            self.client.force_authenticate(self.worker)
+            work = self.client.get(f'/api/projects/{self.project.pk}/my-work/').data
+            item = next(v for v in work['results'] if v['assignment_id'] == source.assignment_id)
+            assert item['state'] == ('rework' if initial == 'rejected' else 'approved')
+            source.assignment.refresh_from_db()
+            response = self.client.patch(
+                f'/api/annotations/{source.annotation_id}/',
+                dict(
+                    result=source.annotation.result,
+                    assignment_id=source.assignment_id,
+                    assignment_version=source.assignment.version,
+                    submit_for_review=True,
+                ),
+                format='json',
+            )
+            assert response.status_code == 200, response.data
+            target = Submission.objects.get(assignment_id=source.assignment_id, revision=source.revision + 1)
+            assert target.status == 'pending' and target.submitted_by_id == self.worker.pk
+            assert self.record_followup(self.followup_body(task, target)).status_code == 201
+            source.refresh_from_db()
+            assert source.status == initial and ReviewBatch.objects.get(pk=batch).plan == frozen
+
+    def test_B02_target_initial_reviewer_is_an_additional_human_exclusion(self):
+        source, batch, task = self.concerned()
+        ProjectMember.objects.filter(project=self.project, user=self.producer).update(role='reviewer')
+        target = self.successor(source, decision='approved', reviewer=self.producer)
+        ProjectMember.objects.filter(project=self.project, user=self.producer).update(role='manager')
+        assert self.followup_context(task, target, actor=self.producer).status_code == 403
+        assert self.record_followup(self.followup_body(task, target)).status_code == 201
+
     def test_A06_retired_confidence_is_historical_without_new_producer_or_scoring(self):
         source, batch, task = self.concerned(confidence=True)
         count = ReviewConfidenceObservation.objects.count()

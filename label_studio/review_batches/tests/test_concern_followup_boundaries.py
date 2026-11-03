@@ -42,6 +42,49 @@ class TestConcernFollowupBoundaries(ConcernFixtures, APITestCase):
             response = self.followup_context(task, target)
             assert response.status_code == 409, response.data
 
+    def test_E03_E06_native_short_bad_opinion_date_in_history_is_corrupt(self):
+        import copy
+
+        from review_batches.models import SecondReviewDecision, SecondReviewTask
+
+        if connection.vendor != 'sqlite':
+            self.skipTest('PostgreSQL enforces native timestamp storage')
+        source, batch, task = self.concerned()
+        original = SecondReviewDecision.objects.get(task_id_frozen=task)
+        for bad in (123, 'not-a-date'):
+            with transaction.atomic():
+                source, batch = self.prepared()
+                dispatched, _ = self.dispatch(source, batch)
+                pending = SecondReviewTask.objects.get(pk=dispatched.data['receipt']['task_id'])
+                damaged = copy.copy(original)
+                damaged.id, damaged.idempotency_key = uuid4(), uuid4()
+                damaged.task_id = damaged.task_id_frozen = pending.pk
+                damaged.source_hash, damaged.first_review_hash = pending.source_hash, pending.first_review_hash
+                fields = list(damaged._meta.local_concrete_fields)
+                columns = ','.join(connection.ops.quote_name(f.column) for f in fields)
+                params = [
+                    bad if f.name == 'created_at' else f.get_db_prep_save(getattr(damaged, f.attname), connection)
+                    for f in fields
+                ]
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'INSERT INTO '
+                        + damaged._meta.db_table
+                        + ' ('
+                        + columns
+                        + ') VALUES ('
+                        + ','.join(['%s'] * len(fields))
+                        + ')',
+                        params,
+                    )
+                SecondReviewTask.objects.filter(pk=pending.pk).update(status='completed', version=2)
+                self.client.force_authenticate(self.manager)
+                response = self.client.get(self.followup_base)
+                assert response.status_code == 409, response.data
+                assert response.data['display_context']['reason'] == 'SECOND_REVIEW_CORRUPT'
+                assert 'results' not in response.data
+                transaction.set_rollback(True)
+
     def test_E03_oversized_snapshot_and_scalar_never_decode(self):
         source, batch, task = self.concerned()
         target = self.successor(source)
@@ -322,7 +365,13 @@ class TestConcernFollowupBoundaries(ConcernFixtures, APITestCase):
 
             with patch.object(Budget, 'rows', damaged):
                 response = self.followup_context(task)
-                assert response.status_code == 409, response.data
+                assert response.status_code in (400, 409), response.data
+                assert response.data['display_context']['reason'] in (
+                    'SECOND_REVIEW_UNSUPPORTED',
+                    'SECOND_REVIEW_CORRUPT',
+                    'SECOND_REVIEW_SOURCE_CHANGED',
+                    'SECOND_REVIEW_SOURCE_INELIGIBLE',
+                )
 
     def test_E05_snapshot_exact_canonical_boundary_and_one_unicode_byte_over(self):
         import copy

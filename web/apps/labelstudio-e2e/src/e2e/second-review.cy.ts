@@ -142,7 +142,7 @@ describe('independent supervisory_only second review V1', () => {
         successor = Number(value); cy.get('[data-testid="followup-target"]').select(value);
       });
       cy.get('[data-testid="review-result-snapshot"]').should('have.length', 2);
-      cy.contains(zh ? '所选后继修订当前审核状态：待初审' : 'Selected successor current review state: Pending initial review').should('be.visible');
+      cy.contains(zh ? '所选后继修订当前审核状态：待初审' : 'Selected successor current review state: Pending initial review').scrollIntoView().should('be.visible');
       // Use the existing review API as the actual independent initial reviewer;
       // the follow-up interface cannot approve or change the successor itself.
       visit('initial');
@@ -150,11 +150,32 @@ describe('independent supervisory_only second review V1', () => {
       visit('manager'); openFollowups();
       cy.get(`[data-concern-task="${historical.second_task_id}"]`).click();
       cy.then(() => cy.get('[data-testid="followup-target"]').select(String(successor)));
-      cy.contains(zh ? '所选后继修订当前审核状态：已批准' : 'Selected successor current review state: Approved').should('be.visible');
+      cy.contains(zh ? '所选后继修订当前审核状态：已批准' : 'Selected successor current review state: Approved').scrollIntoView().should('be.visible');
+      // The original owner uses the existing Editor write endpoint to submit
+      // a later revision. Follow-up cannot create or approve that revision.
+      visit(historical.owner);
+      cy.request(`/api/projects/${project.id}/my-work/`).then(({ body }) => {
+        const own = body.results.find((v: any) => v.assignment_id === historical.assignment_id);
+        expect(own).to.exist;
+        return cy.request(`/api/annotations/${historical.annotation_id}/`).then(({ body: annotation }) =>
+          cy.request('PATCH', `/api/annotations/${historical.annotation_id}/`, {
+            result: annotation.result, assignment_id: own.assignment_id,
+            assignment_version: own.assignment_version, submit_for_review: true,
+          }));
+      });
+      cy.request(`/api/projects/${project.id}/my-work/`).then(({ body }) => {
+        successor = body.results.find((v: any) => v.assignment_id === historical.assignment_id).latest_submission_id;
+      });
+      visit('initial');
+      cy.then(() => cy.request('POST', `/api/submissions/${successor}/review/`, { decision: 'rejected', reason: 'Independent successor rejection' }));
+      visit('manager'); openFollowups();
+      cy.get(`[data-concern-task="${historical.second_task_id}"]`).click();
+      cy.then(() => cy.get('[data-testid="followup-target"]').select(String(successor)));
+      cy.contains(zh ? '所选后继修订当前审核状态：已驳回' : 'Selected successor current review state: Rejected').scrollIntoView().should('be.visible');
       cy.get('[data-testid="followup-reason"]').type('Link existing reviewed successor 关联已有审核后继');
       cy.get('[data-testid="followup-confirm"]').check(); cy.get('[data-testid="followup-record"]').focus(); nativeEnter();
       cy.wait('@followupWrite').its('response.statusCode').should('eq', 201);
-      cy.contains(zh ? '后继修订记录时状态：已批准' : 'Successor status at record: Approved').should('be.visible');
+      cy.contains(zh ? '后继修订记录时状态：已驳回' : 'Successor status at record: Rejected').scrollIntoView().should('be.visible');
       cy.request(followups).then(({ body }) => { expect(body.count).to.eq(2); expect(body.results.every((r: any) => r.recorded?.version === 1)).to.eq(true); });
       cy.request(`/api/submissions/${source.id}/release/`).its('status').should('eq', 200);
       cy.request({ url: `/api/submissions/${rejected.id}/release/`, failOnStatusCode: false }).its('status').should('eq', 400);

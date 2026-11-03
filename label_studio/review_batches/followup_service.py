@@ -14,7 +14,7 @@ from . import followup_origin as origin
 from . import followup_records as records
 from . import second_review_service as second
 from .models import SecondReviewConcernFollowup, SecondReviewDecision
-from .second_review_bounded import Budget
+from .second_review_bounded import Budget, typed_rows
 
 
 def summary(task, opinion):
@@ -80,7 +80,7 @@ def history(request, ctx):
     )
     union = left.union(right).order_by('sort_time', 'sort_uuid')
     count = union.count()
-    page = list(union[offset : offset + size])
+    page = list(typed_rows(union[offset : offset + size]))
     opinions = budget.rows(
         pending.filter(pk__in=[v['row_id'] for v in page if v['kind'] == 'pending']),
         {'receipt': second.PROOF_LIMIT, 'reason': (8192, 8192)},
