@@ -1526,3 +1526,16 @@ No implementation, migration, functional acceptance or independent review has
 run for this proposal. Fork-only; #81/#84 remain OPEN. No push, PR, merge,
 deployment, Docker/#76, primary or preexisting-worktree changes are authorized
 by this documentation phase.
+
+### Fork PR Gate duration correction
+
+PR #134's authorized `72c7fe609` run exhausted the existing 25-minute serial
+authorization job while PostgreSQL tests were still executing. The CI-only
+correction separates SQLite, PostgreSQL review and PostgreSQL comparison into
+three explicit producers, preserving every database-specific selector and option.
+The unchanged required name now fails closed unless all three dependencies
+succeed. No product policy, fixture, source scope or branch protection is relaxed.
+[Duration isolation](ci-governance-v1.md#authorization-gate-duration-isolation)
+records the unchanged per-producer limit, increased runner-capacity upper bound,
+local timing boundaries and required fresh hosted measurements. A cancelled old
+attempt remains cancelled; local checks cannot substitute for new-head remote CI.

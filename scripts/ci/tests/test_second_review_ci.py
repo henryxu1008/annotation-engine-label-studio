@@ -83,7 +83,7 @@ class SecondReviewInventoryTests(unittest.TestCase):
         gate = yaml.load(
             (ROOT / '.github/workflows/fork-pr-gate.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader
         )
-        steps = gate['jobs']['authorization-tests']['steps']
+        steps = gate['jobs']['authorization-sqlite']['steps']
         sqlite = next(s['run'] for s in steps if s.get('name') == 'Run authorization regression tests')
         for name in (
             'test_second_review.py',

@@ -135,6 +135,38 @@ Aggregation rejects mismatched modes or isolation evidence. Requested warm does
 not prove cache hits: record actual cache metadata and timings separately.
 Cold/warm runs have independent identities and artifacts; no cross-run build reuse.
 
+## Authorization gate duration isolation
+
+PR #134 exposed a separate serial-budget problem in Fork PR Gate. At head
+`72c7fe609`, its single required job exhausted the existing 25-minute job limit
+while PostgreSQL regressions were still running. Successful SQLite assertions
+and browser evidence do not make that cancelled required check successful.
+
+The authorization workflow now has three explicit producers: SQLite (including
+candidate/archive contracts, migration consistency, API smoke, locale and artifact
+audit checks), PostgreSQL session/submission/review, and PostgreSQL comparison /
+packages / project-policy checks. Each retains the original 25-minute limit,
+Python 3.11, database service and test options. The frozen inventory preserves
+every original database-specific selector, marker and verbosity exactly once;
+product tests and fixtures are unchanged. No producer uses a matrix, conditional
+skip or continue-on-error.
+
+The unique required name remains `Authorization foundation tests`. Its five-minute
+aggregate runs with `always()` and requires exactly those three dependency results
+to be `success`; missing, extra, failed, cancelled, skipped or malformed results
+fail closed. The existing bounded JSON parser rejects duplicate keys. This uses
+GitHub Actions job dependencies rather than introducing a second scheduler.
+The required name/app, branch rules, events and read-only permissions remain intact.
+
+Splitting repeats environment setup and permits three authorization runners at
+once. The theoretical timeout sum increases from 25 to 80 runner-minutes
+(three times 25 plus five for aggregation); this is not a cost reduction claim.
+Local measurements include every pytest process startup, database creation,
+migration and teardown, but exclude hosted service/dependency setup. Actual hosted
+job durations, queue time and runner-seconds must be measured again on the new
+published head. Browser concurrency, 300-second call timeout / 15-second kill
+grace, producer evidence rules and UI budgets are unchanged.
+
 ## Source index
 
 - `.github/workflows/enterprise-browser-e2e.yml`: prepare / fixed matrix / required aggregate.
