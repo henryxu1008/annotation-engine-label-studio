@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
@@ -40,16 +40,19 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
   };
   useEffect(() => {
     if (!flow) { clear(); setBusy(false); setError(true); return; }
-    setTarget(null); load(1); heading.current?.focus();
+    setTarget(null); load(1);
     const blur = () => { ++generation.current; clear(); setBusy(false); setError(true); };
     window.addEventListener("blur", blur);
     return () => { ++generation.current; window.removeEventListener("blur", blur); };
   }, [projectId, source.batch, source.source, source.kind]);
-  useEffect(() => { if (!target && !busy) heading.current?.focus(); }, [target, busy]);
+  // Focus belongs to entering/returning to this view, before it is interactive.
+  // Completing a read must never steal focus from a control the user chose.
+  useLayoutEffect(() => { if (!target) heading.current?.focus(); },
+    [target, projectId, source.batch, source.source, source.kind]);
   if (!flow || !Workspace) return <p role="alert">{t("arbitrationReadFailed")}</p>;
   if (target) return <Workspace projectId={projectId} handoffSource={source}
     initialHandoffId={target.handoff ?? null} initialTaskId={target.arbitration ?? null}
-    onBackToReview={() => { setTarget(null); load(page); heading.current?.focus(); }} />;
+    onBackToReview={() => { setTarget(null); load(page); }} />;
   return <section data-testid="review-handoff" aria-busy={busy}>
     <h3 ref={heading} tabIndex={-1}>{t(flow.title)}</h3><p>{t(flow.boundary)}</p>
     {flow.integrity && <p>{t(flow.integrity)}</p>}
