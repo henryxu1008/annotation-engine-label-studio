@@ -149,18 +149,45 @@ describe.each(focusFlows)("%s handoff focus", (kind, listMethod, capabilityMetho
     } finally { view.unmount(); view.runtime.destroy(); }
   });
 
-  it("does not move focus when a manual refresh finishes", async () => {
+  it("hands focus to the heading before refresh and preserves later user focus", async () => {
     const finish = prepareHistory();
     const view = mount(<><button type="button">Outside handoff</button>
       <ReviewArbitrationHandoff projectId={4} source={{ ...source, kind }} onBack={() => {}} /></>);
     try {
       await act(async () => finish());
-      fireEvent.click(screen.getByRole("button", { name: "Refresh read-only view" }));
+      const refresh = screen.getByRole("button", { name: "Refresh read-only view" });
+      refresh.focus();
+      fireEvent.click(refresh);
+      expect(screen.getByRole("heading")).toBe(document.activeElement);
+      expect(refresh.disabled).toBe(true);
       const outside = screen.getByRole("button", { name: "Outside handoff" });
       outside.focus();
       await act(async () => finish());
       expect(document.activeElement).toBe(outside);
       expect(screen.getByTestId("handoff-start")).toBeDefined();
+    } finally { view.unmount(); view.runtime.destroy(); }
+  });
+
+  it.each(["Previous page", "Next page"])("hands focus to the heading before %s removes its trigger", async (name) => {
+    const finish = prepareHistory();
+    const view = mount(<ReviewArbitrationHandoff projectId={4} source={{ ...source, kind }} onBack={() => {}} />);
+    try {
+      await act(async () => finish({ ...focusHistory(kind, schema), count: 201, next: "?page=2" }));
+      if (name === "Previous page") {
+        fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+        await act(async () => finish({ ...focusHistory(kind, schema), count: 201,
+          previous: "?page=1", next: "?page=3" }));
+      }
+      const trigger = screen.getByRole("button", { name });
+      trigger.focus();
+      fireEvent.click(trigger);
+      expect(trigger.isConnected).toBe(false);
+      expect(screen.getByRole("heading")).toBe(document.activeElement);
+      expect(screen.getByTestId("review-handoff").getAttribute("aria-busy")).toBe("true");
+      expect(mockCall.mock.calls.filter(([method]) => method === listMethod).at(-1)[1].params.page)
+        .toBe(name === "Previous page" ? 1 : 2);
+      await act(async () => finish());
+      expect(screen.getByRole("heading")).toBe(document.activeElement);
     } finally { view.unmount(); view.runtime.destroy(); }
   });
 

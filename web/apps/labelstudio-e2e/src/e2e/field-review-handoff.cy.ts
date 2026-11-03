@@ -73,6 +73,26 @@ describe("frozen field review to arbitration handoff", () => {
       cy.get(`[data-handoff-source="${ids[0]}"]`).click();
       cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "false")
         .find("h3").should("have.focus");
+      let releaseHistory: (() => void) | undefined;
+      cy.then(() => {
+        cy.intercept({ method: "GET", times: 1,
+          pathname: `${base}${batch.id}/sources/${ids[0]}/field-arbitration-handoffs/` }, req =>
+          new Promise<void>(resolve => {
+            releaseHistory = () => { req.continue(); resolve(); };
+          })).as("keyboardRefresh");
+      });
+      const refresh = () => cy.get('[data-testid="review-handoff"]')
+        .contains("button", zh ? "刷新只读视图" : "Refresh read-only view");
+      nativeEnter(refresh());
+      cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "true")
+        .find("h3").should("have.focus");
+      cy.wrap(null).should(() => expect(releaseHistory, "held history request").to.be.a("function"));
+      cy.then(() => releaseHistory!());
+      cy.wait("@keyboardRefresh").its("response.statusCode").should("eq", 200);
+      cy.get('[data-testid="review-handoff"]').should("have.attr", "aria-busy", "false")
+        .find("h3").should("have.focus");
+      cy.press(Cypress.Keyboard.Keys.TAB);
+      refresh().should("have.focus");
       nativeEnter(cy.get('[data-testid="handoff-start"]'));
       workspace().find("select").select(String(fixture.users.reviewer.id));
       cy.intercept({ method: "POST", pathname: new RegExp(`^${base}[0-9]+/sources/[0-9]+/field-arbitration-handoffs/?$`), times: 2 }, req => {

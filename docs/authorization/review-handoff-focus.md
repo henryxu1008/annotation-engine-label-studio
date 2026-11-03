@@ -22,6 +22,13 @@ Read completion, refresh completion, denial and blur do not move focus. Returnin
 to history still reloads current authorization and history; it does not reuse
 stale rows. The existing return to the original review-batch control is retained.
 
+An explicit refresh or page action transfers focus synchronously to the stable
+history heading before its button is disabled or removed. This prevents the
+browser from dropping keyboard focus onto the document body. The asynchronous
+completion still leaves any subsequent user focus choice alone. Independent
+Chrome review reproduced the missing-transfer regression in `eeeb74a5d` using
+trusted Enter and Tab; the old initial fix did not fully cover this lifecycle.
+
 The fix is local to focus management. The current authorization checks, request
 generation fences, frozen-source validation, budgets, command recovery and
 arbitration behavior remain in their existing implementations. Review decisions,
@@ -35,7 +42,7 @@ remain authoritative.
 | HF1 | Old production component fails the deterministic newly-ready-button and deliberate-focus regressions; failures identify focus movement. |
 | HF2 | Classification, NER and field history retain the newly ready button's focus in en-US and zh-CN after asynchronous reads. |
 | HF3 | Successful, denied and blur-fenced reads preserve deliberate focus outside the history view; denial/blur do not reveal a create action. |
-| HF4 | A manual refresh does not steal subsequent user focus. |
+| HF4 | Refresh and both page actions transfer focus to the heading before disabling/removing the trigger; the page number stays correct. Read completion does not steal subsequent user focus. Real Chrome Enter/Tab checks must preserve the list's keyboard position. |
 | HF5 | Initial entry and return from arbitration focus the heading during commit, including while the returned history is still loading. |
 | HF6 | Existing handoff authorization, stale-read fencing and return-to-batch/filter/focus component tests pass with the complete Label Studio unit suite. |
 | HF7 | A fresh isolated synthetic database and current production build complete the full field-handoff journey in both languages. |
@@ -45,3 +52,5 @@ remain authoritative.
 
 Execution results and source binding are recorded separately under
 `C:/Users/Henry/.codex/reports/ls84-handoff-focus-20261103`.
+Independent review and follow-up acceptance are recorded separately under
+`C:/Users/Henry/.codex/reports/ls84-handoff-focus-review-20261103`.

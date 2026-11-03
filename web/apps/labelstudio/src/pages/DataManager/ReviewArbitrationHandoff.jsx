@@ -38,6 +38,11 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
     } catch { if (current === generation.current) { clear(); setError(true); } }
     finally { if (current === generation.current) setBusy(false); }
   };
+  const reload = (nextPage = page) => {
+    // Transfer focus before the triggering button is disabled or removed.
+    heading.current?.focus();
+    load(nextPage);
+  };
   useEffect(() => {
     if (!flow) { clear(); setBusy(false); setError(true); return; }
     setTarget(null); load(1);
@@ -58,7 +63,7 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
     {flow.integrity && <p>{t(flow.integrity)}</p>}
     <p>{t("handoffSource", { batch: source.batch, source: source.source })}</p>
     {error && <p role="alert">{t("arbitrationReadFailed")}</p>}
-    <Button disabled={busy} onClick={() => load()}>{t("batchRefresh")}</Button>
+    <Button disabled={busy} onClick={() => reload()}>{t("batchRefresh")}</Button>
     <Button disabled={busy} onClick={onBack}>{t("handoffBack")}</Button>
     {canCreate && <Button data-testid="handoff-start" onClick={() => { ++generation.current; clear(); setTarget({}); }}>{t("handoffStart")}</Button>}
     {rows && <><ul>{rows.results.map((r) => <li key={r.id}>
@@ -67,8 +72,8 @@ export const ReviewArbitrationHandoff = ({ projectId, source, onBack }) => {
       <p>{t("handoffReviewState")}: {t(r.source_status === "unavailable" ? "unknownStatus" : r.source_status)}</p>
     </li>)}</ul>
       {!rows.results.length && <p>{t("handoffEmpty")}</p>}
-      <Button disabled={busy || !rows.previous} onClick={() => load(page - 1)}>{t("batchPrevious")}</Button>
-      <Button disabled={busy || !rows.next} onClick={() => load(page + 1)}>{t("batchNext")}</Button>
+      <Button disabled={busy || !rows.previous} onClick={() => reload(page - 1)}>{t("batchPrevious")}</Button>
+      <Button disabled={busy || !rows.next} onClick={() => reload(page + 1)}>{t("batchNext")}</Button>
     </>}
   </section>;
 };
