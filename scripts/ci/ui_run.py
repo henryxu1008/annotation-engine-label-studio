@@ -186,7 +186,7 @@ def validate_database_owner(ctx, private, *, fresh=True):
     from ui_server import isolation
 
     scope = isolation()
-    second_review = scope.get('shard') == 'second-review'
+    second_review = scope.get('shard') in ('second-review','review-audit')
     port = os.environ.get('POSTGRE_PORT', '')
     require(port.isdecimal() and 1024 <= int(port) <= 65535, 'Synthetic PostgreSQL port invalid')
     marker = None
@@ -194,7 +194,7 @@ def validate_database_owner(ctx, private, *, fresh=True):
         require(
             os.environ.get('GITHUB_ACTIONS') == 'true'
             and port == '5432'
-            and os.environ['POSTGRE_NAME'] == ('ui_ci_second_review_browser' if second_review else 'ui_ci_browser')
+            and os.environ['POSTGRE_NAME'] == ('ui_ci_second_review_audit_browser' if scope.get('shard')=='review-audit' else 'ui_ci_second_review_browser' if second_review else 'ui_ci_browser')
             and Path(private).parent.resolve() == Path(os.environ['RUNNER_TEMP']).resolve(),
             "Only this job's ephemeral service is supported",
         )
@@ -315,9 +315,9 @@ def seed(ctx, shard, private):
     validate_database_owner(ctx, private)
     compile_catalogs(ctx, private)
     commands = [['migrate', '--noinput'], ['collectstatic', '--noinput']]
-    if shard == 'second-review':
+    if shard in ('second-review','review-audit'):
         os.environ['SECOND_REVIEW_E2E_OWNERSHIP_FILE'] = str(private / 'second-review-bootstrap.json')
-        commands += [['seed_second_review_e2e']]
+        commands += [['seed_review_audit_e2e' if shard=='review-audit' else 'seed_second_review_e2e']]
     else:
         commands += (
             [['seed_review_confidence_e2e']]
@@ -338,9 +338,14 @@ def seed(ctx, shard, private):
         from ui_second_review import validate_fixture as validate_second_review
 
         validate_second_review(read_json(fixtures / '.second-review-e2e.json'))
+    if shard == 'review-audit':
+        from ui_audit import validate_fixture as validate_audit
+        validate_audit(read_json(fixtures / '.review-audit-e2e.json'))
     secrets = []
     for filename in (
-        ('.second-review-e2e.json',)
+        ('.review-audit-e2e.json',)
+        if shard == 'review-audit'
+        else ('.second-review-e2e.json',)
         if shard == 'second-review'
         else ('.review-confidence-e2e.json',)
         if shard == 'confidence'
@@ -351,7 +356,8 @@ def seed(ctx, shard, private):
             '.classification-batches81-e2e.json',
         )
     ):
-        value = read_json(fixtures / filename).get('password')
+        data=read_json(fixtures / filename)
+        value = (data['supervision'] if shard=='review-audit' else data).get('password')
         if isinstance(value, str) and '\n' not in value and '\r' not in value:
             secrets.append(value)
     os.environ['UI_SECRET_FILE'] = str(private / 'secret-filter.json')
@@ -388,6 +394,8 @@ def browser(ctx, shard, out, build_identity, build_manifest):
         args.append('--confidence')
     if shard == 'second-review':
         args.append('--second-review')
+    if shard == 'review-audit':
+        args.append('--review-audit')
     flags = (
         {'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
         if os.name == 'nt'

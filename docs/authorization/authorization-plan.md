@@ -1539,3 +1539,92 @@ succeed. No product policy, fixture, source scope or branch protection is relaxe
 records the unchanged per-producer limit, increased runner-capacity upper bound,
 local timing boundaries and required fresh hosted measurements. A cancelled old
 attempt remains cancelled; local checks cannot substitute for new-head remote CI.
+
+## Issue 84 review audit package V1 local implementation (2026-11-04)
+
+The [design](review-audit-download-v1-design.md),
+[80-case acceptance matrix](review-audit-download-v1-acceptance.md) and
+[source/version/reuse map](review-audit-download-v1-source-map.md) were approved
+on actual main `78b6c9a0cfd0f85a69300d31276aa0d1daeed480`.
+They specify a bounded, complete single-ReviewBatch graph for static text
+classification with a fixed redacted profile and supervisory_only effect.
+Local implementation and acceptance use a separate worktree and synthetic data.
+The matrix links the current local execution record; original design evidence
+remains sealed separately. Remote CI and deployment are separate stages.
+
+Audit capture freezes the private input and public projection atomically at T.
+Observed first reviews have no recorded batch-execution provenance; missing
+sources use verified typed receipts or explicit gaps, never current substitutes.
+Unprovable input type blocks new capture. Later source deletion does not refresh
+a frozen package, while current requester/creator authority and audit policy
+remain mandatory. Project deletion ends access without adding an audit PROTECT;
+existing release/snapshot PROTECT semantics stay unchanged.
+
+Upgrade-sensitive implementation requirements include an independent scoped
+Manager audit operation and background-provider gate, minimal Project-first
+coordination of existing deletion paths, two-database immutable/cleanup guards,
+private-root reservation across all file surfaces, descriptor/Range lifecycle,
+and mechanical reuse of existing export/snapshot helpers. Release APIs and their
+fork_approved/live-source predicates must not become audit base classes.
+An audit-only actor generation, live-User binding and irreversible deletion
+tombstone prevent same-integer-ID account takeover; creation and deletion
+coordination must preserve Project/User/binding lock order. Existing source
+actors without incarnation evidence remain per-record role occurrences.
+The formatter compatibility contract and exact README bytes freeze at T.
+Trusted OS private-root ownership and immutable publication are deployment
+preconditions; a checked descriptor does not freeze future inode writes.
+The fixed profile contains no raw text, answers, free reasons or public raw
+source hashes; permitting audit of an actor's own actions grants no decision or
+release authority and preserves existing self-review/cohort restrictions.
+
+The implementation adds independent audit models/guards, API, bounded source
+adapter, source-free formatter/worker, and an inline ReviewBatch download flow.
+The shared descriptor helper retains the legacy snapshot error contract;
+the bounded metadata observer is optional for existing callers. Source receipts
+with broken nullable pointers cannot hydrate a recreated current object by ID.
+Only definitive precommit rollback carries the command-rejected marker; an
+enqueue/response failure after commit remains recoverable with the original key.
+
+Local identity history filters eligible creators before pagination and performs
+a final bounded page/lookahead check. Custom identity providers without a
+bounded collection-scope contract explicitly report collection unsupported;
+their background object hooks remain authoritative. The default feature flag
+is false, no audit operation is added to the legacy operation grants, and no
+instance is enabled. This remains Fork-only; #81/#84 stay OPEN. Push, PR, merge,
+deployment, Docker/#76, primary and other worktree mutations are not authorized.
+The new bilingual browser call has an independent300s/15s budget; the original
+25 calls, required name and max-parallel3 remain unchanged. Real Redis transport,
+remote warm/cold/partial runs, deployment and Host acceptance remain NOT_RUN.
+
+The built-in local shortcut uses exact provider type equality. A custom subclass
+can add grant/revocation semantics, so it must have and execute its background
+hook and cannot inherit local SQL collection support. Independent review found
+the analogous isinstance pattern in the older approved-export domain; that is
+a preexisting custom-provider architecture risk requiring its own bounded review,
+not evidence that this audit patch changed or validated the older domain policy.
+
+Audit error redaction activates a fresh fixed exception before the shared handler
+logs sys.exc_info(), preserving framework status and precommit rejection markers
+without original detail/context/traceback. Unknown custom background-hook errors
+are normalized only at that call boundary, leaving uncertain publish database
+exceptions and token-owned file/lease retention unchanged.
+
+Audit download quarantine is scoped to file acquisition and fixed-inventory
+verification failures. Caller errors such as an incorrect artifact UUID, a final
+authorization denial or an allow-event I/O failure retain their HTTP semantics
+and preserve a valid READY package. Standard-library closing(ExitStack()) releases
+the verified descriptor without forwarding caller exceptions into the shared
+snapshot/file contexts. Streaming retains that same descriptor until response
+close; invalid ranges and nonstreaming responses release it before returning.
+Regression coverage includes GET/HEAD UUID negatives, final403 across content
+routes, caller exception identity and redaction, real missing/hash/ZIP failures,
+and successful, early-close and failure descriptor lifetimes.
+
+New audit captures and blocked-package retries share ACTIVE reservation admission
+under the existing Project fence. A blocked_auth/blocked_runtime package must pass
+both project and creator-generation limits before changing state, recording a new
+retry receipt or scheduling enqueue. Already-ACTIVE recovery retains its existing
+reservation; original capture/retry keys return their frozen receipt before new
+admission. Capacity refusal preserves token/attempt/T and frozen input, permits
+existing denial audit, and uses the existing AUDIT_ACTIVE_LIMIT429 UI contract.
+Real PostgreSQL contenders and pg_blocking_pids prove last-slot serialization.

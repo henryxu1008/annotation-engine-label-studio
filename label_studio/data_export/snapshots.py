@@ -91,26 +91,12 @@ def receipt_gate(release, *, check_files=False):
 @contextmanager
 def checked_file(path, expected_hash, size):
     """Hash and serve the same descriptor; never follow a substituted symlink."""
+    from core.utils.private_file import PrivateFileError
+    from core.utils.private_file import checked_file as descriptor_file
     try:
-        if path.absolute() != path.resolve(strict=True):
-            base.fail("SNAPSHOT_INTEGRITY_FAILED")
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(descriptor, "rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_size != size:
-                base.fail("SNAPSHOT_INTEGRITY_FAILED")
-            if hashlib.file_digest(handle, "sha256").hexdigest() != expected_hash:
-                base.fail("SNAPSHOT_INTEGRITY_FAILED")
-            after = os.fstat(handle.fileno())
-            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                after.st_size,
-                after.st_mtime_ns,
-                after.st_ctime_ns,
-            ):
-                base.fail("SNAPSHOT_INTEGRITY_FAILED")
-            handle.seek(0)
+        with descriptor_file(path,expected_hash,size) as handle:
             yield handle
-    except OSError:
+    except PrivateFileError:
         base.fail("SNAPSHOT_INTEGRITY_FAILED")
 
 

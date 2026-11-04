@@ -67,7 +67,10 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectQuerySet(models.QuerySet):
-    pass
+    def delete(self):
+        from data_export.audit_deletion import coordinated
+        with coordinated(self, 'projects') as fixed:
+            return super(ProjectQuerySet, fixed).delete()
 
 
 class ProjectQuerySetWithFSM(FSMStateQuerySetMixin, ProjectQuerySet):
@@ -626,6 +629,11 @@ class Project(ProjectMixin, FsmHistoryStateModel):
 
     def remove_tasks_by_file_uploads(self, file_upload_ids):
         self.tasks.filter(file_upload_id__in=file_upload_ids).delete()
+
+    def delete(self, *args, **kwargs):
+        from data_export.audit_deletion import coordinated
+        with coordinated(Project.all_objects.using(kwargs.get('using') or self._state.db).filter(pk=self.pk), 'projects'):
+            return super().delete(*args, **kwargs)
 
     def advance_onboarding(self):
         """Move project to next onboarding step"""

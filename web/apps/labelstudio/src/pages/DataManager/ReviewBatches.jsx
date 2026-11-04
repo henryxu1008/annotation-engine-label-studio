@@ -8,6 +8,7 @@ import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
 import { SecondReviewEntry, SecondReviewWorkspace } from "./SecondReviewWorkspace";
+import { ReviewAuditDownload } from "./ReviewAuditDownload";
 import { ReworkComparison } from "./ReworkComparison";
 import { ReviewArbitrationHandoff } from "./ReviewArbitrationHandoff";
 import { ReviewConfidenceSource, ReviewPrioritySelector, ReviewPrioritySummary, validPriorityChoice, validPriorityPreview, isBoundedPriority, priorityCapability } from "./ReviewPriority";
@@ -77,6 +78,7 @@ export const ReviewBatches = ({ projectId }) => {
   const comparisonTrigger = useRef(null);
   const returnFocus = useRef(false);
   const root = useRef(null);
+  const auditReturn = useRef(null);
   const [batches, setBatches] = useState([]);
   const [secondSource, setSecondSource] = useState(null);
   const [secondCapability, setSecondCapability] = useState(null);
@@ -449,7 +451,10 @@ export const ReviewBatches = ({ projectId }) => {
       <Button disabled={controlsBusy || !next} onClick={() => load(null, page + 1)}>{t("next")}</Button>
     </nav>
     {detail && <section>
-      <h3>{detail.name}</h3>
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: Stable return target when the audit controls lose authority. */}
+      <h3 ref={auditReturn} tabIndex={-1} data-testid="review-batch-heading">{detail.name}</h3>
+      {detail.role === "manager" && ["sha256-ranked-v1", "classification-conflict-ranked/v1", confidenceAlgorithm].includes(detail.algorithm)
+        && <ReviewAuditDownload key={`${projectId}/${detail.id}`} projectId={projectId} batchId={detail.id} ownerKey={`${owner.current}`} fallbackRef={auditReturn} />}
       {detail.role === "reviewer" && <p>{t("visibleScope")}</p>}
       {detail.role === "reviewer" && ["classification-conflict-ranked/v1", "ner-conflict-ranked/v1", "field-conflict-ranked/v1", confidenceAlgorithm].includes(detail.algorithm) && <p>{t("priorityReviewerScope")}</p>}
       <p>{t("sampleCount", { selected: detail.selected_count, total: detail.candidate_count })}

@@ -8,7 +8,7 @@ import os
 import random
 import traceback
 import uuid
-from typing import Any, Mapping, Optional, Union, cast
+from typing import Any, Mapping, Optional, Union
 from urllib.parse import urljoin
 
 import ujson as json
@@ -558,10 +558,10 @@ class Task(TaskMixin, FsmHistoryStateModel):
         Task.delete_tasks_without_signals(queryset)
 
     def delete(self, *args, **kwargs):
-        self.before_delete_actions()
-        result = super().delete(*args, **kwargs)
-        # set updated_at field of task to now()
-        return result
+        from data_export.audit_deletion import coordinated
+        with coordinated(Task.objects.using(kwargs.get('using') or self._state.db).filter(pk=self.pk), 'tasks'):
+            self.before_delete_actions()
+            return super().delete(*args, **kwargs)
 
 
 class TaskAssignment(models.Model):

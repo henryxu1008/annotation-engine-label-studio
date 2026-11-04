@@ -34,6 +34,11 @@ year = models.IntegerField(_('year'), choices=YEAR_CHOICES, default=datetime.dat
 
 
 class UserQuerySet(models.QuerySet):
+    def delete(self):
+        from data_export.audit_deletion import coordinated
+        with coordinated(self, 'users') as fixed:
+            return super(UserQuerySet, fixed).delete()
+
     def _security_batches(self, objects, *, fields=('is_active',), batch_size=None, reserved_params=0):
         connection = connections[self.db]
         fields = [self.model._meta.get_field(name) for name in fields]
@@ -239,6 +244,11 @@ UserMixin = load_func(settings.USER_MIXIN)
 
 
 class User(UserMixin, AbstractBaseUser, PermissionsMixin, UserLastActivityMixin):
+    def delete(self, *args, **kwargs):
+        from data_export.audit_deletion import coordinated
+        with coordinated(User.objects.using(kwargs.get('using') or self._state.db).filter(pk=self.pk), 'users'):
+            return super().delete(*args, **kwargs)
+
     """
     An abstract base class implementing a fully featured User model with
     admin-compliant permissions.

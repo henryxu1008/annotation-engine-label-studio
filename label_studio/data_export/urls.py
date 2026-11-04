@@ -4,12 +4,21 @@ from django.urls import include, path
 
 from . import api
 from .approved_api import ApprovedExportAPI
+from .audit_api import AuditAPI
 from .snapshot_api import ReleaseSnapshotAPI
 
 app_name = 'data_export'
 
 
 _api_urlpatterns = [
+    path('<int:pk>/review-audit-packages/', AuditAPI.as_view()),
+    *[path(f'<int:pk>/review-audit-packages/{action}/', AuditAPI.as_view(), {'action': action})
+      for action in ('capabilities', 'preview')],
+    path('<int:pk>/review-audit-packages/<uuid:package_id>/', AuditAPI.as_view(), {'action': 'detail'}),
+    *[path(f'<int:pk>/review-audit-packages/<uuid:package_id>/{action}/', AuditAPI.as_view(), {'action': action})
+      for action in ('manifest', 'retry')],
+    path('<int:pk>/review-audit-packages/<uuid:package_id>/artifacts/<uuid:artifact_id>/download/',
+         AuditAPI.as_view(), {'action': 'download'}),
     path('<int:pk>/approved-dataset-releases/<uuid:release_id>/snapshots/', ReleaseSnapshotAPI.as_view()),
     *[path(f'<int:pk>/approved-dataset-releases/<uuid:release_id>/snapshots/<uuid:snapshot_id>/{suffix}',
            ReleaseSnapshotAPI.as_view(), {'action': action}) for suffix, action in

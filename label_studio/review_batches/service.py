@@ -168,7 +168,12 @@ def valid_source(row, project_id):
             return False
     elif row.status not in ('pending', 'superseded') or review is not None:
         return False
-    return (
+    return valid_snapshot_scope(row, project_id)
+
+
+def valid_snapshot_scope(row, project_id):
+    """Frozen scope/hash only; callers independently validate review history."""
+    return isinstance(row.result_snapshot, dict) and (
         row.assignment.project_id == project_id
         and row.assignment.task.project_id == project_id
         and row.result_hash == _snapshot_hash(row.result_snapshot)
