@@ -1608,3 +1608,14 @@ logs sys.exc_info(), preserving framework status and precommit rejection markers
 without original detail/context/traceback. Unknown custom background-hook errors
 are normalized only at that call boundary, leaving uncertain publish database
 exceptions and token-owned file/lease retention unchanged.
+
+Audit download quarantine is scoped to file acquisition and fixed-inventory
+verification failures. Caller errors such as an incorrect artifact UUID, a final
+authorization denial or an allow-event I/O failure retain their HTTP semantics
+and preserve a valid READY package. Standard-library closing(ExitStack()) releases
+the verified descriptor without forwarding caller exceptions into the shared
+snapshot/file contexts. Streaming retains that same descriptor until response
+close; invalid ranges and nonstreaming responses release it before returning.
+Regression coverage includes GET/HEAD UUID negatives, final403 across content
+routes, caller exception identity and redaction, real missing/hash/ZIP failures,
+and successful, early-close and failure descriptor lifetimes.

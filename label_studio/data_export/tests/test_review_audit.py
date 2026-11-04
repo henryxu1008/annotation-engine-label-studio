@@ -1,6 +1,7 @@
 """Synthetic audit acceptance: frozen evidence never acquires review authority."""
 import json
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -580,3 +581,217 @@ class TestReviewAudit(AuditFixtures, APITestCase):
         assert not AuditPackage.objects.exists()
         with self.assertRaises(DatabaseError), transaction.atomic():
             AuditActorBinding.objects.all().delete()
+
+
+class TestAuditDownloadExceptions(AuditFixtures, APITestCase):
+    def setUp(self):
+        self.audit_setup()
+
+    def prepared_package(self):
+        source, batch = self.prepared()
+        captured = self.capture(batch)
+        assert captured.status_code == 202
+        return self.ready(AuditPackage.objects.get(pk=captured.data['package_id']))
+
+    def download_url(self, package, artifact_id=None):
+        return self.audit_base + f'{package.pk}/artifacts/{artifact_id or package.artifact.pk}/download/'
+
+    @contextmanager
+    def opened_handles(self):
+        from core.utils import private_file
+
+        handles = []
+        original = private_file.os.fdopen
+
+        def track(*args, **kwargs):
+            handle = original(*args, **kwargs)
+            handles.append(handle)
+            return handle
+
+        with patch.object(private_file.os, 'fdopen', side_effect=track):
+            yield handles
+
+    def assert_ready(self, package):
+        package.refresh_from_db()
+        assert package.state == 'ready' and not package.error_code
+
+    def assert_wrong_uuid(self, method):
+        package = self.prepared_package()
+        with self.opened_handles() as handles:
+            response = getattr(self.client, method)(self.download_url(package, uuid4()))
+        assert response.status_code == 404
+        assert len(handles) == 1 and handles[0].closed
+        self.assert_ready(package)
+        correct = self.client.get(self.download_url(package))
+        assert correct.status_code == 200
+        assert audit.c.digest(b''.join(correct.streaming_content)) == package.artifact.sha256
+
+    def test_wrong_artifact_uuid_get_does_not_quarantine(self):
+        self.assert_wrong_uuid('get')
+
+    def test_wrong_artifact_uuid_head_does_not_quarantine(self):
+        self.assert_wrong_uuid('head')
+
+    def test_late_authorization_denial_preserves_ready_and_closes_file(self):
+        for method, action, headers in (
+            ('get', 'download', {}),
+            ('head', 'download', {}),
+            ('get', 'download', {'HTTP_RANGE': 'bytes=0-9'}),
+            ('get', 'download', {'HTTP_RANGE': 'bytes=999999999-'}),
+            ('get', 'manifest', {}),
+        ):
+            package = self.prepared_package()
+
+            def deny(*args, **kwargs):
+                audit.c.fail('FORBIDDEN', 403)
+
+            path = self.download_url(package) if action == 'download' else self.audit_base + f'{package.pk}/manifest/'
+            with self.opened_handles() as handles, patch.object(audit, 'recheck', side_effect=deny):
+                response = getattr(self.client, method)(path, **headers)
+            assert response.status_code == 403, (method, action, headers)
+            assert not response.streaming and 'download_url' not in str(response.data)
+            assert len(handles) == 1 and handles[0].closed
+            self.assert_ready(package)
+
+    def test_allow_event_io_failure_preserves_ready_and_redacts_error(self):
+        import traceback
+
+        package = self.prepared_package()
+        original = audit.event
+
+        def fail_allow(ctx, phase, **kwargs):
+            if phase == 'download':
+                raise OSError('PII_DOWNLOAD_IO_CANARY')
+            return original(ctx, phase, **kwargs)
+
+        with self.opened_handles() as handles, patch.object(audit, 'event', side_effect=fail_allow):
+            with self.assertLogs('core.utils.common', level='ERROR') as logs:
+                response = self.client.get(self.download_url(package))
+        assert response.status_code == 500 and response.data['detail'] == 'AUDIT_REQUEST_REJECTED'
+        assert not response.streaming and len(handles) == 1 and handles[0].closed
+        assert 'PII_DOWNLOAD_IO_CANARY' not in str(response.data) + '\n'.join(logs.output)
+        assert all(
+            'PII_DOWNLOAD_IO_CANARY' not in ''.join(traceback.format_exception(*record.exc_info))
+            for record in logs.records
+        )
+        self.assert_ready(package)
+
+    def assert_caller_exception(self, error):
+        from data_export.audit_api import AuditAPI
+
+        package = self.prepared_package()
+        view = AuditAPI()
+        with self.opened_handles() as handles, self.assertRaises(type(error)) as caught:
+            with view.checked(package) as (handle, artifact):
+                assert handle is handles[0] and not handle.closed
+                raise error
+        assert caught.exception is error and not getattr(view, 'quarantine_id', None)
+        assert len(handles) == 1 and handles[0].closed
+        self.assert_ready(package)
+
+    def test_caller_api_exception_propagates_unchanged(self):
+        from rest_framework.exceptions import PermissionDenied
+
+        self.assert_caller_exception(PermissionDenied('AUDIT_FORBIDDEN'))
+
+    def test_caller_os_error_propagates_unchanged(self):
+        self.assert_caller_exception(OSError('synthetic caller failure'))
+
+    def test_stream_keeps_verified_descriptor_until_consumed(self):
+        from data_export import audit_format
+
+        package = self.prepared_package()
+        with self.opened_handles() as handles, patch.object(
+            audit_format, 'verify', wraps=audit_format.verify
+        ) as verify:
+            response = self.client.get(self.download_url(package))
+        assert response.status_code == 200 and len(handles) == 1 and not handles[0].closed
+        assert verify.call_count == 1 and verify.call_args.args[0] is handles[0]
+        assert response.ranged_file.f is handles[0]
+        assert audit.c.digest(b''.join(response.streaming_content)) == package.artifact.sha256
+        assert handles[0].closed
+        self.assert_ready(package)
+
+    def test_unconsumed_stream_close_releases_descriptor(self):
+        from django.test.client import closing_iterator_wrapper
+
+        package = self.prepared_package()
+        with self.opened_handles() as handles:
+            response = self.client.get(self.download_url(package))
+        assert response.status_code == 200 and len(handles) == 1 and not handles[0].closed
+        # Reuse the test client's connection shielding while closing the real
+        # response without reading bytes inside this transactional TestCase.
+        list(closing_iterator_wrapper((), response.close))
+        assert handles[0].closed
+        self.assert_ready(package)
+
+    def test_nonstream_and_invalid_range_release_descriptor(self):
+        package = self.prepared_package()
+        for path, headers, status in (
+            (self.audit_base + f'{package.pk}/', {}, 200),
+            (self.audit_base + f'{package.pk}/manifest/', {}, 200),
+            (self.download_url(package), {'HTTP_RANGE': 'bytes=999999999-'}, 416),
+        ):
+            with self.opened_handles() as handles:
+                response = self.client.get(path, **headers)
+            assert response.status_code == status and not response.streaming
+            assert len(handles) == 1 and handles[0].closed
+            self.assert_ready(package)
+
+    def test_missing_artifact_file_is_still_quarantined(self):
+        from data_export.audit_files import artifact_path
+
+        package = self.prepared_package()
+        path = artifact_path(package, package.artifact)
+        path.chmod(0o600)
+        path.unlink()
+        with self.opened_handles() as handles:
+            response = self.client.get(self.download_url(package))
+        assert response.status_code == 409 and response.data['detail'] == 'AUDIT_FILE_INVALID'
+        assert handles == []
+        package.refresh_from_db()
+        assert package.state == 'quarantined'
+
+    def test_real_hash_failure_still_quarantines_and_closes_file(self):
+        from data_export.audit_files import artifact_path
+
+        package = self.prepared_package()
+        path = artifact_path(package, package.artifact)
+        bad = bytearray(path.read_bytes())
+        bad[0] ^= 1
+        path.chmod(0o600)
+        path.write_bytes(bad)
+        with self.opened_handles() as handles:
+            response = self.client.get(self.download_url(package))
+        assert response.status_code == 409 and response.data['detail'] == 'AUDIT_FILE_INVALID'
+        assert len(handles) == 1 and handles[0].closed
+        package.refresh_from_db()
+        assert package.state == 'quarantined'
+
+    def test_bad_zip_matching_observed_hash_still_quarantines_and_closes_file(self):
+        from data_export import audit_format
+
+        source, batch = self.prepared()
+        assert self.capture(batch).status_code == 202
+        original = audit_format.write
+
+        def corrupt_writer(package, bundle, output, **kwargs):
+            manifest = original(package, bundle, output, **kwargs)
+            output.seek(0)
+            output.truncate()
+            output.write(b'not a zip')
+            return manifest
+
+        # A faulty formatter publishes through real generation and immutable
+        # size/hash metadata. The read must reach the actual ZIP verifier.
+        with patch.object(audit_format, 'write', side_effect=corrupt_writer):
+            package = self.ready()
+        with self.opened_handles() as handles, patch.object(
+            audit_format, 'verify', wraps=audit_format.verify
+        ) as verify:
+            response = self.client.get(self.download_url(package))
+        assert response.status_code == 409 and response.data['detail'] == 'AUDIT_FILE_INVALID'
+        assert verify.call_count == 1 and verify.call_args.args[0] is handles[0]
+        assert len(handles) == 1 and handles[0].closed
+        package.refresh_from_db()
+        assert package.state == 'quarantined'

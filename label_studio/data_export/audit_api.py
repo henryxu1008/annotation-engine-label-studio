@@ -1,5 +1,5 @@
 """Every audit surface enforces current requester and creator before metadata/bytes."""
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 
 from core.permissions import all_permissions
 from django.core import signing
@@ -255,20 +255,23 @@ class AuditAPI(GenericAPIView):
 
         @contextmanager
         def checked():
-            try:
-                artifact = get_object_or_404(AuditArtifact, package=package)
-                if artifact.size_bytes > c.limits()['artifact']:
-                    c.fail('FILE_INVALID')
-                with snapshots.checked_file(
-                    artifact_path(package, artifact), artifact.sha256, artifact.size_bytes
-                ) as handle:
+            # Close file contexts without injecting caller exceptions into the
+            # shared descriptor verifier's integrity-error translation.
+            with closing(ExitStack()) as stack:
+                try:
+                    artifact = get_object_or_404(AuditArtifact, package=package)
+                    if artifact.size_bytes > c.limits()['artifact']:
+                        c.fail('FILE_INVALID')
+                    handle = stack.enter_context(
+                        snapshots.checked_file(artifact_path(package, artifact), artifact.sha256, artifact.size_bytes)
+                    )
                     audit_format.verify(handle, package)
-                    yield handle, artifact
-            except (APIException, OSError):
-                # The caller's transaction rolls back on error, so quarantine in
-                # handle_exception after the request savepoint has been unwound.
-                self.quarantine_id = package.pk
-                c.fail('FILE_INVALID')
+                except (APIException, OSError):
+                    # The request savepoint rolls back first; handle_exception
+                    # quarantines only an acquisition/verification failure.
+                    self.quarantine_id = package.pk
+                    c.fail('FILE_INVALID')
+                yield handle, artifact
 
         return checked()
 
