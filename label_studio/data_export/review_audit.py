@@ -74,7 +74,7 @@ def scope(request, project_id, *, resolved=None):
     if not isinstance(operation.version, str) or not 1 <= len(operation.version.encode()) <= 128:
         c.fail('POLICY_INVALID', 403)
     provider = get_identity_provider()
-    if not isinstance(provider, LocalIdentityProvider) and not callable(getattr(provider, 'resolve_background', None)):
+    if type(provider) is not LocalIdentityProvider and not callable(getattr(provider, 'resolve_background', None)):
         c.fail('BACKGROUND_UNAVAILABLE', 503)
     policy = c.policy(project)
     policy['_authority'] = dict(version=operation.version, state=operation.state)
@@ -105,7 +105,7 @@ def client_owner(ctx):
 def collection_supported():
     # Background identity resolution alone cannot establish a whole SQL-visible
     # creator collection. A future host adapter needs an explicit contract.
-    return isinstance(get_identity_provider(), LocalIdentityProvider)
+    return type(get_identity_provider()) is LocalIdentityProvider
 
 
 def visible_packages(ctx):
@@ -226,10 +226,22 @@ def creator(package, project, *, check_input=True):
         )
         actor = get_user_model().objects.get(pk=live.live_user_id, is_active=True)
         provider = get_identity_provider()
-        if isinstance(provider, LocalIdentityProvider):
+        # Only the exact built-in provider has the mechanical local contract.
+        # A subclass may add Host grant checks and must execute its trusted hook.
+        if type(provider) is LocalIdentityProvider:
             principal = Principal(f'{LOCAL_IDENTITY_SOURCE}:{actor.pk}', LOCAL_IDENTITY_SOURCE, '', actor.pk)
         else:
-            principal, mapped = provider.resolve_background(package.creator_principal)
+            try:
+                principal, mapped = provider.resolve_background(package.creator_principal)
+            except APIException:
+                raise
+            except Exception:
+                # A trusted custom hook may fail unexpectedly. Never let its
+                # raw detail escape to RQ logs; publish DB uncertainty remains
+                # outside this narrow adapter and retains its original rules.
+                error = APIException('AUDIT_GENERATION_FAILED')
+                error.status_code = 500
+                raise error from None
             if mapped.pk != actor.pk:
                 c.fail('CREATOR_REVOKED', 403)
         ctx = scope(None, project.pk, resolved=(principal, actor))

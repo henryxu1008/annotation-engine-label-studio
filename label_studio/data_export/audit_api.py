@@ -3,9 +3,10 @@ from contextlib import ExitStack
 
 from core.permissions import all_permissions
 from django.core import signing
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import transaction
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.utils.dateparse import parse_datetime
 from rest_framework.exceptions import APIException
 from rest_framework.generics import GenericAPIView, get_object_or_404
@@ -61,12 +62,19 @@ class AuditAPI(GenericAPIView):
         return result
 
     def handle_exception(self, exc):
-        rejected = getattr(exc, 'audit_command_rejected', False)
-        if isinstance(exc, APIException) and str(exc.detail) not in c.ERROR_CODES:
+        rejected = getattr(exc, 'audit_command_rejected', False) is True
+        if isinstance(exc, APIException):
+            code = str(exc.detail) if str(exc.detail) in c.ERROR_CODES else 'AUDIT_REQUEST_REJECTED'
             status = exc.status_code
-            exc = APIException('AUDIT_REQUEST_REJECTED')
-            exc.status_code = status
-            exc.display_context = {'reason': 'AUDIT_REQUEST_REJECTED'}
+        elif isinstance(exc, Http404):
+            code, status = 'AUDIT_NOT_FOUND', 404
+        elif isinstance(exc, DjangoPermissionDenied):
+            code, status = 'AUDIT_FORBIDDEN', 403
+        else:
+            code, status = 'AUDIT_REQUEST_REJECTED', 500
+        sanitized = APIException(code)
+        sanitized.status_code = status if type(status) is int and 400 <= status <= 599 else 500
+        sanitized.display_context = {'reason': code}
         if getattr(self, 'quarantine_id', None):
             with transaction.atomic():
                 from projects.models import Project
@@ -80,7 +88,13 @@ class AuditAPI(GenericAPIView):
                 s.event(self.ctx, 'request_denied', allowed=False, reason='REQUEST_DENIED')
         except Exception:
             pass
-        response = super().handle_exception(exc)
+        # The shared handler logs sys.exc_info(), not merely its argument. Make
+        # the fixed exception current, suppressing the provider's original chain
+        # in both formatted logs and DEBUG error responses.
+        try:
+            raise sanitized from None
+        except APIException as safe:
+            response = super().handle_exception(safe)
         if rejected:
             response['X-Audit-Command-State'] = 'rejected'
         return response

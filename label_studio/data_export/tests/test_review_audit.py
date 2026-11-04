@@ -118,6 +118,42 @@ class TestReviewAudit(AuditFixtures, APITestCase):
         assert (list(Submission.objects.values()), list(ReviewDecision.objects.values())) == before
         assert json.loads(package.projection)['effect'] == 'supervisory_only'
 
+    def test_A02_selected_and_unselected_each_have_all_four_source_states(self):
+        from tasks.submissions import review_submission
+
+        sources = [self.make_source() for _ in range(8)]
+        args = {key: value for key, value in self.args.items() if key != 'priority'}
+        args['rate'] = 50
+        preview = self.preview(args)
+        batch = self.create_batch({**args, 'expected_plan_hash': preview.data['plan_hash']}).data['id']
+        plan = ReviewBatch.objects.get(pk=batch).plan
+        by_id = {row.pk: row for row in sources}
+        expected = set()
+        for selected in (True, False):
+            candidates = [item for item in plan['candidates'] if item['selected'] is selected]
+            assert len(candidates) == 4
+            for item, state in zip(candidates, ('pending', 'approved', 'rejected', 'superseded')):
+                row = by_id[item['submission_id']]
+                if state in ('approved', 'rejected'):
+                    review_submission(submission=row, reviewer=self.reviewer, decision=state, reason='Synthetic state')
+                elif state == 'superseded':
+                    create_submission(annotation=row.annotation, assignment=row.assignment, actor=self.worker)
+                expected.add((str(row.pk), selected, state))
+        before = list(Submission.objects.values()), list(ReviewDecision.objects.values())
+        assert self.capture(batch).status_code == 202
+        facts = json.loads(AuditPackage.objects.get().input_bundle)['graph']['facts']
+        frozen = {(row['type'], row['key']): row for row in facts}
+        observed = {
+            (
+                identifier,
+                frozen['candidate', identifier]['public']['selected'],
+                frozen['revision', identifier]['public']['state'],
+            )
+            for identifier, _, _ in expected
+        }
+        assert observed == expected and len({(selected, state) for _, selected, state in observed}) == 8
+        assert (list(Submission.objects.values()), list(ReviewDecision.objects.values())) == before
+
     def test_B02_no_legacy_audit_operation(self):
         source, batch = self.prepared()
         with self.settings(CONFIDENCE_TEST_OPERATIONS=OPERATIONS):

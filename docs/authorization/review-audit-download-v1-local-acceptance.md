@@ -4,14 +4,14 @@
 
 | 验收 | 结果 |
 | --- | --- |
-| backend-pg-closure-r3.xml | 129 PASS / 10 SKIP / 0 FAIL |
-| backend-sqlite-closure-r3.xml | 115 PASS / 24 SKIP / 0 FAIL |
+| backend-pg-closure-r6.xml | 134 PASS / 10 SKIP / 0 FAIL |
+| backend-sqlite-closure-r6.xml | 120 PASS / 24 SKIP / 0 FAIL |
 | ci-contracts-closure.xml | 93 PASS / 0 SKIP / 0 FAIL |
 | linux-domain-tests-3.xml | 23 PASS / 0 SKIP / 0 FAIL |
 | regression-pg-r2.xml | 1316 PASS / 7 SKIP / 2 FAIL |
 | 前端完整prepare | 4948 PASS / 5既有SKIP；labelstudio最终42 suites/732 PASS |
 | 生产构建 | SUCCESS，66.17秒；保留既有构建警告 |
-| 最终原生Electron | en-US/zh-CN 2/2，36.015秒，未超300秒调用上限，服务已停 |
+| 最终原生Electron | en-US/zh-CN 2/2，43.500秒，未超300秒调用上限，服务已停 |
 | 独立离线下载校验 | 实际两份ZIP的四entry、哈希、JCS、计数/gaps/edges与脱敏金丝雀通过 |
 | 隔离迁移 | PostgreSQL forward/back/replay/retained拒绝5项；SQLite含namespace flush拒绝6项 |
 
@@ -24,7 +24,7 @@
 | ID | 本地结论 | 实际观测及边界 |
 | --- | --- | --- |
 | A01 | SUCCESS_LOCAL | ordinary、分类优先及confidence冻结原candidate/selection；实际1000根完整捕获，confidence保留原协议枚举。 |
-| A02 | SUCCESS_LOCAL | selected/unselected与pending、approved、rejected、superseded分列；READY不赋审核效力。 |
+| A02 | SUCCESS_LOCAL | 真实八根形成selected/unselected各pending、approved、rejected、superseded四状态，逐对核对冻结图；READY不赋审核效力。 |
 | A03 | SUCCESS_LOCAL | 全部可观察根assignment修订、初审及相邻差异；1/true/1.0和输入变化不误判相同。 |
 | A04 | SUCCESS_LOCAL | 初审关联明确subject_observed；batch_execution_provenance和历史actor incarnation不伪造。 |
 | A05 | SUCCESS_LOCAL | 真实pending/confirmed/concern/cancelled快照及no_change/revision_linked，保持supervisory_only与业务源不变。 |
@@ -78,7 +78,7 @@
 | G05 | SUCCESS_LOCAL | 错误bytes/hash/attempt/storage pointer与ZIP inventory不交付并quarantine，原key不重建。 |
 | G06 | SUCCESS_LOCAL | 复用保留的private-root reservation，LocalFiles/import/storage等旁路受原负例覆盖，audit关闭不撤reservation。 |
 | G07 | SUCCESS_LOCAL | invalid/multiple/out-of-bounds Range拒绝；同FD读、退出及异常关闭，不全文件buffer。 |
-| G08 | SUCCESS_LOCAL | allow event写失败不出byte，deny尽力记录；worker/provider原始异常转固定码，PII不进公共错误。 |
+| G08 | SUCCESS_LOCAL | allow event写失败不出byte，deny尽力记录；响应/日志完整traceback及RQ hook未知异常不泄canary，固定码不改DB发布不确定性。 |
 | H01 | SUCCESS_LOCAL | 真实短读流与BytesIO均支持16KiB等界、超1byte拒绝，重复query/weak IDs/额外字段拒绝。 |
 | H02 | SUCCESS_LOCAL | 每个纳入revision静态单Text证明，旧receipt缺arity不能凭当前XML补证。 |
 | H03 | SUCCESS_LOCAL | 真实1000根完整捕获/1001 producer拒绝、实际20修订完整/21拒绝；总修订门禁与字节门禁取交集。 |
@@ -86,7 +86,7 @@
 | H05 | SUCCESS_LOCAL | SQL stored CASE在decoder前，单snapshot/整个pass union及plan限制；chunk1/250均不能重置union预算。 |
 | H06 | SUCCESS_LOCAL | 两pass含元数据/COUNT/ID/scalar/锁查询的实际shared Budget，实测等界与少1byte拒绝，不按hash免费。 |
 | H07 | SUCCESS_LOCAL | 输入/公开/ZIP/scratch限制同时成立；CappedWriter等界/超界及footer、真实超限不READY，三writer不超两slot。 |
-| H08 | SUCCESS_LOCAL | page/cursor/response/active/SQL/chunk均有限；实际1000根无N+1；共享authority固定基线单列。 |
+| H08 | SUCCESS_LOCAL | page/cursor/response/active/SQL/chunk均有限；实际1000根门禁通过。单根实测scope3、来源37×2、完整HTTP107（其余共享/封装33）；不同负载另受硬限。 |
 | I01 | SUCCESS_LOCAL | 既有batch详情内一条preview→明确确认→history→download流程，两语原生验收。 |
 | I02 | SUCCESS_LOCAL | context/owner/generation隔离，迟到capability/JSON/blob不显示或保存旧结果。 |
 | I03 | SUCCESS_LOCAL | lost ACK只原body/key恢复，读失败不写；服务端确定precommit拒绝与真实postcommit UNKNOWN分别覆盖。 |

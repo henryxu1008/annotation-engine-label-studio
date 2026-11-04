@@ -24,6 +24,103 @@ class TestAuditLimits(AuditFixtures, APITestCase):
     def setUp(self):
         self.audit_setup()
 
+    def test_B08_local_provider_subclass_without_background_hook_is_unsupported(self):
+        from access_control.identity import LocalIdentityProvider
+
+        class Custom(LocalIdentityProvider):
+            pass
+
+        with patch.object(audit, 'get_identity_provider', return_value=Custom()):
+            denied(self.client.get(self.audit_base + 'capabilities/'), (503,))
+        assert not AuditPackage.objects.exists()
+
+    def test_B06_custom_local_subclass_cannot_bypass_creator_revocation_hook(self):
+        from access_control.identity import LocalIdentityProvider
+
+        called = []
+
+        class Custom(LocalIdentityProvider):
+            def resolve_background(self, principal):
+                called.append(principal)
+                error = AuthenticationFailed('PII_PROVIDER_REVOKE_CANARY')
+                error.display_context = {'reason': 'PII_PROVIDER_CONTEXT_CANARY'}
+                raise error
+
+        source, batch = self.prepared()
+        assert self.capture(batch).status_code == 202
+        package = AuditPackage.objects.get()
+        with patch.object(audit.approved, 'api_queue', return_value=MagicMock()):
+            self.real_enqueue(str(package.pk))
+        package.refresh_from_db()
+        self.client.force_authenticate(self.producer)
+        with patch.object(audit, 'get_identity_provider', return_value=Custom()):
+            with self.assertLogs('core.utils.common', level='ERROR') as logs:
+                response = self.client.get(self.audit_base + f'{package.pk}/')
+            denied(response, (401, 403, 404))
+            assert 'PII_PROVIDER_REVOKE_CANARY' not in str(response.data)
+            assert 'PII_PROVIDER_REVOKE_CANARY' not in '\n'.join(logs.output)
+            assert 'PII_PROVIDER_CONTEXT_CANARY' not in str(response.data)
+            import traceback
+
+            assert all(
+                'PII_PROVIDER' not in ''.join(traceback.format_exception(*record.exc_info)) for record in logs.records
+            )
+            caps = self.client.get(self.audit_base + 'capabilities/')
+            assert caps.status_code == 200 and caps.data['collection_supported'] is False
+            denied(self.client.get(self.audit_base), (503,))
+            audit.generate(str(package.pk), str(package.token))
+        package.refresh_from_db()
+        assert package.state == 'blocked_auth' and called
+        assert set(called) == {package.creator_principal} and not hasattr(package, 'artifact')
+
+    def test_G08_unknown_provider_exception_and_fixed_code_context_never_reach_logs(self):
+        import traceback
+
+        from access_control.identity import LocalIdentityProvider
+        from rest_framework.exceptions import PermissionDenied
+
+        source, batch = self.prepared()
+        assert self.capture(batch).status_code == 202
+        package = AuditPackage.objects.get()
+        fixed = PermissionDenied('AUDIT_FORBIDDEN')
+        fixed.display_context = {'reason': 'PII_UNKNOWN_PROVIDER_CONTEXT_CANARY'}
+        for error in (RuntimeError('PII_UNKNOWN_PROVIDER_CANARY'), OSError('PII_UNKNOWN_PROVIDER_CANARY'), fixed):
+
+            class Custom(LocalIdentityProvider):
+                def resolve_background(self, principal):
+                    raise error
+
+            with patch.object(audit, 'get_identity_provider', return_value=Custom()), self.assertLogs(
+                'core.utils.common', level='ERROR'
+            ) as logs:
+                response = self.client.get(self.audit_base + f'{package.pk}/')
+            assert response.status_code == (403 if error is fixed else 500)
+            assert 'X-Audit-Command-State' not in response and 'PII_UNKNOWN_PROVIDER' not in str(response.data)
+            assert 'PII_UNKNOWN_PROVIDER' not in '\n'.join(logs.output)
+            assert all(
+                'PII_UNKNOWN_PROVIDER' not in ''.join(traceback.format_exception(*record.exc_info))
+                for record in logs.records
+            )
+
+    def test_G08_unknown_custom_provider_failure_cannot_escape_to_rq(self):
+        from access_control.identity import LocalIdentityProvider
+
+        class Custom(LocalIdentityProvider):
+            def resolve_background(self, principal):
+                raise RuntimeError('PII_RQ_PROVIDER_CANARY')
+
+        source, batch = self.prepared()
+        assert self.capture(batch).status_code == 202
+        package = AuditPackage.objects.get()
+        with patch.object(audit.approved, 'api_queue', return_value=MagicMock()):
+            self.real_enqueue(str(package.pk))
+        package.refresh_from_db()
+        with patch.object(audit, 'get_identity_provider', return_value=Custom()):
+            audit.generate(str(package.pk), str(package.token))
+        package.refresh_from_db()
+        assert package.state == 'failed_final' and package.error_code == 'AUDIT_GENERATION_FAILED'
+        assert not hasattr(package, 'artifact')
+
     def test_B08_missing_background_and_collection_contract_fail_closed(self):
         class Missing:
             pass

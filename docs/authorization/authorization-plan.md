@@ -1595,3 +1595,16 @@ deployment, Docker/#76, primary and other worktree mutations are not authorized.
 The new bilingual browser call has an independent300s/15s budget; the original
 25 calls, required name and max-parallel3 remain unchanged. Real Redis transport,
 remote warm/cold/partial runs, deployment and Host acceptance remain NOT_RUN.
+
+The built-in local shortcut uses exact provider type equality. A custom subclass
+can add grant/revocation semantics, so it must have and execute its background
+hook and cannot inherit local SQL collection support. Independent review found
+the analogous isinstance pattern in the older approved-export domain; that is
+a preexisting custom-provider architecture risk requiring its own bounded review,
+not evidence that this audit patch changed or validated the older domain policy.
+
+Audit error redaction activates a fresh fixed exception before the shared handler
+logs sys.exc_info(), preserving framework status and precommit rejection markers
+without original detail/context/traceback. Unknown custom background-hook errors
+are normalized only at that call boundary, leaving uncertain publish database
+exceptions and token-owned file/lease retention unchanged.

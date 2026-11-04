@@ -341,10 +341,14 @@ active限额429，queue/私有root/background-provider不可用503；gap是明�
 
 Local identity的history在SQL分页前检查活generation、principal/source、当前User/org/Manager、instance和完整auditpolicy，分页后仍作creator最终检查。旧签名游标不能含隐藏行的UUID或时间。非Local provider仅有resolve_background不足以证明collection完整范围，capabilities明确collection_supported=false，V1 UI流程不启用，collection直接503；其可信hook仍供已知对象和worker的逐对象gate使用。没有新增临时Host collection协议或静默空列表。
 
+这里的内置Local只指精确`LocalIdentityProvider`类型。自定义子类属于custom provider，不能按`isinstance`跳过其后台撤权hook；无hook失败封闭，有hook仍不支持V1 collection。独立审查发现旧#79也有类似继承判断，这是既有域的架构风险；本次根治新audit域，未更改旧发布权限契约，不把本地audit验收称为旧域custom-provider整改。
+
 所有计数、字节和SQL限制同时成立。1000根的紧凑真实输入已验收；2000修订等计数是硬上限，不能据此承诺任意该数量输入都满足512KiB snapshot union或其他更早的门禁。累计snapshot union按整个pass计算，不能按chunk重新获得预算；两pass元数据、scalar、ID、COUNT、锁查询均计入同一Budget。
 
 已断开的nullable FK不按冻结数字ID/UUID水合当前对象。根batch已断链而同ID再出现时拒绝新capture；可验证的历史subject/target仅作为retained记录并标live-origin gap。活followup target仍须全部九pins一致。相邻差异采用已知修订序列，缺输入与序号缺口显式报告，不借当前答案补历史。
 
 创建命令只有在确定处于提交前并回滚时才返回`X-Audit-Command-State: rejected`。已提交后的enqueue/响应异常保留UNKNOWN，显式重试只能恢复原body/key。固定错误码脱敏不改变这个提交阶段语义。
+
+异常脱敏同时覆盖响应与共享日志器的活动异常。audit API重建固定码/状态/context并抑制原异常链，避免仅替换参数仍让`sys.exc_info()`记录provider原detail；认证401、框架403/404和未知500语义保留。后台仅在custom hook调用处把未知普通异常归一为固定audit错误，避免原detail逃到RQ日志；不扩大publish事务的DatabaseError捕获，也不改变不确定发布时保留文件/lease的规则。
 
 新增review-audit独立closed call覆盖两语，300秒调用上限与15秒终止宽限；11 shard/26 calls中原25项语义摘要保持不变，max-parallel3、原required名及原二审预算不变。新call增加runner容量需求，远端warm/cold/partial和实际耗时尚未运行。本地浏览器使用有所有权证明的新建测试库与显式synthetic queue，只证明页面/API/冻结文件流程；不冒充真实Redis传输或Host业务接收验收。
