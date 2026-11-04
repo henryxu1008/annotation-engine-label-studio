@@ -795,3 +795,224 @@ class TestAuditDownloadExceptions(AuditFixtures, APITestCase):
         assert len(handles) == 1 and handles[0].closed
         package.refresh_from_db()
         assert package.state == 'quarantined'
+
+
+class AuditAdmissionFixtures(AuditFixtures):
+    def admission_actor(self):
+        from users.models import User
+
+        suffix = uuid4().hex
+        actor = User.objects.create_user(
+            email=f'admission-{suffix}@example.test', username=f'admission-{suffix}', active_organization=self.org
+        )
+        self.org.add_user(actor)
+        ProjectMember.objects.create(project=self.project, user=actor, role='manager')
+        return actor
+
+    def admission_context(self, actor=None):
+        from access_control.project_operations import local_principal
+
+        actor = actor or self.manager
+        return audit.scope(None, self.project.pk, resolved=(local_principal(actor), actor))
+
+    def admission_package(self, batch, actor=None):
+        ctx = self.admission_context(actor)
+        preview = audit.preview(None, ctx, {'review_batch_id': batch})
+        body = dict(
+            review_batch_id=batch,
+            expected_batch_binding_hash=preview['batch_binding_hash'],
+            expected_capture_preview_hash=preview['capture_preview_hash'],
+            profile=audit.PROFILE,
+        )
+        return audit.capture(None, ctx, body, str(uuid4()))
+
+    def admission_block(self, package, state):
+        from unittest.mock import MagicMock
+
+        from rest_framework.exceptions import PermissionDenied
+
+        with patch.object(audit.approved, 'api_queue', return_value=MagicMock()):
+            self.real_enqueue(str(package.pk))
+        package.refresh_from_db()
+        assert package.state == 'queued'
+        target, error = (audit, PermissionDenied('AUDIT_FORBIDDEN')) if state == 'blocked_auth' else (audit.c, None)
+        mocked = (
+            patch.object(target, 'creator', side_effect=error)
+            if error
+            else patch.object(target, 'formatter', return_value={'synthetic': 'temporary runtime drift'})
+        )
+        with mocked:
+            audit.generate(str(package.pk), str(package.token))
+        package.refresh_from_db()
+        assert package.state == state
+        return package
+
+    def admission_frozen(self, package):
+        return (
+            package.creator_id,
+            package.owner_hash,
+            package.captured_at,
+            package.input_sha256,
+            package.projection_sha256,
+            package.input_bundle,
+            package.projection,
+        )
+
+
+class TestAuditRetryAdmission(AuditAdmissionFixtures, APITestCase):
+    def setUp(self):
+        self.audit_setup()
+
+    def retry_request(self, package, key):
+        self.client.force_authenticate(self.manager)
+        return self.client.post(
+            self.audit_base + f'{package.pk}/retry/', {}, format='json', HTTP_IDEMPOTENCY_KEY=str(key)
+        )
+
+    def assert_capacity_denied(self, package, key):
+        from data_export.audit_models import AuditAccessEvent, AuditAttempt, AuditRetryReceipt
+
+        before = self.admission_frozen(package)
+        mutable = (
+            package.state,
+            package.error_code,
+            package.token,
+            package.attempt_number,
+            package.queued_at,
+            package.started_at,
+        )
+        attempts = AuditAttempt.objects.filter(package=package).count()
+        events = AuditAccessEvent.objects.filter(package=package, phase='retry', allowed=True).count()
+        with patch.object(audit, 'enqueue') as enqueue, self.captureOnCommitCallbacks(execute=True):
+            response = self.retry_request(package, key)
+        assert response.status_code == 429 and response.data['detail'] == 'AUDIT_ACTIVE_LIMIT'
+        package.refresh_from_db()
+        assert self.admission_frozen(package) == before
+        assert (
+            package.state,
+            package.error_code,
+            package.token,
+            package.attempt_number,
+            package.queued_at,
+            package.started_at,
+        ) == mutable
+        assert not AuditRetryReceipt.objects.filter(package=package, key=key).exists()
+        assert AuditAttempt.objects.filter(package=package).count() == attempts
+        assert AuditAccessEvent.objects.filter(package=package, phase='retry', allowed=True).count() == events
+        enqueue.assert_not_called()
+
+    def owner_full(self, state):
+        source, batch = self.prepared()
+        package = self.admission_block(self.admission_package(batch), state)
+        self.admission_package(batch)
+        self.assert_capacity_denied(package, uuid4())
+        assert AuditPackage.objects.filter(project=self.project, state__in=audit.ACTIVE).count() == 1
+
+    def project_full(self, state):
+        source, batch = self.prepared()
+        package = self.admission_block(self.admission_package(batch), state)
+        for _ in range(2):
+            self.admission_package(batch, self.admission_actor())
+        assert not AuditPackage.objects.filter(creator=package.creator, state__in=audit.ACTIVE).exists()
+        self.assert_capacity_denied(package, uuid4())
+
+    def test_blocked_auth_owner_limit(self):
+        self.owner_full('blocked_auth')
+
+    def test_blocked_runtime_owner_limit(self):
+        self.owner_full('blocked_runtime')
+
+    def test_blocked_auth_project_limit_with_owner_capacity(self):
+        self.project_full('blocked_auth')
+
+    def test_blocked_runtime_project_limit_with_owner_capacity(self):
+        self.project_full('blocked_runtime')
+
+    def test_rejected_key_can_activate_after_capacity_frees_without_recapture(self):
+        from data_export.audit_models import AuditRetryReceipt
+
+        source, batch = self.prepared()
+        original = self.admission_block(self.admission_package(batch), 'blocked_runtime')
+        frozen = self.admission_frozen(original)
+        other = self.admission_package(batch)
+        key = uuid4()
+        self.assert_capacity_denied(original, key)
+        self.admission_block(other, 'blocked_runtime')
+        with patch.object(audit.audit_source, 'load', side_effect=AssertionError('no recapture')):
+            with patch.object(audit, 'enqueue') as enqueue, self.captureOnCommitCallbacks(execute=True):
+                response = self.retry_request(original, key)
+        assert response.status_code == 200
+        enqueue.assert_called_once_with(str(original.pk))
+        original.refresh_from_db()
+        assert original.state == 'dispatch_pending' and self.admission_frozen(original) == frozen
+        assert AuditRetryReceipt.objects.filter(package=original, key=key).count() == 1
+
+    def test_original_retry_key_recovers_at_capacity_without_reactivation(self):
+        source, batch = self.prepared()
+        original = self.admission_block(self.admission_package(batch), 'blocked_runtime')
+        key = uuid4()
+        receipt = self.retry_request(original, key)
+        assert receipt.status_code == 200
+        self.admission_block(original, 'blocked_runtime')
+        self.admission_package(batch)
+        with patch.object(audit, 'queue_available', side_effect=AssertionError('no queue read')), patch.object(
+            audit.c, 'formatter', side_effect=AssertionError('no formatter read')
+        ), patch.object(audit.audit_source, 'load', side_effect=AssertionError('no source read')), patch.object(
+            audit, 'enqueue'
+        ) as enqueue:
+            recovered = self.retry_request(original, key)
+        assert recovered.status_code == 200 and recovered.data == receipt.data
+        original.refresh_from_db()
+        assert original.state == 'blocked_runtime'
+        enqueue.assert_not_called()
+
+    def test_active_reservations_retry_at_full_project_and_owner_limits(self):
+        from datetime import timedelta
+
+        from data_export import audit_files
+        from django.utils import timezone
+
+        for state in ('dispatch_pending', 'failed_retryable', 'queued', 'running'):
+            with transaction.atomic():
+                source, batch = self.prepared()
+                package = self.admission_package(batch)
+                if state != 'dispatch_pending':
+                    from unittest.mock import MagicMock
+
+                    with patch.object(audit.approved, 'api_queue', return_value=MagicMock()):
+                        self.real_enqueue(str(package.pk))
+                    package.refresh_from_db()
+                    if state == 'failed_retryable':
+                        with patch.object(audit_files, 'ScratchLease', side_effect=OSError('synthetic transient I/O')):
+                            audit.generate(str(package.pk), str(package.token))
+                    elif state == 'running':
+                        with patch.object(
+                            audit_files, 'ScratchLease', side_effect=SystemExit('synthetic worker stop')
+                        ):
+                            with self.assertRaises(SystemExit):
+                                audit.generate(str(package.pk), str(package.token))
+                    package.refresh_from_db()
+                    assert package.state == state
+                self.admission_package(batch, self.admission_actor())
+                frozen = self.admission_frozen(package)
+                with patch.object(audit.timezone, 'now', return_value=timezone.now() + timedelta(minutes=32)):
+                    result = self.retry_request(package, uuid4())
+                assert result.status_code == 200 and result.data['state'] == 'dispatch_pending', state
+                package.refresh_from_db()
+                assert self.admission_frozen(package) == frozen
+                assert AuditPackage.objects.filter(project=self.project, state__in=audit.ACTIVE).count() == 2
+                transaction.set_rollback(True)
+
+    def test_unexpired_queued_noop_at_capacity_does_not_enqueue(self):
+        from unittest.mock import MagicMock
+
+        source, batch = self.prepared()
+        package = self.admission_package(batch)
+        with patch.object(audit.approved, 'api_queue', return_value=MagicMock()):
+            self.real_enqueue(str(package.pk))
+        package.refresh_from_db()
+        self.admission_package(batch, self.admission_actor())
+        with patch.object(audit, 'enqueue') as enqueue, self.captureOnCommitCallbacks(execute=True):
+            response = self.retry_request(package, uuid4())
+        assert response.status_code == 200 and response.data['state'] == 'queued'
+        enqueue.assert_not_called()

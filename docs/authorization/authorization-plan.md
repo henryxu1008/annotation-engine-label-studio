@@ -1619,3 +1619,12 @@ close; invalid ranges and nonstreaming responses release it before returning.
 Regression coverage includes GET/HEAD UUID negatives, final403 across content
 routes, caller exception identity and redaction, real missing/hash/ZIP failures,
 and successful, early-close and failure descriptor lifetimes.
+
+New audit captures and blocked-package retries share ACTIVE reservation admission
+under the existing Project fence. A blocked_auth/blocked_runtime package must pass
+both project and creator-generation limits before changing state, recording a new
+retry receipt or scheduling enqueue. Already-ACTIVE recovery retains its existing
+reservation; original capture/retry keys return their frozen receipt before new
+admission. Capacity refusal preserves token/attempt/T and frozen input, permits
+existing denial audit, and uses the existing AUDIT_ACTIVE_LIMIT429 UI contract.
+Real PostgreSQL contenders and pg_blocking_pids prove last-slot serialization.

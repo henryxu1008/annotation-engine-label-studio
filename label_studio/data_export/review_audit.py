@@ -434,16 +434,22 @@ def _capture(request, ctx, body, key, formatter):
         raise
 
 
+def _check_active_limits(project, creator_id):
+    """Check a new ACTIVE reservation while the caller holds the Project fence."""
+    active = AuditPackage.objects.filter(project=project, state__in=ACTIVE)
+    limits = c.limits()
+    if (
+        active.count() >= limits['active_project']
+        or creator_id is not None
+        and active.filter(creator_id=creator_id).count() >= limits['active_owner']
+    ):
+        c.fail('ACTIVE_LIMIT', 429)
+
+
 def _capture_new(request, ctx, body, key, formatter):
     who = binding(ctx)
     request_hash = c.digest(c.exact(body))
-    active = AuditPackage.objects.filter(project=ctx[0], state__in=ACTIVE)
-    if (
-        active.count() >= c.limits()['active_project']
-        or who
-        and active.filter(creator=who).count() >= c.limits()['active_owner']
-    ):
-        c.fail('ACTIVE_LIMIT', 429)
+    _check_active_limits(ctx[0], who.pk if who else None)
     g, root, value = preview_value(ctx, body['review_batch_id'], lock=True)
     if any(body['expected_' + k] != value[k] for k in ('batch_binding_hash', 'capture_preview_hash')):
         c.fail('PREVIEW_CHANGED')
@@ -636,6 +642,8 @@ def _retry(request, ctx, package, key, health, formatter):
         c.fail('RUNTIME_CHANGED')
     old_token = package.token
     if package.state in ('dispatch_pending', 'failed_retryable', 'blocked_auth', 'blocked_runtime') or expired:
+        if package.state not in ACTIVE:
+            _check_active_limits(ctx[0], package.creator_id)
         if not health:
             c.fail('QUEUE_UNAVAILABLE', 503)
         package.state, package.error_code = 'dispatch_pending', ''

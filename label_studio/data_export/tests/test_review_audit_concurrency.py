@@ -12,11 +12,12 @@ from data_export import audit_contract as c
 from data_export import review_audit as audit
 from data_export.audit_models import AuditActorBinding, AuditPackage
 from django.db import close_old_connections, connection, connections
+from rest_framework.exceptions import APIException
 from rest_framework.test import APITransactionTestCase
 from tasks.models import Task
 from users.models import User
 
-from .test_review_audit import AuditFixtures
+from .test_review_audit import AuditAdmissionFixtures, AuditFixtures
 
 
 @skipUnless(connection.vendor == 'postgresql', 'Real PostgreSQL lock/concurrency acceptance')
@@ -277,3 +278,111 @@ class TestAuditConcurrency(AuditFixtures, APITransactionTestCase):
         package.refresh_from_db()
         assert package.state == 'ready' and str(package.token) == third
         assert len(list(audit_files.directory(package).parent.glob('.scratch-*'))) == 1
+
+
+@skipUnless(connection.vendor == 'postgresql', 'Real PostgreSQL admission concurrency')
+class TestAuditAdmissionConcurrency(AuditAdmissionFixtures, APITransactionTestCase):
+    threaded = TestAuditConcurrency.threaded
+
+    def setUp(self):
+        self.__class__.setUpTestData()
+        self.audit_setup()
+
+    def race_admissions(self, commands, *, prove_project_fence=False):
+        barrier = threading.Barrier(2)
+        pids = []
+        counted, release = threading.Event(), threading.Event()
+        holder = []
+        original = audit._check_active_limits
+
+        def counted_under_fence(*args, **kwargs):
+            original(*args, **kwargs)
+            if prove_project_fence and not counted.is_set():
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_backend_pid()')
+                    holder.append(cursor.fetchone()[0])
+                counted.set()
+                assert release.wait(15)
+
+        def run(command):
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_backend_pid()')
+                pids.append(cursor.fetchone()[0])
+            barrier.wait(timeout=15)
+            try:
+                command()
+                return 'accepted'
+            except APIException as error:
+                assert error.status_code == 429 and str(error.detail) == 'AUDIT_ACTIVE_LIMIT'
+                return 'limited'
+
+        with patch.object(audit, '_check_active_limits', side_effect=counted_under_fence), patch.object(
+            audit, 'enqueue'
+        ) as enqueue, ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(self.threaded, lambda command=command: run(command)) for command in commands]
+            if prove_project_fence:
+                try:
+                    assert counted.wait(15)
+                    blocked = False
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        with connection.cursor() as cursor:
+                            cursor.execute(
+                                'SELECT pid, pg_blocking_pids(pid) FROM pg_stat_activity WHERE pid=ANY(%s)', [pids]
+                            )
+                            blocked = any(
+                                pid != holder[0] and holder[0] in blockers for pid, blockers in cursor.fetchall()
+                            )
+                        if blocked:
+                            break
+                        time.sleep(0.02)
+                    assert blocked, 'The other owner must wait for the same Project admission fence'
+                finally:
+                    release.set()
+            results = [future.result(timeout=30) for future in futures]
+        assert len(set(pids)) == 2
+        assert sorted(results) == ['accepted', 'limited']
+        enqueue.assert_called_once()
+
+    def retry_command(self, package, actor):
+        def retry():
+            fresh_actor = User.objects.get(pk=actor.pk)
+            ctx = self.admission_context(fresh_actor)
+            return audit.retry(None, ctx, AuditPackage.objects.get(pk=package.pk), str(uuid4()))
+
+        return retry
+
+    def test_two_blocked_retries_compete_for_last_project_slot(self):
+        from data_export.audit_models import AuditRetryReceipt
+
+        source, batch = self.prepared()
+        second_actor = self.admission_actor()
+        first = self.admission_block(self.admission_package(batch), 'blocked_auth')
+        second = self.admission_block(self.admission_package(batch, second_actor), 'blocked_runtime')
+        self.admission_package(batch, self.admission_actor())
+        self.race_admissions(
+            [self.retry_command(first, self.manager), self.retry_command(second, second_actor)],
+            prove_project_fence=True,
+        )
+        assert AuditPackage.objects.filter(project=self.project, state__in=audit.ACTIVE).count() == 2
+        assert AuditRetryReceipt.objects.filter(package__in=[first, second]).count() == 1
+
+    def test_same_owner_blocked_retries_share_one_reservation(self):
+        from data_export.audit_models import AuditRetryReceipt
+
+        source, batch = self.prepared()
+        first = self.admission_block(self.admission_package(batch), 'blocked_auth')
+        second = self.admission_block(self.admission_package(batch), 'blocked_runtime')
+        self.race_admissions([self.retry_command(first, self.manager), self.retry_command(second, self.manager)])
+        assert AuditPackage.objects.filter(project=self.project, state__in=audit.ACTIVE).count() == 1
+        assert AuditRetryReceipt.objects.filter(package__in=[first, second]).count() == 1
+
+    def test_capture_and_retry_compete_for_same_owner_slot(self):
+        source, batch = self.prepared()
+        original = self.admission_block(self.admission_package(batch), 'blocked_auth')
+
+        def capture():
+            return self.admission_package(batch, User.objects.get(pk=self.manager.pk))
+
+        self.race_admissions([capture, self.retry_command(original, self.manager)])
+        assert AuditPackage.objects.filter(project=self.project, state__in=audit.ACTIVE).count() == 1
