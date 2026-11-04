@@ -118,3 +118,5 @@ web/apps/labelstudio-e2e/.field-review-priority-e2e.json
 web/apps/labelstudio-e2e/.field-review-handoff-e2e.json
 web/apps/labelstudio-e2e/.review-confidence-e2e.json
 web/apps/labelstudio-e2e/.second-review-e2e.json
+web/apps/labelstudio-e2e/.review-audit-e2e.json
+web/apps/labelstudio-e2e/.review-audit-e2e-supervision-private.json

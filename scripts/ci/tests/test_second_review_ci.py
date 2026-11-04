@@ -54,12 +54,13 @@ class SecondReviewInventoryTests(unittest.TestCase):
     def test_original_24_call_inventory_is_unchanged(self):
         value = inventory()
         value['shards'].pop('second-review')
+        value['shards'].pop('review-audit')
         # Canonical inventory of the reviewed implementation head bd2423d4f.
         self.assertEqual(digest(value), '2781297b92ff71eb2f7ee2f26e00abab68ed9eda9658d4c2625cefd6d6dc8020')
 
     def test_new_bilingual_call_is_required_and_bounded(self):
         groups = inventory()['shards']
-        self.assertEqual((len(groups), sum(map(len, groups.values()))), (10, 25))
+        self.assertEqual((len(groups), sum(map(len, groups.values()))), (11, 26))
         call = calls('second-review')[0]
         self.assertEqual(len(calls('second-review')), 1)
         self.assertEqual(call['id'], 'second-review')
@@ -76,7 +77,7 @@ class SecondReviewInventoryTests(unittest.TestCase):
         )
         browser = flow['jobs']['browser']
         self.assertIn('second-review', browser['strategy']['matrix']['shard'])
-        expected = "${{ matrix.shard == 'second-review' && 'ui_ci_second_review_browser' || 'ui_ci_browser' }}"
+        expected = "${{ matrix.shard == 'review-audit' && 'ui_ci_second_review_audit_browser' || matrix.shard == 'second-review' && 'ui_ci_second_review_browser' || 'ui_ci_browser' }}"
         self.assertEqual(browser['env']['POSTGRE_NAME'], expected)
         self.assertEqual(browser['services']['browser-postgres']['env']['POSTGRES_DB'], expected)
         self.assertEqual(browser['env']['POSTGRE_HOST'], '127.0.0.1')
@@ -253,7 +254,7 @@ class SecondReviewAggregateTests(unittest.TestCase):
             ExecutionViewTests.add_copied_views(sample)
             result = aggregate(sample.context, root / 'out', sample)
             mapping = {row['logical']: row for row in result['records']}
-            self.assertEqual((len(mapping), result['browser_invocations']), (11, 25))
+            self.assertEqual((len(mapping), result['browser_invocations']), (12, 26))
             self.assertEqual((mapping['prepare']['attempt'], mapping['prepare']['view_attempt']), (1, 2))
             self.assertEqual((mapping['second-review']['attempt'], mapping['second-review']['view_attempt']), (2, 2))
 

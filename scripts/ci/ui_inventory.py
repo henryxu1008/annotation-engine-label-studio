@@ -22,6 +22,7 @@ SHARDS = {
     'packages-import': ['fixed-task-packages', 'import-initialization'],
     'confidence': ['review-confidence'],
     'second-review': ['second-review'],
+    'review-audit': ['review-audit'],
 }
 JOB_NAMES = {'prepare': 'Prepare enterprise UI', **{s: 'Enterprise UI / ' + s for s in SHARDS}}
 JEST_UI_PATHS = [
@@ -61,7 +62,9 @@ def calls(shard):
             {
                 'id': name + ('-' + env['fullFlowLocale'] if 'fullFlowLocale' in env else ''),
                 'spec': SPEC_DIR + name + '.cy.ts',
-                'config_file': 'cypress.second-review.config.ts'
+                'config_file': 'cypress.review-audit.config.ts'
+                if shard == 'review-audit'
+                else 'cypress.second-review.config.ts'
                 if shard == 'second-review'
                 else 'cypress.review-confidence.config.ts'
                 if shard == 'confidence'
@@ -70,8 +73,8 @@ def calls(shard):
                 'browser': 'electron',
                 'video': True,
                 'reset': shard.startswith('locale-') or shard in ('full-en', 'full-zh', 'packages-import'),
-                'timeout_seconds': 300 if name in ('dm-entity-boundary', 'second-review') else None,
-                'kill_grace_seconds': 15 if name in ('dm-entity-boundary', 'second-review') else None,
+                'timeout_seconds': 300 if name in ('dm-entity-boundary', 'second-review', 'review-audit') else None,
+                'kill_grace_seconds': 15 if name in ('dm-entity-boundary', 'second-review', 'review-audit') else None,
                 'languages': [env['fullFlowLocale']]
                 if 'fullFlowLocale' in env
                 else (['en-US'] if shard == 'enterprise-ui' else ['en-US', 'zh-CN']),
@@ -90,7 +93,7 @@ def inventory():
         'prepare': [{'id': k, 'command': v, 'kind': t} for k, v, t in PREPARE],
     }
     flat = [c['id'] for group in result['shards'].values() for c in group]
-    if len(result['shards']) != 10 or len(flat) != 25 or len(set(flat)) != 25:
+    if len(result['shards']) != 11 or len(flat) != 26 or len(set(flat)) != 26:
         raise ValueError('Incomplete UI inventory')
     return result
 

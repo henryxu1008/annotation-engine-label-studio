@@ -237,12 +237,12 @@ class InventoryTests(unittest.TestCase):
             'import-initialization',
         }
         flat = [c for g in groups.values() for c in g]
-        self.assertEqual(len(groups), 10)
-        self.assertEqual(len(flat), 25)
+        self.assertEqual(len(groups), 11)
+        self.assertEqual(len(flat), 26)
         self.assertEqual(
-            {Path(c['spec']).name.removesuffix('.cy.ts') for c in flat}, old | {'review-confidence', 'second-review'}
+            {Path(c['spec']).name.removesuffix('.cy.ts') for c in flat}, old | {'review-confidence', 'second-review', 'review-audit'}
         )
-        self.assertEqual(len({c['id'] for c in flat}), 25)
+        self.assertEqual(len({c['id'] for c in flat}), 26)
 
     def test_parameters_languages_resets_and_limits_are_not_weakened(self):
         self.assertEqual(calls('full-en')[0]['env'], {'fullFlowLocale': 'en-US'})
@@ -538,8 +538,8 @@ class AggregateTests(unittest.TestCase):
             f = Fixture(p)
             value = aggregate(f.context, p / 'aggregate', f)
             self.assertEqual(value['status'], 'success')
-            self.assertEqual(len(value['records']), 11)
-            self.assertEqual(value['browser_invocations'], 25)
+            self.assertEqual(len(value['records']), 12)
+            self.assertEqual(value['browser_invocations'], 26)
             self.assertEqual(f.jobs_read, 2)
 
     def test_partial_rerun_can_reuse_proven_old_success_without_relabeling(self):

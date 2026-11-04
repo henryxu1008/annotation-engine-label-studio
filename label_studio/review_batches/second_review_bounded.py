@@ -24,7 +24,7 @@ class Budget:
         self.canonical_limit, self.stored_limit = canonical, stored
         self.canonical = self.stored = 0
 
-    def rows(self, query, limits, *, union=None):
+    def rows(self, query, limits, *, union=None, observe=None):
         """Preflight AND gate each hydrating SELECT. No deferred field reads."""
         limits = dict(limits)
         payload_fields = tuple(limits)
@@ -83,22 +83,44 @@ class Budget:
         remaining = self.stored_limit - self.stored
         row_stored = union[1] if union else remaining
         sizes = list(query.values_list(*(f'_sr_size_{f}' for f in limits)))
+        if observe:
+            for row in sizes:
+                observe(row)
         if (
             sum(sum(s) for s in sizes) > remaining
             or any(sum(s[: len(payload_fields)]) > row_stored for s in sizes)
             or any(type(n) is not int or not 0 <= n <= limits[f][1] for s in sizes for f, n in zip(limits, s))
         ):
             c.fail('TOO_LARGE', 422)
-        gate = Q(_sr_union__lte=remaining, _sr_payload__lte=row_stored)
         if connection.vendor == 'sqlite' and integer_fields:
+            for flags in query.values_list(*(f'_sr_integer_{name}' for name in integer_fields)):
+                if observe:
+                    observe(flags)
+                if any(n != 1 for n in flags):
+                    c.fail()
+        metadata = []
+        if observe:
+            # Reserve the exact metadata SELECT vector before its hydrating
+            # CASE query. A changed vector is rejected below, never free bytes.
+            total = sum(sum(row) for row in sizes)
+            for values in sizes:
+                vector = [
+                    *values,
+                    *([1] * len(integer_fields) if connection.vendor == 'sqlite' else []),
+                    sum(values),
+                    sum(values[: len(payload_fields)]),
+                    total,
+                ]
+                metadata.append(vector)
+                observe(vector)
+            remaining = self.stored_limit - self.stored
+            row_stored = union[1] if union else remaining
+            if total > remaining:
+                c.fail('TOO_LARGE', 422)
+        gate = Q(_sr_union__lte=remaining, _sr_payload__lte=row_stored)
+        if connection.vendor == 'sqlite':
             for name in integer_fields:
                 gate &= Q(**{f'_sr_integer_{name}': 1})
-            if any(
-                n != 1
-                for flags in query.values_list(*(f'_sr_integer_{name}' for name in integer_fields))
-                for n in flags
-            ):
-                c.fail()
         for f in limits:
             gate &= Q(**{f'_sr_size_{f}__lte': limits[f][1]})
         for f in limits:
@@ -116,6 +138,16 @@ class Budget:
         query = query.only('pk')
         result = []
         for row in typed_rows(query):
+            if observe:
+                actual = [
+                    *(getattr(row, f'_sr_size_{f}') for f in limits),
+                    *(getattr(row, f'_sr_integer_{name}') for name in integer_fields if connection.vendor == 'sqlite'),
+                    row._sr_row,
+                    row._sr_payload,
+                    row._sr_union,
+                ]
+                if len(result) >= len(metadata) or actual != metadata[len(result)]:
+                    c.fail()
             if connection.vendor == 'sqlite' and any(getattr(row, f'_sr_integer_{f}') != 1 for f in integer_fields):
                 c.fail()
             if row._sr_union > remaining or row._sr_payload > row_stored:
@@ -145,4 +177,6 @@ class Budget:
             if self.canonical > self.canonical_limit or self.stored > self.stored_limit:
                 c.fail('TOO_LARGE', 422)
             result.append(row)
+        if observe and len(result) != len(metadata):
+            c.fail()
         return result

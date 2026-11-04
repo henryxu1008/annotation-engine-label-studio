@@ -76,7 +76,21 @@ class OrganizationMember(OrganizationMemberMixin, models.Model):
 OrganizationMixin = load_func(settings.ORGANIZATION_MIXIN)
 
 
+class OrganizationQuerySet(models.QuerySet):
+    def delete(self):
+        from data_export.audit_deletion import coordinated
+        with coordinated(self, 'organizations') as fixed:
+            return super(OrganizationQuerySet, fixed).delete()
+
+
 class Organization(OrganizationMixin, models.Model):
+    objects = OrganizationQuerySet.as_manager()
+
+    def delete(self, *args, **kwargs):
+        from data_export.audit_deletion import coordinated
+        with coordinated(Organization.objects.using(kwargs.get('using') or self._state.db).filter(pk=self.pk), 'organizations'):
+            return super().delete(*args, **kwargs)
+
     """ """
 
     title = models.CharField(_('organization title'), max_length=1000, null=False)

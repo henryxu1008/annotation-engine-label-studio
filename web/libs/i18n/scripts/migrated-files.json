@@ -116,5 +116,6 @@
   "apps/labelstudio/src/pages/DataManager/NerArbitrations.jsx",
   "apps/labelstudio/src/pages/DataManager/FieldBatches.jsx",
   "apps/labelstudio/src/pages/DataManager/FieldArbitrations.jsx",
-  "apps/labelstudio/src/pages/DataManager/ConcernFollowupWorkspace.jsx"
+  "apps/labelstudio/src/pages/DataManager/ConcernFollowupWorkspace.jsx",
+  "apps/labelstudio/src/pages/DataManager/ReviewAuditDownload.jsx"
 ]

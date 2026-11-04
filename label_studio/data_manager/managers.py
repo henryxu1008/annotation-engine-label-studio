@@ -501,6 +501,22 @@ def apply_filters(queryset, filters, project, request):
 class TaskQuerySet(FSMStateQuerySetMixin, models.QuerySet):
     """QuerySet for Task model with Data Manager filters and ordering support."""
 
+    def delete(self):
+        from data_export.audit_deletion import coordinated
+        with coordinated(self, 'tasks') as fixed:
+            return super(TaskQuerySet, fixed).delete()
+
+    def update(self, **kwargs):
+        if not {'project', 'project_id'} & kwargs.keys():
+            return super().update(**kwargs)
+        from data_export.audit_deletion import coordinated
+        value=kwargs.get('project_id',kwargs.get('project'))
+        target=getattr(value,'pk',value)
+        if target is not None and type(target) is not int:
+            raise ValueError('A concrete target Project is required for a scoped update')
+        with coordinated(self, 'tasks',extra_projects=() if target is None else (target,)) as fixed:
+            return super(TaskQuerySet, fixed).update(**kwargs)
+
     def prepared(self, prepare_params=None):
         """Apply filters, ordering and selected items to queryset
 
