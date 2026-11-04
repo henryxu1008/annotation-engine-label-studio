@@ -203,13 +203,42 @@ def protected_worktrees(workspace):
 
 
 def source_digest(workspace):
-    w = Path(workspace).resolve()
-    paths = git(w, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').decode('utf-8').split('\0')
+    w = safe_path(workspace, directory=True)
+    index = git(w, 'ls-files', '--stage', '-z').decode('utf-8').split('\0')
+    paths = {}
+    for entry in filter(None, index):
+        header, relative = entry.split('\t', 1)
+        mode, _, stage = header.split(' ')
+        require(stage == '0' and mode in ('100644', '100755', '120000') and relative not in paths,
+                'UNMERGED_OR_UNSUPPORTED_SOURCE')
+        paths[relative] = mode
+    for relative in filter(None, git(w, 'ls-files', '--others', '--exclude-standard', '-z').decode('utf-8').split('\0')):
+        require(relative not in paths, 'DUPLICATE_SOURCE')
+        paths[relative] = 'untracked'
+    try:
+        placeholders = git(w, 'config', '--bool', '--get', 'core.symlinks').decode().strip() == 'false'
+    except subprocess.CalledProcessError as exc:
+        require(exc.returncode == 1, 'SOURCE_CONFIGURATION_UNAVAILABLE')
+        placeholders = False
     rows = []
-    for relative in sorted(set(paths) - {''}):
+    for relative, mode in sorted(paths.items()):
+        require(not Path(relative).is_absolute() and '..' not in Path(relative).parts, 'INVALID_SOURCE_PATH')
         p = w / relative
-        require(p.is_file() and not is_link(p), 'SOURCE_NOT_REGULAR')
-        rows.append([relative, sha(p.read_bytes())])
+        for parent in p.parents:
+            require(not is_link(parent), 'SOURCE_ANCESTOR_LINK')
+            if parent == w:
+                break
+        info = p.lstat()
+        if mode == '120000':
+            if stat.S_ISLNK(info.st_mode):
+                content = os.fsencode(os.readlink(p))  # Link text only, including directory/dangling links.
+            else:
+                require(placeholders and stat.S_ISREG(info.st_mode) and not is_link(p), 'SOURCE_LINK_TYPE_CHANGED')
+                content = read_file(p, 16 * 1024)  # Git core.symlinks=false placeholder, never a target read.
+            rows.append([relative, mode, sha(content)])
+        else:
+            require(stat.S_ISREG(info.st_mode) and not is_link(p), 'SOURCE_NOT_REGULAR')
+            rows.append([relative, mode, sha(p.read_bytes())])
     return hashed({'head': git(w, 'rev-parse', 'HEAD').decode().strip(), 'files': rows})
 
 
@@ -244,6 +273,29 @@ def policy_matches(project, scope, *, test_environment):
             and scope.get('creator_email') == project.created_by.email
             and project.created_by.email == 'manager@' + DOMAIN
             and project.title in ('Synthetic supervision en-US', 'Synthetic supervision zh-CN'))
+
+
+def register_seed_scope(run, project, expected_xml, *, test_environment):
+    """Called only by the guarded command immediately after a new persisted project."""
+    exact(run, {'run_id', 'phase', 'scopes'})
+    require(uuid(run['run_id']) and run['phase'] == 'seed' and test_environment is True
+            and isinstance(run['scopes'], list) and len(run['scopes']) < 2, 'SEED_PHASE_REQUIRED')
+    require(getattr(getattr(project, '_state', None), 'adding', True) is False
+            and all(integer(v) for v in (project.pk, project.organization_id, project.created_by_id))
+            and project.label_config == expected_xml, 'NEW_STATIC_PROJECT_REQUIRED')
+    scope = {'project_id': project.pk, 'organization_id': project.organization_id, 'creator_id': project.created_by_id,
+             'creator_email': project.created_by.email, 'title': project.title}
+    require(policy_matches(project, scope, test_environment=test_environment), 'SEED_SCOPE_INVALID')
+    for old in run['scopes']:
+        require(old['project_id'] != scope['project_id'] and old['title'] != scope['title']
+                and all(old[k] == scope[k] for k in ('organization_id', 'creator_id', 'creator_email')),
+                'SEED_SCOPE_REUSED_OR_CHANGED')
+    run['scopes'].append(scope)
+
+
+def seed_submission_allowed(project, run, *, test_environment):
+    return (isinstance(run, dict) and run.get('phase') == 'seed' and uuid(run.get('run_id'))
+            and any(policy_matches(project, scope, test_environment=test_environment) for scope in run.get('scopes', [])))
 
 
 def fixture_settings(value, m, *, building=False):
@@ -334,6 +386,6 @@ def fixture_settings(value, m, *, building=False):
         'ANNOTATION_CLASSIFICATION_DISAGREEMENT_MODES': modes,
         'ANNOTATION_CLASSIFICATION_ARBITRATION_MODES': modes,
         'ANNOTATION_FIXED_PACKAGES_ENABLED': True,
-        'LS84_ACCEPTANCE_RUN': {'run_id': m['run_id'], 'scopes': scopes},
+        'LS84_ACCEPTANCE_RUN': {'run_id': m['run_id'], 'phase': 'ready', 'scopes': scopes},
     })
     return base

@@ -8,10 +8,19 @@ from uuid import uuid4
 import ls84_contract as c
 
 
+def supervision_fixture_class(base_command, register):
+    class ScopedSupervisionFixture(base_command):
+        def on_project_ready(self, project):
+            register(project)
+
+    return ScopedSupervisionFixture
+
+
 def seed(m):
     from classification_disagreements import batches
     from classification_disagreements.models import ClassificationBatch
-    from core.management.commands.seed_second_review_e2e import XML
+    from core.management.commands.seed_second_review_e2e import XML, Command
+    from django.conf import settings
     from django.core.management import call_command
     from django.db import transaction
     from django.test import override_settings
@@ -30,7 +39,11 @@ def seed(m):
     c.require(not source.exists() and not target.exists(), 'FRESH_FIXTURE_OUTPUT_REQUIRED')
     # The existing seeder refuses nonempty business scope and validates the native cluster proof.
     with transaction.atomic():
-        call_command('seed_second_review_e2e', output=str(source))
+        def register(project):
+            c.register_seed_scope(settings.LS84_ACCEPTANCE_RUN, project, XML, test_environment=settings.TEST_ENVIRONMENT)
+
+        command = supervision_fixture_class(Command, register)()
+        call_command(command, output=str(source))
         supervision = c.decode(c.read_file(source))
         manager = User.objects.get(pk=supervision['users']['manager']['id'])
         org = manager.active_organization

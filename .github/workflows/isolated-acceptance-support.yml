@@ -1,0 +1,27 @@
+name: Isolated Acceptance Support Contracts
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-acceptance-support-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-support:
+    name: Offline acceptance support contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Discover support regressions with product imports and network blocked
+        run: python -B -S scripts/acceptance/check_support.py

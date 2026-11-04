@@ -129,11 +129,12 @@ def configured(m, value, *, secret, password):
         settings = c.fixture_settings(value, m) if value else {}
         settings.update({
             'ANNOTATION_IDENTITY_PROVIDER': c.IDENTITY, 'ANNOTATION_PROJECT_OPERATION_PROVIDER': c.PROVIDER,
-            'LS84_ACCEPTANCE_RUN': {'run_id': m['run_id'], 'scopes': []} if value is None else settings['LS84_ACCEPTANCE_RUN'],
+            'LS84_ACCEPTANCE_RUN': {'run_id': m['run_id'], 'phase': 'seed', 'scopes': []}
+            if value is None else settings['LS84_ACCEPTANCE_RUN'],
             'APPROVED_EXPORT_QUEUE': 'approved_exports', 'APPROVED_EXPORT_ROOT': str(Path(m['run_root']) / 'exports'),
             'RQ_QUEUES': {'approved_exports': {'URL': f'redis://127.0.0.1:{m["redis"]["port"]}/0',
                                                'DEFAULT_TIMEOUT': 1800}},
-            'STATIC_ROOT': str(Path(m['run_root']) / 'static'), 'ALLOWED_HOSTS': ['127.0.0.1', 'localhost'],
+            'STATIC_ROOT': str(Path(m['run_root']) / 'static'), 'ALLOWED_HOSTS': ['127.0.0.1', 'localhost', 'testserver'],
             'WSGI_APPLICATION': 'ls84_web.application',
             'SENTRY_DSN': None, 'FRONTEND_SENTRY_DSN': None,
         })

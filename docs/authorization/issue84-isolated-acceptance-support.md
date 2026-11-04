@@ -112,3 +112,26 @@ seed-intent、cycle-intent、每次 capture exact body/key 在相关写入前 ex
 
 实际权限 provider、真实 confidence producer/校准、Host 自定义 identity 完整审计兼容仍是原设计的独立前置/延期边界。
 Fork-only、静态文本分类、supervisory_only、固定脱敏；#81/#84 保持 OPEN。Docker/#76、主仓、其他 worktree 和既有证据不动。
+
+## PR #136 兼容性修订（本地，尚未授权推送）
+
+远端对原提交的复审指出三个支撑缺陷：POSIX tracked symlink 被来源摘要误拒绝、seed 的 scope 登记晚于首次提交、
+内部 APIClient 的 testserver 主机被工具桥接拒绝。旧提交的原有 CI 不发现本次支撑测试，不能证明这三个路径通过。
+
+来源摘要现在按 Git index mode 处理：120000 仅哈希链接文本，不跟随文件/目录/悬空链接目标；
+明确 core.symlinks=false 的检出占位文件按相同 link-text 语义哈希。普通 tracked/untracked 文件及其父路径的
+symlink/junction/reparse 替换仍拒绝；冲突 index stage、gitlink 等不支持类型明确拒绝，不把平台兼容变成越界读取。
+
+既有受保护 supervision 管理命令新增默认无操作的 on_project_ready hook，仅在本次新建 Project 和成员后、
+任何 create_submission 前调用。工具专用命令子类登记真实新项目 exact scope；seed 阶段 provider 仅授予该 scope 的 SUBMIT，
+未登记/跨 scope/未知阶段仍为空操作集。额外 pending 数据复用同一已登记 scope，完整授权只在组合 fixture 的 ready 阶段生成。
+没有全局 post_save、Legacy fallback 或通用 TEST_ENV 授权。工具 ALLOWED_HOSTS 仅追加内部 testserver，产品默认配置不变。
+
+新增独立 workflow `Isolated Acceptance Support Contracts`，单个 Linux Python 3.11 作业 **5 分钟**上限，
+只运行 `python -B -S scripts/acceptance/check_support.py`。它自动发现全部支撑单元测试，阻断产品/数据库/队列导入及 socket 网络，
+再执行只读 plan，不安装第三方依赖、不启动任何服务、不运行 migration/seed/web/worker/audit-cycle。
+原有19个 workflow、UI 11 shards/26 calls 和授权 producer/gate 预算保持；若此修订获准推送，将多一个纯支撑 workflow/作业，
+整轮理论上限增加5 runner分钟，不能把新增作业算作原有清单或声称实际费用已知。
+
+本地 Windows 的原生 POSIX 文件/目录/悬空链接测试明确 SKIPPED，待新 SHA 获准推送后由 Linux CI 补证；
+纯 link-text/fake 控制流验证不冒充真实 POSIX 或完整 seed 执行。72 项隔离运行矩阵仍全部 NOT_RUN。

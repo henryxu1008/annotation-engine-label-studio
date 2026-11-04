@@ -1677,3 +1677,12 @@ transport cannot use the existing mock queue or synchronous generation fallback.
 Private intent/UNKNOWN receipts are never overwritten or recovered by a new
 capture. This implementation stage permits offline support verification only;
 services, isolated execution and actual enablement remain separately authorized.
+
+The PR #136 local compatibility revision handles tracked Git symlink text without
+following targets, registers exact newly created project scopes before seeding
+submissions, and grants only SUBMIT during that seed phase. The existing seeder's
+new project-ready extension point is a default no-op; ordinary fixture output and
+product authority remain unchanged. Only the explicit bridge permits testserver
+for reused internal APIClient calls. A separate five-minute Linux/std-only support
+workflow discovers these contracts without importing product settings or starting
+services; original UI/authentication workflow budgets and required names stay intact.
