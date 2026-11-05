@@ -1628,3 +1628,61 @@ reservation; original capture/retry keys return their frozen receipt before new
 admission. Capacity refusal preserves token/attempt/T and frozen input, permits
 existing denial audit, and uses the existing AUDIT_ACTIVE_LIMIT429 UI contract.
 Real PostgreSQL contenders and pg_blocking_pids prove last-slot serialization.
+
+### #84 limited-V1 closeout and controlled-activation acceptance design
+
+The current baseline is Fork main `d814ab63f205fb2ef4ecff007525c836e928bb82`.
+The [current closeout index](issue84-v1-closeout-current-state.md),
+[design](issue84-v1-closeout-activation-design.md) and
+[72-case future matrix](issue84-v1-closeout-activation-acceptance.md) separate
+historical source/main CI, this design review, isolated synthetic execution,
+real provider/producer readiness and actual activation/Host/deployment acceptance.
+This stage changes documents only; all matrix executions remain NOT_RUN.
+
+Existing Legacy policy does not grant the new supervision/confidence/audit ops;
+test-only providers are not business activation adapters. Policy.state alone is
+not revocation: allows() checks the actual operation set. Full audit collection
+still requires exact LocalIdentityProvider. Current audit preview/viewer/cursor
+signing uses Django's configured SECRET_KEY and domain salts, not a separately
+implemented audit signing-key setting. The historical design snapshots remain
+unchanged; current rollout must follow the implementation constraints in this design.
+
+Disable/restore uses separately proven admission, per-process configuration and
+in-flight stream/worker boundaries. It cannot atomically recall handed-out file
+descriptors, undo committed opinions, reopen terminal subjects or revive creator
+tombstones. There is no audit cancel/reopen or standalone queue purge contract.
+Shared approved_exports/Redis/private root and #79/#80 guards remain independent
+of the new audit policy. Restore the complete approved configuration and frozen
+source bindings; never replace an UNKNOWN command, lower limits to reinterpret
+an old package, or rotate instance identity as a rollback shortcut.
+
+Fork-only, static text classification, supervisory_only and fixed redaction;
+#81/#84 remain OPEN. No product code, migration, execution/activation, push/PR,
+merge, deployment, Docker/#76, main checkout or other-worktree changes are
+authorized by this design stage.
+
+### #84 isolated acceptance support implementation
+
+The explicitly invoked `scripts/acceptance/ls84.py` support reuses the guarded
+supervision seeder, ReviewBatch, frozen classification/confidence contracts,
+django-rq/RQ and the existing export/snapshot formatter. Product settings,
+entrypoints, API/schema, release authority and CI inventories are unchanged.
+See [the support execution boundary](issue84-isolated-acceptance-support.md).
+
+Only pinned synthetic scopes receive acceptance operations; all other scopes
+get an empty operation set. Independent web/worker entrypoints share exact
+manifest/fixture/private-configuration bindings. Native PG/Redis ownership and
+separate execution authority are required before product import. Real audit
+transport cannot use the existing mock queue or synchronous generation fallback.
+Private intent/UNKNOWN receipts are never overwritten or recovered by a new
+capture. This implementation stage permits offline support verification only;
+services, isolated execution and actual enablement remain separately authorized.
+
+The PR #136 local compatibility revision handles tracked Git symlink text without
+following targets, registers exact newly created project scopes before seeding
+submissions, and grants only SUBMIT during that seed phase. The existing seeder's
+new project-ready extension point is a default no-op; ordinary fixture output and
+product authority remain unchanged. Only the explicit bridge permits testserver
+for reused internal APIClient calls. A separate five-minute Linux/std-only support
+workflow discovers these contracts without importing product settings or starting
+services; original UI/authentication workflow budgets and required names stay intact.

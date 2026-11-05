@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from access_control.project_operations import (
     ORGANIZE_SECOND_REVIEW,
-    SECOND_REVIEW,
     RECORD_SECOND_REVIEW_FOLLOWUP,
+    SECOND_REVIEW,
     LegacyProjectOperationProvider,
     ProjectOperationPolicy,
 )
@@ -83,6 +83,9 @@ class SecondReviewE2EPolicy:
 
 
 class Command(BaseCommand):
+    def on_project_ready(self, project):
+        """Extension point for owned test tooling; default fixture behavior is unchanged."""
+
     def add_arguments(self, parser):
         parser.add_argument('--output', default='web/apps/labelstudio-e2e/.second-review-e2e.json')
 
@@ -137,6 +140,7 @@ class Command(BaseCommand):
                     if name in ('initial', 'supervisor')
                     else 'annotator',
                 )
+            self.on_project_ready(project)
             sources = []
             for i in range(4):
                 owner = users['a' if i % 2 == 0 else 'b']
