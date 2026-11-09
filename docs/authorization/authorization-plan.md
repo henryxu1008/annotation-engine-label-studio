@@ -1686,3 +1686,27 @@ product authority remain unchanged. Only the explicit bridge permits testserver
 for reused internal APIClient calls. A separate five-minute Linux/std-only support
 workflow discovers these contracts without importing product settings or starting
 services; original UI/authentication workflow budgets and required names stay intact.
+
+### Local Files private-root and race boundary
+
+Local Files import and export roots must not overlap `BASE_DATA_DIR`,
+`APPROVED_EXPORT_ROOT`, or additional private roots configured as a JSON array
+of absolute paths in `LOCAL_FILES_PROTECTED_ROOTS`. Invalid settings deny access.
+Existing storage records are checked again on use; deployments must enumerate
+separate database, temporary, log, and report roots before enabling Local Files.
+
+Reads and export writes use no-follow directory descriptors and verify the
+opened object before serving or truncating it. Symlink components and regular
+files with multiple hard links are denied. This is an upgrade-sensitive change:
+it requires POSIX directory-descriptor support and Linux `/proc/self/fd` and
+fails closed on unsupported hosts. Existing legitimate symlink or hard-link
+storage layouts need migration or an explicitly reviewed alternative.
+
+Deletion moves the selected directory entry into a private same-filesystem
+quarantine and compares its identity before unlinking. A replaced entry is
+restored without overwriting another file, or retained in quarantine if
+restoration conflicts; operators must recover such entries explicitly. This
+boundary does not protect against a hostile process that controls the service
+UID or quarantine, and it cannot identify a replacement made before the first
+identity check. The configured private roots and deployment filesystem remain
+part of the trusted boundary.

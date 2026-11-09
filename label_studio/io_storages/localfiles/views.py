@@ -8,13 +8,14 @@ import posixpath
 from pathlib import Path
 from typing import Optional
 
+from data_export.boundary import is_private_local_path
 from django.conf import settings
 from django.db.models import CharField, F, Value
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseNotFound, HttpResponseNotModified
 from django.utils._os import safe_join
 from drf_spectacular.utils import extend_schema
-from data_export.boundary import is_approved_export_path
 from io_storages.localfiles.models import LocalFilesImportStorage
+from io_storages.localfiles.secure_open import open_local_file_readonly
 from ranged_fileresponse import RangedFileResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -39,6 +40,7 @@ def build_localfile_response(
     request: HttpRequest,
     full_path: str,
     if_none_match_header: Optional[str],
+    storage_root: str,
 ) -> HttpResponse:
     """
     Stream the requested file and attach a weak ETag so browsers can cache it.
@@ -47,10 +49,10 @@ def build_localfile_response(
     when the client's cached representation is still valid.
     """
     try:
-        file_handle = open(full_path, mode='rb')
+        file_handle = open_local_file_readonly(storage_root, full_path)
     except OSError as exc:
         logger.error('Error opening file %s: %s', full_path, exc)
-        return HttpResponseNotFound(f'Error opening file {full_path}')
+        return HttpResponseNotFound()
 
     # Weak ETag keeps the implementation simple while still invalidating on file edits.
     stat_result = os.fstat(file_handle.fileno())
@@ -69,6 +71,7 @@ def build_localfile_response(
     content_type = content_type or 'application/octet-stream'
 
     response = RangedFileResponse(request, file_handle, content_type=content_type)
+    response._resource_closers.append(file_handle.close)
     response['ETag'] = etag  # Enables client-side caching for unchanged files.
     return response
 
@@ -99,11 +102,11 @@ def localfiles_data(request):
         try:
             resolved = full_path.resolve()
             document_root = Path(local_serving_document_root).resolve()
-            if not resolved.is_relative_to(document_root) or is_approved_export_path(resolved):
+            if not resolved.is_relative_to(document_root) or is_private_local_path(resolved):
                 return HttpResponseNotFound()
         except (OSError, RuntimeError, ValueError):
             return HttpResponseNotFound()
-        user_has_permissions = False
+        authorized_root = None
 
         # Storage paths are normalized on save/migration, so prefix matches using the
         # directory that contains the requested file stay consistent across OSes.
@@ -111,20 +114,23 @@ def localfiles_data(request):
         localfiles_storage = LocalFilesImportStorage.objects.annotate(
             _full_path=Value(full_path_dir, output_field=CharField())
         ).filter(_full_path__startswith=F('path'))
-        if localfiles_storage.exists():
-            user_has_permissions = any(
-                resolved.is_relative_to(Path(storage.path).resolve())
+        for storage in localfiles_storage:
+            if (
+                not is_private_local_path(storage.path, storage_root=True)
+                and resolved.is_relative_to(Path(storage.path).resolve())
                 and storage.project.has_permission(request.user)
-                for storage in localfiles_storage
-            )
+            ):
+                authorized_root = storage.path
+                break
 
-        # Check user permissions for this file and if it exists
-        if user_has_permissions and os.path.exists(full_path):
+        # Open through pinned, no-follow directory handles after authorization.
+        if authorized_root is not None:
             # Detect mime type and encoding
             return build_localfile_response(
                 request=request,
                 full_path=str(full_path),
                 if_none_match_header=request.META.get('HTTP_IF_NONE_MATCH'),
+                storage_root=authorized_root,
             )
         else:
             return HttpResponseNotFound()
