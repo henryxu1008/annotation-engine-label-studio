@@ -615,6 +615,54 @@ class TestAuditDownloadExceptions(AuditFixtures, APITestCase):
         package.refresh_from_db()
         assert package.state == 'ready' and not package.error_code
 
+    def test_download_etag_preconditions_and_range(self):
+        package = self.prepared_package()
+        tag = f'"{package.artifact.sha256}"'
+        cases = (
+            ({'HTTP_IF_MATCH': tag}, 200),
+            ({'HTTP_IF_MATCH': '"other"'}, 412),
+            ({'HTTP_IF_MATCH': 'W/' + tag}, 412),
+            ({'HTTP_IF_MATCH': '*'}, 200),
+            ({'HTTP_IF_NONE_MATCH': tag}, 304),
+            ({'HTTP_IF_NONE_MATCH': 'W/' + tag}, 304),
+            ({'HTTP_IF_NONE_MATCH': '*'}, 304),
+            ({'HTTP_IF_MATCH': '"other"', 'HTTP_IF_NONE_MATCH': '*'}, 412),
+            ({'HTTP_IF_NONE_MATCH': tag, 'HTTP_RANGE': 'bytes=0-2'}, 304),
+            ({'HTTP_IF_MATCH': tag, 'HTTP_RANGE': 'bytes=0-2'}, 206),
+        )
+        for method in ('get', 'head'):
+            for headers, expected in cases:
+                with self.subTest(method=method, headers=headers), self.opened_handles() as handles:
+                    response = getattr(self.client, method)(self.download_url(package), **headers)
+                    assert response.status_code == expected
+                    assert response['ETag'] == tag
+                    assert 'no-store' in response['Cache-Control']
+                    if expected in (304, 412):
+                        assert response.content == b'' and handles[0].closed
+                    # Response.close() also closes the test transaction's DB connection.
+                    for closer in response._resource_closers:
+                        closer()
+                    response._resource_closers.clear()
+                    assert len(handles) == 1 and handles[0].closed
+        self.assert_ready(package)
+
+    def test_conditional_responses_recheck_authority_and_close_file(self):
+        package = self.prepared_package()
+        tag = f'"{package.artifact.sha256}"'
+
+        def deny(*args, **kwargs):
+            audit.c.fail('FORBIDDEN', 403)
+
+        for method in ('get', 'head'):
+            for headers in ({'HTTP_IF_NONE_MATCH': tag}, {'HTTP_IF_MATCH': '"other"'}):
+                with self.subTest(method=method, headers=headers), self.opened_handles() as handles:
+                    with patch.object(audit, 'recheck', side_effect=deny):
+                        response = getattr(self.client, method)(self.download_url(package), **headers)
+                    assert response.status_code == 403 and not response.streaming
+                    assert 'ETag' not in response
+                    assert len(handles) == 1 and handles[0].closed
+                    self.assert_ready(package)
+
     def assert_wrong_uuid(self, method):
         package = self.prepared_package()
         with self.opened_handles() as handles:
