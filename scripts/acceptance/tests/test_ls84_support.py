@@ -381,6 +381,12 @@ class ExecutorTests(unittest.TestCase):
         evidence = dict(receipt, job_id=job.id, package_id=str(package.pk), attempt_token=str(package.token),
                         worker_name=job.worker_name, worker_pid=41011, workhorse_pid=41012)
         verify_chain(m, package, receipt, processes, job=job, evidence=evidence)
+        job.func_name = 'data_export.review_audit.generate_bound_v1'
+        verify_chain(m, package, receipt, processes, job=job, evidence=evidence)
+        job.func_name = 'data_export.review_audit.unexpected'
+        with self.assertRaises(c.SupportError):
+            verify_chain(m, package, receipt, processes, job=job, evidence=evidence)
+        job.func_name = 'data_export.review_audit.generate_bound_v1'
         for key, value in (('worker_pid', 41010), ('workhorse_pid', 41011), ('attempt_token', str(uuid4())),
                            ('fixture_sha256', 'another input'), ('redis_run_id', 'another server')):
             v = dict(evidence, **{key: value})

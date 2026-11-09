@@ -392,13 +392,13 @@ def capture(request, ctx, body, key):
         previous = _recover(request, fresh, body, key)
         if previous:
             return previous
-    from .audit_files import private_root
+    from .audit_files import private_root, storage_binding
 
-    private_root()
+    storage = storage_binding(root=private_root(), create=True)
     if not queue_available():
         c.fail('QUEUE_UNAVAILABLE', 503)
     formatter = c.formatter()
-    return _capture(request, ctx, body, key, formatter)
+    return _capture(request, ctx, body, key, formatter, storage)
 
 
 def _recover(request, ctx, body, key):
@@ -420,13 +420,13 @@ def _recover(request, ctx, body, key):
 
 
 @transaction.atomic
-def _capture(request, ctx, body, key, formatter):
+def _capture(request, ctx, body, key, formatter, storage):
     ctx = fence(ctx)
     previous = _recover(request, ctx, body, key)
     if previous:
         return previous
     try:
-        return _capture_new(request, ctx, body, key, formatter)
+        return _capture_new(request, ctx, body, key, formatter, storage)
     except APIException as exc:
         # Raised inside the atomic body, before its commit/on_commit boundary.
         # Original-key recovery above deliberately does not carry this marker.
@@ -446,7 +446,11 @@ def _check_active_limits(project, creator_id):
         c.fail('ACTIVE_LIMIT', 429)
 
 
-def _capture_new(request, ctx, body, key, formatter):
+def _capture_new(request, ctx, body, key, formatter, storage):
+    from .audit_files import storage_binding
+
+    if storage_binding() != storage:
+        c.fail('RUNTIME_CHANGED')
     who = binding(ctx)
     request_hash = c.digest(c.exact(body))
     _check_active_limits(ctx[0], who.pk if who else None)
@@ -488,12 +492,15 @@ def _capture_new(request, ctx, body, key, formatter):
         owner_hash=owner(ctx, who),
         request_hash=request_hash,
         formatter=formatter,
+        storage_binding=storage,
         projection_sha256=c.digest(public),
         binding_map=[dict(type=kind, key=key, ref=ref(kind, key)) for kind, key in sorted(g.facts)],
     )
     blob = c.exact(private)
     if len(blob) > c.limits()['input']:
         c.fail('TOO_LARGE', 422)
+    if storage_binding() != storage:
+        c.fail('RUNTIME_CHANGED')
     package = AuditPackage.objects.create(
         id=pk,
         project=ctx[0],
@@ -558,6 +565,11 @@ def summary(package, actor=None):
     )
 
 
+def generate_bound_v1(package_id, token):
+    """Versioned job entry: older workers cannot silently bypass storage binding."""
+    return generate(package_id, token)
+
+
 def enqueue(package_id):
     """One producer token. Redis is outside the DB transaction; duplicate delivery is harmless."""
     try:
@@ -584,7 +596,7 @@ def enqueue(package_id):
             queue = approved.api_queue()
             try:
                 queue.enqueue(
-                    generate,
+                    generate_bound_v1,
                     str(package.pk),
                     str(token),
                     job_timeout=c.limits()['timeout'],
@@ -638,8 +650,12 @@ def _retry(request, ctx, package, key, health, formatter):
     )
     if package.state in ('ready', 'quarantined', 'failed_final'):
         c.fail('NOT_RETRYABLE')
-    if package.state == 'blocked_runtime' and integrity(package)['formatter'] != formatter:
-        c.fail('RUNTIME_CHANGED')
+    if package.state == 'blocked_runtime':
+        from .audit_files import storage_binding
+
+        frozen = integrity(package)
+        if frozen['formatter'] != formatter or frozen.get('storage_binding') != storage_binding():
+            c.fail('RUNTIME_CHANGED')
     old_token = package.token
     if package.state in ('dispatch_pending', 'failed_retryable', 'blocked_auth', 'blocked_runtime') or expired:
         if package.state not in ACTIVE:
@@ -663,7 +679,7 @@ def _retry(request, ctx, package, key, health, formatter):
 
 
 def generate(package_id, token):
-    from .audit_files import ScratchLease, directory
+    from .audit_files import ScratchLease, storage_binding
 
     lease = path = None
     directory_created = False
@@ -679,14 +695,18 @@ def generate(package_id, token):
             approved.lock_authority(ctx[2].pk, project)
             creator(package, project)
             bundle = integrity(package)
-            if bundle['formatter'] != formatter:
+            if bundle['formatter'] != formatter or bundle.get('storage_binding') != storage_binding():
                 c.fail('RUNTIME_CHANGED')
             package.state, package.started_at = 'running', timezone.now()
             package.save(update_fields=['state', 'started_at'])
             AuditAttempt.objects.filter(pk=token, package=package).update(state='running')
             event(ctx, 'job_start', package=package)
         lease = ScratchLease(package, token)
-        path = directory(package)
+        # Set the owned path before any later check can fail, so the finally
+        # block can release the newly reserved scratch slot.
+        path = lease.root / str(package.pk) / str(package.token)
+        if bundle.get('storage_binding') != storage_binding(root=lease.root):
+            c.fail('RUNTIME_CHANGED')
         path.mkdir(parents=True, exist_ok=False, mode=0o700)
         directory_created = True
         target = path / 'review-audit.zip'
@@ -709,7 +729,10 @@ def generate(package_id, token):
             ctx = creator(current, project)
             approved.lock_authority(ctx[2].pk, project)
             creator(current, project)
-            if integrity(current)['formatter'] != current_formatter:
+            frozen = integrity(current)
+            if (frozen['formatter'] != current_formatter
+                    or frozen.get('storage_binding') != storage_binding()
+                    or frozen.get('storage_binding') != storage_binding(root=lease.root)):
                 c.fail('RUNTIME_CHANGED')
             AuditArtifact.objects.create(
                 package=current,

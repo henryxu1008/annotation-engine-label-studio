@@ -1,6 +1,9 @@
 """Audit adapter for the existing private root and checked descriptor helper."""
 import os
+import re
+import secrets
 import shutil
+import stat
 from pathlib import Path
 
 from core.utils.private_file import PrivateFileError, ancestor_gate, directory_gate
@@ -238,6 +241,55 @@ def private_root():
         except (PrivateFileError, OSError):
             c.fail('PRIVATE_STORAGE_REQUIRED', 503)
     return root
+
+
+def storage_binding(*, root=None, create=False):
+    """Bind workers to the private storage namespace captured by the web process.
+
+    The random marker lives on the shared filesystem; only capture may create
+    it. A worker never initializes a missing namespace. Its value is kept out
+    of the public package and only a domain-separated digest is frozen.
+    """
+    root = root or private_root()
+    marker = root / '.review-audit-storage-v1'
+    try:
+        no_links(marker)
+        if create:
+            try:
+                fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            except FileExistsError:
+                pass
+            else:
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(secrets.token_hex(32).encode('ascii'))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        fd = os.open(marker, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(fd, 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 64:
+                c.fail('RUNTIME_CHANGED')
+            if os.name != 'nt' and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
+                c.fail('PRIVATE_STORAGE_REQUIRED', 503)
+            if os.name == 'nt':
+                windows_acl(marker)
+            value = handle.read(65)
+            if not re.fullmatch(b'[0-9a-f]{64}', value):
+                c.fail('RUNTIME_CHANGED')
+            current = marker.stat()
+            if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                c.fail('RUNTIME_CHANGED')
+        root_info = root.stat()
+        # A copied marker must not make two separate directories equivalent.
+        # Shared volumes must expose stable directory identities to both
+        # processes; a mismatched mount fails closed instead of publishing.
+        return c.digest(c.exact({'domain': 'review-audit-storage/v1', 'marker': value.decode('ascii'),
+                                 'path': os.path.normcase(str(root.resolve())),
+                                 'device': root_info.st_dev, 'inode': root_info.st_ino}))
+    except FileNotFoundError:
+        c.fail('RUNTIME_CHANGED')
+    except OSError:
+        c.fail('PRIVATE_STORAGE_REQUIRED', 503)
 
 
 def directory(package):

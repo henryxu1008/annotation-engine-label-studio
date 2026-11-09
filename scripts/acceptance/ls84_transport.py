@@ -15,6 +15,7 @@ import ls84_contract as c
 JSON_LIMIT = 512 * 1024
 ARTIFACT_LIMIT = 16 * 1024 * 1024
 CYCLE_TIMEOUT = 1850  # New standalone local budget; never inserted into an existing CI/browser call.
+AUDIT_JOBS = ('data_export.review_audit.generate', 'data_export.review_audit.generate_bound_v1')
 
 
 def evidence_worker_class(m, receipt, base_worker, stop_requested):
@@ -36,7 +37,7 @@ def evidence_worker_class(m, receipt, base_worker, stop_requested):
                 # Same owned queue: preserve existing export/snapshot implementations, without
                 # claiming their separate #79/#80 acceptance or generating audit proof for them.
                 return super().perform_job(job, queue)
-            c.require(job.func_name == 'data_export.review_audit.generate' and len(job.args) == 2
+            c.require(job.func_name in AUDIT_JOBS and len(job.args) == 2
                       and all(c.uuid(a) for a in job.args), 'UNEXPECTED_SYNTHETIC_JOB')
             observations = dict(receipt, schema='ls84-rq-job/v1', job_id=job.id,
                                 package_id=job.args[0], attempt_token=job.args[1],
@@ -165,7 +166,7 @@ def verify_chain(m, package, receipt, processes, *, job, evidence):
             'authorization_sha256', 'authorization_expires_at')
     token = str(package.token)
     expected_job = f'audit-{package.pk}-{token}'
-    c.require(job.id == expected_job and job.func_name == 'data_export.review_audit.generate'
+    c.require(job.id == expected_job and job.func_name in AUDIT_JOBS
               and list(job.args) == [str(package.pk), token] and job.worker_name == 'ls84-' + m['run_id']
               and str(job.get_status(refresh=True)) in ('finished', 'JobStatus.FINISHED'), 'RQ_JOB_NOT_PROVEN')
     c.require(all(evidence.get(k) == receipt[k] for k in keys)

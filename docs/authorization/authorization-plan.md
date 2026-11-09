@@ -1687,6 +1687,31 @@ for reused internal APIClient calls. A separate five-minute Linux/std-only suppo
 workflow discovers these contracts without importing product settings or starting
 services; original UI/authentication workflow budgets and required names stay intact.
 
+### Review-audit storage binding
+
+New audit captures bind a private storage namespace marker, canonical path and
+directory device/inode into the frozen input. Workers check this identity before
+writing, against their scratch root, and again before publishing. A mismatch or
+an older unbound input blocks generation; workers never create the marker. The
+marker and path are not included in the public audit package. A ready package
+and original capture receipt remain readable using their existing rules.
+
+Web and workers must see the same canonical path and stable directory identity.
+Different mount namespaces, multi-host filesystems with different device/inode
+views, relocation or migration can block generation; validate the deployment's
+actual filesystem before enabling this feature. Legacy unfinished packages
+without a frozen binding cannot be regenerated automatically. Preserve their
+original inputs and receipts and plan any migration separately; never silently
+rebind them to the current root. A failed marker initialization also requires
+operator investigation rather than silently replacing the marker. These checks
+do not defend against a malicious process controlling the private service account
+or prove that separate database or queue endpoints refer to the same service.
+New jobs use a versioned worker entry so an old worker cannot execute them as
+the old unbound job. Before enabling new captures, stop and drain old web and
+worker processes and account for legacy queued/running jobs. A mixed-version
+deployment can otherwise execute old jobs without the new checks; a new job
+claimed by an old worker may fail and require guarded recovery after upgrade.
+
 ### Local Files private-root and race boundary
 
 Local Files import and export roots must not overlap `BASE_DATA_DIR`,
