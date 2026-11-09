@@ -60,7 +60,7 @@ jobs:
         working-directory: label_studio
         run: |
           poetry run python manage.py makemigrations --check --dry-run
-          poetry run pytest -q data_export/tests/test_approved_exports.py data_export/tests/test_review_audit.py data_export/tests/test_review_audit_boundaries.py data_export/tests/test_review_audit_concurrency.py data_export/tests/test_review_audit_limits.py data_export/tests/test_review_audit_detached.py data_export/tests/test_review_audit_scale.py data_export/tests/test_review_audit_matrix.py core/tests/test_private_file.py data_export/tests/test_release_snapshots.py data_export/tests/test_snapshot_host_contract.py data_export/tests/test_snapshot_concurrency.py data_export/tests/test_fork_host_live_fixture.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py io_storages/tests/test_localfiles_view.py io_storages/tests/test_localfiles_validation.py io_storages/tests/test_localfiles_serializers.py io_storages/tests/test_localfiles_functions.py io_storages/tests/test_localfiles_export.py --junitxml=/tmp/issue79-postgres.xml
+          poetry run pytest -q data_export/tests/test_approved_exports.py data_export/tests/test_review_audit.py data_export/tests/test_review_audit_storage_binding.py data_export/tests/test_review_audit_boundaries.py data_export/tests/test_review_audit_concurrency.py data_export/tests/test_review_audit_limits.py data_export/tests/test_review_audit_detached.py data_export/tests/test_review_audit_scale.py data_export/tests/test_review_audit_matrix.py core/tests/test_private_file.py data_export/tests/test_release_snapshots.py data_export/tests/test_snapshot_host_contract.py data_export/tests/test_snapshot_concurrency.py data_export/tests/test_fork_host_live_fixture.py tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py projects/tests/test_project_authorization.py io_storages/tests/test_localfiles_view.py io_storages/tests/test_localfiles_validation.py io_storages/tests/test_localfiles_serializers.py io_storages/tests/test_localfiles_functions.py io_storages/tests/test_localfiles_export.py --junitxml=/tmp/issue79-postgres.xml
       - name: Linux local file storage boundary regressions
         working-directory: label_studio
         env:
@@ -78,7 +78,7 @@ jobs:
         env:
           DJANGO_DB: sqlite
           DATABASE_NAME: /tmp/review-audit-test.sqlite3
-        run: poetry run pytest -q data_export/tests/test_review_audit.py data_export/tests/test_review_audit_boundaries.py data_export/tests/test_review_audit_limits.py data_export/tests/test_review_audit_concurrency.py data_export/tests/test_review_audit_detached.py data_export/tests/test_review_audit_scale.py data_export/tests/test_review_audit_matrix.py core/tests/test_private_file.py --junitxml=/tmp/review-audit-sqlite.xml
+        run: poetry run pytest -q data_export/tests/test_review_audit.py data_export/tests/test_review_audit_storage_binding.py data_export/tests/test_review_audit_boundaries.py data_export/tests/test_review_audit_limits.py data_export/tests/test_review_audit_concurrency.py data_export/tests/test_review_audit_detached.py data_export/tests/test_review_audit_scale.py data_export/tests/test_review_audit_matrix.py core/tests/test_private_file.py --junitxml=/tmp/review-audit-sqlite.xml
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
