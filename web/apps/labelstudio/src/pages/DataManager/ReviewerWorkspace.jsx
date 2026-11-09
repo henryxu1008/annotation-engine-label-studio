@@ -30,8 +30,15 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
   const [pendingHasPrevious, setPendingHasPrevious] = useState(false);
   const [historyHasNext, setHistoryHasNext] = useState(false);
   const [historyHasPrevious, setHistoryHasPrevious] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
-  const [rejectReason, setRejectReason] = useState("");
+  // Selection and its draft change together: a later effect must not erase
+  // text entered after the new submission is already visible.
+  const [selection, setSelection] = useState({ id: null, reason: "" });
+  const selectedId = selection.id;
+  const rejectReason = selection.reason;
+  const setSelectedId = (next) => setSelection((current) => {
+    const id = typeof next === "function" ? next(current.id) : next;
+    return id === current.id ? current : { id, reason: "" };
+  });
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(null);
   const [error, setError] = useState("");
@@ -143,10 +150,6 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
     ? pendingSubmissions.some((submission) => submission.id === selected.id)
     : false;
 
-  useEffect(() => {
-    setRejectReason("");
-  }, [selectedId]);
-
   const decide = async (decision) => {
     if (!selectedIsReviewable) return;
     if (decision === "rejected" && !rejectReason.trim()) {
@@ -189,7 +192,7 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
     }
 
     setNotice({ id: selected.id, revision: selected.revision, decision });
-    setRejectReason("");
+    setSelection((current) => current.id === selected.id ? { ...current, reason: "" } : current);
     await Promise.all([refresh(pendingPage, historyPage), onReviewSettled?.(true)]);
     setProcessing(null);
   };
@@ -336,7 +339,10 @@ const ScopedReviewerWorkspace = ({ projectId, packageId = null, batchId = null, 
                     id="review-reject-reason"
                     data-testid="review-reject-reason"
                     value={rejectReason}
-                    onChange={(event) => setRejectReason(event.target.value)}
+                    onChange={(event) => {
+                      const reason = event.target.value;
+                      setSelection((current) => current.id === selectedId ? { ...current, reason } : current);
+                    }}
                     disabled={processing !== null}
                     rows={3}
                   />
