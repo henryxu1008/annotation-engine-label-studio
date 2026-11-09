@@ -1,6 +1,9 @@
+import os
+
 import pytest
 from django.urls import reverse
 from io_storages.localfiles.models import LocalFilesImportStorage
+from io_storages.tests.b03_test_helpers import create_directory_alias, remove_directory_alias
 from projects.models import Project
 from rest_framework.exceptions import PermissionDenied
 
@@ -28,11 +31,14 @@ def test_storage_rejects_private_ancestor_descendant_and_symlink(boundary, proje
     private, data, exports, allowed = boundary
     project = Project.objects.get(pk=project_id)
     link = tmp_path / 'alias'
-    link.symlink_to(private, target_is_directory=True)
-    for candidate in (private, data, exports, tmp_path, link):
-        with pytest.raises(PermissionDenied):
-            LocalFilesImportStorage.objects.create(project=project, path=str(candidate), use_blob_urls=True)
-    assert LocalFilesImportStorage.objects.create(project=project, path=str(allowed), use_blob_urls=True).pk
+    create_directory_alias(link, private)
+    try:
+        for candidate in (private, data, exports, tmp_path, link):
+            with pytest.raises(PermissionDenied):
+                LocalFilesImportStorage.objects.create(project=project, path=str(candidate), use_blob_urls=True)
+        assert LocalFilesImportStorage.objects.create(project=project, path=str(allowed), use_blob_urls=True).pk
+    finally:
+        remove_directory_alias(link)
 
 
 @pytest.mark.django_db
@@ -59,6 +65,7 @@ def test_existing_broad_storage_cannot_read_or_scan_private(boundary, business_c
 
 
 @pytest.mark.django_db
+@pytest.mark.skipif(os.name == 'nt', reason='Windows file symlink privileges are unavailable; hardlinks are tested natively')
 def test_safe_storage_rejects_symlink_to_private(boundary, business_client, project_id, tmp_path):
     private, data, exports, allowed = boundary
     project = Project.objects.get(pk=project_id)

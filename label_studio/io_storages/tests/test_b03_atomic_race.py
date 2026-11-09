@@ -4,6 +4,7 @@ import pytest
 from django.urls import reverse
 from io_storages.localfiles import views
 from io_storages.localfiles.models import LocalFilesImportStorage
+from io_storages.tests.b03_test_helpers import create_directory_alias, remove_directory_alias
 from projects.models import Project
 
 
@@ -34,6 +35,8 @@ def test_hardlinked_private_file_is_not_read_or_truncated(settings, tmp_path, wr
 
 @pytest.mark.django_db
 def test_swap_to_private_after_authorization_fails_closed(settings, tmp_path, business_client, project_id):
+    import os
+
     private = tmp_path / 'private'
     private.mkdir()
     protected = private / 'protected.txt'
@@ -55,7 +58,7 @@ def test_swap_to_private_after_authorization_fails_closed(settings, tmp_path, bu
 
     def replace_after_authorization(*args, **kwargs):
         target.unlink()
-        target.symlink_to(protected)
+        os.link(protected, target)
         swapped.append(True)
         return real(*args, **kwargs)
 
@@ -88,12 +91,16 @@ def test_replace_storage_directory_after_authorization_denied(settings, tmp_path
 
     def replace_after_authorization(*args, **kwargs):
         allowed.rename(tmp_path / 'original-allowed')
-        allowed.symlink_to(private, target_is_directory=True)
+        create_directory_alias(allowed, private)
         swapped.append(True)
         return real(*args, **kwargs)
 
-    with patch.object(views, 'build_localfile_response', side_effect=replace_after_authorization):
-        response = business_client.get(reverse('storages:localfiles_data'), {'d': 'allowed/document.txt'})
+    try:
+        with patch.object(views, 'build_localfile_response', side_effect=replace_after_authorization):
+            response = business_client.get(reverse('storages:localfiles_data'), {'d': 'allowed/document.txt'})
+    finally:
+        if swapped:
+            remove_directory_alias(allowed)
     assert swapped
     assert response.status_code == 404
 
@@ -129,6 +136,8 @@ def test_response_close_releases_verified_file(settings, tmp_path, business_clie
 
 
 def test_export_open_does_not_follow_replaced_file(settings, tmp_path):
+    import os
+
     from io_storages.localfiles.secure_open import open_local_file_write
 
     private = tmp_path / 'private'
@@ -138,7 +147,7 @@ def test_export_open_does_not_follow_replaced_file(settings, tmp_path):
     allowed = tmp_path / 'allowed'
     allowed.mkdir()
     target = allowed / 'export.json'
-    target.symlink_to(secret)
+    os.link(secret, target)
     settings.BASE_DATA_DIR = str(private)
     settings.APPROVED_EXPORT_ROOT = str(private / 'exports')
     settings.LOCAL_FILES_PROTECTED_ROOTS = [str(private)]

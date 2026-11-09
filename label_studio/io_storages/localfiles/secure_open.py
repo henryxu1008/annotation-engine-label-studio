@@ -14,6 +14,11 @@ def _open_local_file(storage_root, filename, *, write):
     validate the actual opened object fail closed rather than trusting a path
     that can be replaced after authorization.
     """
+    if os.name == 'nt':
+        from io_storages.localfiles.secure_open_windows import open_file
+
+        return open_file(storage_root, filename, write=write, is_private=is_private_local_path)
+
     fd = None
     current = None
     try:
@@ -88,6 +93,11 @@ def unlink_local_file(storage_root, filename):
     Never resolve the final entry as a symlink. A missing path is reported as
     FileNotFoundError so existing idempotent cleanup behavior is preserved.
     """
+    if os.name == 'nt':
+        from io_storages.localfiles.secure_open_windows import unlink_file
+
+        return unlink_file(storage_root, filename, is_private=is_private_local_path)
+
     current = None
     root_fd = None
     moved = False

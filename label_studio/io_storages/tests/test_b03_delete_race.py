@@ -1,9 +1,11 @@
 import inspect
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from io_storages.localfiles import models
+from io_storages.tests.b03_test_helpers import create_directory_alias, remove_directory_alias
 
 
 def test_swap_storage_parent_before_delete_preserves_private_file(settings, tmp_path):
@@ -27,17 +29,20 @@ def test_swap_storage_parent_before_delete_preserves_private_file(settings, tmp_
         caller = inspect.currentframe().f_back.f_code.co_name
         if self == allowed and caller == 'delete_annotation' and not swapped:
             allowed.rename(tmp_path / 'original-allowed')
-            allowed.symlink_to(private, target_is_directory=True)
+            create_directory_alias(allowed, private)
             swapped.append(True)
         return result
 
-    with patch.object(Path, 'resolve', resolve_and_swap), patch.object(
-        models.LocalFilesExportStorageLink, 'get_key', return_value='victim.txt'
-    ), patch.object(models.LocalFilesExportStorageLink.objects, 'filter') as links:
-        try:
+    try:
+        with patch.object(Path, 'resolve', resolve_and_swap), patch.object(
+            models.LocalFilesExportStorageLink, 'get_key', return_value='victim.txt'
+        ), patch.object(models.LocalFilesExportStorageLink.objects, 'filter') as links:
             storage.delete_annotation(annotation)
-        except PermissionError:
-            pass
+    except PermissionError:
+        pass
+    finally:
+        if swapped:
+            remove_directory_alias(allowed)
     assert swapped, 'test did not reach check-to-delete boundary'
     assert secret.exists(), 'private synthetic file was deleted'
     assert secret.read_text() == 'SYNTHETIC-PRIVATE'
@@ -65,6 +70,7 @@ def test_regular_and_missing_delete_keep_existing_semantics(settings, tmp_path):
     assert links.call_count == 2
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows file symlink privileges are unavailable; hardlinks are tested natively')
 def test_symlink_entry_does_not_remove_target(settings, tmp_path):
     from io_storages.localfiles.secure_open import unlink_local_file
 
@@ -84,6 +90,7 @@ def test_symlink_entry_does_not_remove_target(settings, tmp_path):
     assert secret.read_text() == 'SYNTHETIC-PRIVATE' and link.is_symlink()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX dir_fd injection; Windows handle-relative equivalent is tested natively')
 def test_swap_root_after_helper_validation_denied(settings, tmp_path):
     import os
 
@@ -121,6 +128,7 @@ def test_swap_root_after_helper_validation_denied(settings, tmp_path):
     assert swapped and secret.read_text() == 'SYNTHETIC-PRIVATE'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX dir_fd injection; Windows handle-relative equivalent is tested natively')
 def test_swap_entry_before_rename_never_follows_link(settings, tmp_path):
     import os
 
@@ -159,6 +167,7 @@ def test_swap_entry_before_rename_never_follows_link(settings, tmp_path):
     assert swapped and secret.read_text() == 'SYNTHETIC-PRIVATE' and target.is_symlink()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX quarantine rename injection; Windows handle-delete equivalent is tested natively')
 def test_swap_regular_entry_before_rename_is_restored(settings, tmp_path):
     import os
 
@@ -199,6 +208,7 @@ def test_swap_regular_entry_before_rename_is_restored(settings, tmp_path):
     )
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX quarantine collision injection; Windows handle-delete equivalent is tested natively')
 def test_restore_collision_preserves_both_and_quarantine(settings, tmp_path):
     import os
 
