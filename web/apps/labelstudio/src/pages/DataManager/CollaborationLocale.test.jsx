@@ -213,6 +213,35 @@ describe("collaboration locale projections", () => {
     runtime.destroy();
   });
 
+  it("isolates rejection drafts by submission and sends the currently selected reason", async () => {
+    const other = { ...submission, id: 22, revision: 4, result_hash: "immutable-hash-22" };
+    let reviewed = false;
+    mockCallApi.mockImplementation((method, options) => {
+      if (method === "reviewableSubmissions") return Promise.resolve({ results: reviewed ? [submission] : [submission, other] });
+      if (method === "projectSubmissions") return Promise.resolve({ results: [] });
+      if (method === "reviewSubmission") {
+        reviewed = true;
+        return Promise.resolve({ ...other, status: "rejected" });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const { runtime, unmount } = mount(<ReviewerWorkspace projectId={4} />);
+    const reason = await screen.findByTestId("review-reject-reason");
+    fireEvent.change(reason, { target: { value: "Draft for the first submission" } });
+    fireEvent.click(screen.getByTestId("review-submission-22"));
+    expect(reason.value).toBe("");
+    fireEvent.change(reason, { target: { value: "需要补充证据" } });
+    fireEvent.click(screen.getByTestId("review-submission-22"));
+    expect(reason.value).toBe("需要补充证据");
+    fireEvent.click(screen.getByTestId("review-reject"));
+    await waitFor(() => expect(mockCallApi.mock.calls.filter(([method]) => method === "reviewSubmission")).toHaveLength(1));
+    const [, options] = mockCallApi.mock.calls.find(([method]) => method === "reviewSubmission");
+    expect(options.params.submissionPk).toBe(22);
+    expect(options.body).toEqual({ decision: "rejected", reason: "需要补充证据" });
+    await screen.findByTestId("review-submission-21");
+    unmount(); runtime.destroy();
+  });
+
   it("shows rejection feedback in read-only history without granting release actions", async () => {
     const rejected = { ...submission, status: "rejected", review: {
       decision: "rejected", reason: "请补标遗漏的人名 / Add the missing person",
