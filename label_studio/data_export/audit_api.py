@@ -7,6 +7,7 @@ from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponse
+from django.utils.cache import get_conditional_response
 from django.utils.dateparse import parse_datetime
 from rest_framework.exceptions import APIException
 from rest_framework.generics import GenericAPIView, get_object_or_404
@@ -217,6 +218,14 @@ class AuditAPI(GenericAPIView):
                 if artifact.pk != kwargs['artifact_id']:
                     c.fail('NOT_FOUND', 404)
                 etag = f'"{artifact.sha256}"'
+                # Preconditions must not bypass the final authority check or
+                # leave the verified artifact handle open on a bodyless response.
+                conditional = get_conditional_response(request, etag=etag)
+                if conditional is not None:
+                    conditional['ETag'] = etag
+                    s.event(self.ctx, 'download', package=package)
+                    s.recheck(request, self.ctx, package)
+                    return conditional
                 if request.META.get('HTTP_IF_RANGE') not in (None, etag):
                     request.META.pop('HTTP_RANGE', None)
                 if request.META.get('HTTP_RANGE'):
