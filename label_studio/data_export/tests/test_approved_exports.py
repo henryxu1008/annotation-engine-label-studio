@@ -882,26 +882,27 @@ class TestApprovedExports(APITestCase):
     def localfiles_scope(self):
         from io_storages.localfiles.models import LocalFilesImportStorage
 
-        with override_settings(
-            APPROVED_EXPORT_ROOT=str(Path(self.root.name) / "private"),
-            LOCAL_FILES_SERVING_ENABLED=True,
-            LOCAL_FILES_DOCUMENT_ROOT=str(Path(self.root.name).parent),
-        ):
-            release = self.frozen()
-            self.generate(release)
-            assert release.state == "ready", release.error_code
-            artifact = release.artifacts.get(format="JSON")
-            file = service.artifact_path(artifact.storage_key)
-            other = ProjectFactory(organization=self.organization)
-            user = UserFactory(active_organization=self.organization)
-            ProjectMember.objects.create(project=other, user=user, role="manager")
-            storage = LocalFilesImportStorage.objects.create(
-                project=other, path=self.root.name, recursive_scan=True, use_blob_urls=False
-            )
-            storage.validate_connection()
-            self.client.force_authenticate(user)
-            assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 404
-            yield release, storage, file
+        with tempfile.TemporaryDirectory(prefix="issue79-private-") as private_root:
+            with override_settings(
+                APPROVED_EXPORT_ROOT=private_root,
+                LOCAL_FILES_SERVING_ENABLED=True,
+                LOCAL_FILES_DOCUMENT_ROOT=str(Path(self.root.name).parent),
+            ):
+                release = self.frozen()
+                self.generate(release)
+                assert release.state == "ready", release.error_code
+                artifact = release.artifacts.get(format="JSON")
+                file = service.artifact_path(artifact.storage_key)
+                other = ProjectFactory(organization=self.organization)
+                user = UserFactory(active_organization=self.organization)
+                ProjectMember.objects.create(project=other, user=user, role="manager")
+                storage = LocalFilesImportStorage.objects.create(
+                    project=other, path=self.root.name, recursive_scan=True, use_blob_urls=False
+                )
+                storage.validate_connection()
+                self.client.force_authenticate(user)
+                assert self.client.get(self.detail(release, f"artifacts/{artifact.pk}/download/")).status_code == 404
+                yield release, storage, file
 
     def localfile_url(self, file):
         return "/data/local-files/?d=" + file.relative_to(Path(self.root.name).parent).as_posix()

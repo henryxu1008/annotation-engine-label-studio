@@ -76,6 +76,13 @@ try:
 except (TypeError, ValueError):
     APPROVED_EXPORT_POLICY = {}
 APPROVED_EXPORT_ROOT = get_env('APPROVED_EXPORT_ROOT', os.path.join(BASE_DATA_DIR, 'approved-exports'))
+# JSON list of additional private absolute roots outside BASE_DATA_DIR.
+# Invalid configuration deliberately denies all Local Files access.
+try:
+    LOCAL_FILES_PROTECTED_ROOTS = json.loads(get_env('LOCAL_FILES_PROTECTED_ROOTS', '[]'))
+except (TypeError, ValueError):
+    LOCAL_FILES_PROTECTED_ROOTS = None
+
 APPROVED_EXPORT_QUEUE = 'approved_exports'
 ANNOTATION_REVIEW_AUDIT_ENABLED = get_bool_env('ANNOTATION_REVIEW_AUDIT_ENABLED', False)
 try:
@@ -85,5 +92,6 @@ except (TypeError, ValueError):
 ANNOTATION_REVIEW_AUDIT_LIMITS = {}
 if get_env('APPROVED_EXPORT_REDIS_URL', ''):
     RQ_QUEUES[APPROVED_EXPORT_QUEUE] = {
-        'URL': get_env('APPROVED_EXPORT_REDIS_URL'), 'DEFAULT_TIMEOUT': 1800,
+        'URL': get_env('APPROVED_EXPORT_REDIS_URL'),
+        'DEFAULT_TIMEOUT': 1800,
     }

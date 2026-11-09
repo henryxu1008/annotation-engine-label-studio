@@ -9,25 +9,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from data_export.boundary import is_private_local_path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
-from data_export.boundary import is_approved_export_path
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
-    serialize_mutable_delivery,
     ImportStorage,
     ImportStorageLink,
     ProjectStorageMixin,
+    serialize_mutable_delivery,
 )
 from io_storages.localfiles.functions import normalize_storage_path
+from io_storages.localfiles.secure_open import open_local_file_readonly, open_local_file_write, unlink_local_file
 from io_storages.utils import StorageObject, load_tasks_json
-from tasks.models import Annotation
 from rest_framework.exceptions import PermissionDenied
+from tasks.models import Annotation
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +51,13 @@ class LocalFilesMixin(models.Model):
         super().clean()
         if self.path is not None:
             self.path = normalize_storage_path(self.path)
-            if is_approved_export_path(self.path):
+            if is_private_local_path(self.path, storage_root=True):
                 raise PermissionDenied()
 
     def save(self, *args, **kwargs):
         if self.path is not None:
             self.path = normalize_storage_path(self.path)
-            if is_approved_export_path(self.path):
+            if is_private_local_path(self.path, storage_root=True):
                 raise PermissionDenied()
         super().save(*args, **kwargs)
 
@@ -72,7 +73,7 @@ class LocalFilesMixin(models.Model):
         normalized = normalize_storage_path(self.path)
         if not normalized:
             raise exception_cls('Path must be set for Local Files storage')
-        if is_approved_export_path(normalized):
+        if is_private_local_path(normalized, storage_root=True):
             raise PermissionDenied()
         return normalized
 
@@ -139,7 +140,7 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
         # In other words, the task IDs are sorted by filename order.
         iterator = path.rglob('*') if self.recursive_scan else path.glob('*')
         for file in sorted(iterator, key=os.path.basename):
-            if file.is_file() and not is_approved_export_path(file):
+            if file.is_file() and not is_private_local_path(file) and file.resolve().is_relative_to(path.resolve()):
                 key = file.name
                 if regex and not regex.match(key):
                     logger.debug(key + ' is skipped by regex filter')
@@ -151,7 +152,8 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
             yield str(obj)
 
     def get_unified_metadata(self, obj):
-        stat = obj.stat()
+        with open_local_file_readonly(self._get_storage_path_or_raise(), obj) as handle:
+            stat = os.fstat(handle.fileno())
         return {
             'key': str(obj),
             'last_modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
@@ -160,7 +162,9 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
 
     def get_data(self, key) -> list[StorageObject]:
         path = Path(key)
-        if is_approved_export_path(path):
+        if is_private_local_path(path) or not path.resolve().is_relative_to(
+            Path(self._get_storage_path_or_raise()).resolve()
+        ):
             raise PermissionDenied()
         if self.use_blob_urls:
             # include self-hosted links pointed to local resources via
@@ -173,7 +177,7 @@ class LocalFilesImportStorageBase(LocalFilesMixin, ImportStorage):
             return [StorageObject(key=key, task_data=task)]
 
         try:
-            with open(path, 'rb') as f:
+            with open_local_file_readonly(self._get_storage_path_or_raise(), path) as f:
                 blob = f.read()
                 return load_tasks_json(blob, key)
         except OSError as e:
@@ -204,8 +208,11 @@ class LocalFilesExportStorage(LocalFilesMixin, ExportStorage):
         storage_path = self._get_storage_path_or_raise()
         key = os.path.join(storage_path, f'{key}')
 
+        # Refuse existing links or paths that resolve outside the authorized root.
+        if is_private_local_path(key) or not Path(key).resolve().is_relative_to(Path(storage_path).resolve()):
+            raise PermissionDenied()
         # put object into storage
-        with open(key, mode='w') as f:
+        with open_local_file_write(storage_path, key) as f:
             json.dump(ser_annotation, f, indent=2)
 
         # Create export storage link
@@ -217,8 +224,12 @@ class LocalFilesExportStorage(LocalFilesMixin, ExportStorage):
         storage_path = self._get_storage_path_or_raise()
         file_path = os.path.join(storage_path, f'{key}')
 
+        if is_private_local_path(file_path) or not Path(file_path).resolve().is_relative_to(
+            Path(storage_path).resolve()
+        ):
+            raise PermissionDenied()
         try:
-            os.remove(file_path)
+            unlink_local_file(storage_path, file_path)
         except FileNotFoundError:
             logger.warning(f'Export file {file_path} is already missing for annotation {annotation}')  # nosec
 
