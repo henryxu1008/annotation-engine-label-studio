@@ -8,10 +8,10 @@ from access_control.authorization import authorization
 from access_control.project_operations import ASSIGN, lock_project_operation
 from data_export.snapshots import upload_for
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.crypto import salted_hmac
+from django.utils.crypto import constant_time_compare, salted_hmac
 from io_storages.gcs.models import GCSImportStorage, GCSImportStorageLink
 from io_storages.s3.models import S3ImportStorage, S3ImportStorageLink
 from rest_framework.exceptions import ValidationError
@@ -21,6 +21,35 @@ from . import bbox, bbox_attempts, bbox_media, bbox_storage
 from .models import BboxMediaAttempt, BboxMediaPin
 
 logger = logging.getLogger(__name__)
+
+
+def exclusive_source_claim(task, reference):
+    """Stable identity for an operator's per-task exclusive-source attestation."""
+    if reference.startswith(('gs://', 's3://')):
+        storage, _, fingerprint = object_source(task, reference)
+        binding = {'storage_id': storage.pk, 'config_fingerprint': fingerprint}
+    else:
+        upload, _ = upload_for(reference, task.project)
+        binding = {'upload_id': upload.pk, 'upload_name': upload.file.name}
+    return bbox.digest({'schema': 'bbox-exclusive-source/v1', 'organization_id': task.project.organization_id,
+                        'project_id': task.project_id, 'task_id': task.pk, 'reference': reference, 'binding': binding})
+
+
+def require_exclusive_source(task, reference):
+    """Require trusted configuration after migration, never a client assertion.
+
+    This attestation records an operational precondition; it cannot prove that
+    external credentials or pre-existing signed URLs have been revoked.
+    """
+    claims = settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS
+    key = f'{task.project.organization_id}:{task.project_id}'
+    project_claims = claims.get(key) if isinstance(claims, dict) else None
+    supplied = project_claims.get(str(task.pk)) if isinstance(project_claims, dict) else None
+    expected = exclusive_source_claim(task, reference)
+    if (not isinstance(supplied, str) or not constant_time_compare(supplied, expected)
+            or BboxMediaPin.objects.filter(source__reference=reference).exclude(task=task).exists()):
+        raise ValidationError({'detail': 'Migrate shared images to an independent object and configure the exclusive-source attestation before capture.'})
+    return expected
 
 
 def object_source(task, reference, *, lock=False):
@@ -99,21 +128,34 @@ def prepare_managed(task, principal):
         original_hash, config_hash = bbox.digest(original), bbox.digest(project.label_config)
     except (bbox.Incomparable, TypeError, KeyError, ValueError) as exc:
         raise ValidationError({'detail': 'Unsupported bbox source or configuration.'}) from exc
+    exclusive_claim = require_exclusive_source(task, reference)
     attempt = bbox_attempts.reserve(task, principal, original_hash, config_hash)
     try:
         return capture_and_publish(task, principal, project, reference, field, source_field,
-                                   original_hash, config_hash, attempt)
-    except Exception:
+                                   original_hash, config_hash, attempt, exclusive_claim)
+    except Exception as exc:
         try:
             bbox_attempts.reconcile(attempt.token, abandon_active=True)
         except Exception:
             # Unknown commit or unavailable storage: retain the durable attempt
             # so a later reconciliation can safely recheck it.
             logger.warning('Unable to reconcile bbox capture attempt', exc_info=True)
+        if isinstance(exc, IntegrityError):
+            duplicate = BboxMediaPin.objects.filter(source__reference=reference).exclude(task=task).exists()
+            if not duplicate and not reference.startswith(('gs://', 's3://')):
+                try:
+                    upload, _ = upload_for(reference, project)
+                    duplicate = BboxMediaPin.objects.filter(source__kind='managed-upload',
+                                                             source__upload_id=upload.pk).exclude(task=task).exists()
+                except Exception:
+                    pass
+            if duplicate:
+                raise ValidationError({'detail': 'Migrate shared images to an independent object before capture.'}) from exc
         raise
 
 
-def capture_and_publish(task, principal, project, reference, field, source_field, original_hash, config_hash, attempt):
+def capture_and_publish(task, principal, project, reference, field, source_field, original_hash, config_hash, attempt,
+                        exclusive_claim):
     if reference.startswith(('gs://', 's3://')):
         storage, object_key, config_fingerprint = object_source(task, reference)
         if reference.startswith('gs://'):
@@ -129,6 +171,7 @@ def capture_and_publish(task, principal, project, reference, field, source_field
     else:
         content, image, upload_id = bbox_media.capture_managed_upload(reference, project)
         source = {'kind': 'managed-upload', 'upload_id': upload_id, 'reference': reference}
+    source['exclusive_attestation'] = exclusive_claim
     token = attempt.token
     key, storage_id = bbox_storage.publish(token, content, expected_binding=attempt.storage_binding)
     # A failed/ambiguous transaction retains the candidate for reconciliation.
@@ -137,6 +180,8 @@ def capture_and_publish(task, principal, project, reference, field, source_field
         authorization.require(authorization.can_manage_project(principal, project), 'Manager role is required.')
         task = Task.objects.select_for_update().get(pk=task.pk, project=project)
         attempt = BboxMediaAttempt.objects.select_for_update().get(pk=token)
+        if require_exclusive_source(task, reference) != exclusive_claim:
+            raise ValidationError({'detail': 'Exclusive-source attestation changed before pinning.'})
         if (bbox.digest(task.data) != original_hash or bbox.digest(project.label_config) != config_hash
                 or TaskAssignment.objects.filter(task=task).exists() or task.annotations.exists()
                 or task.drafts.exists() or BboxMediaPin.objects.filter(task=task).exists()

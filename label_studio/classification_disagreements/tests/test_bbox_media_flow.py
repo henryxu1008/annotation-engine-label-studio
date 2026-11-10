@@ -1,6 +1,7 @@
 import base64
+import json
 from datetime import timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 from uuid import uuid4
 
 import pytest
@@ -11,12 +12,14 @@ from classification_disagreements import (
     bbox_batches,
     bbox_compare,
     bbox_media,
+    bbox_prepare,
     bbox_quality,
     bbox_storage,
 )
 from classification_disagreements.models import BboxArbitrationDecision, BboxArbitrationTask, BboxSubmissionProof
 from data_import.models import FileUpload
 from django.core.files.base import ContentFile
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from io_storages.gcs.models import GCSImportStorage, GCSImportStorageLink
 from io_storages.localfiles.models import LocalFilesImportStorage
@@ -66,12 +69,42 @@ def test_managed_upload_editor_and_submission_are_bound(settings, tmp_path, monk
     local_url = '/data/local-files/'
     assert client.get(local_url, {'d': upload.file.name}).status_code == 200
     assert client.post(prepare_path, {'actor_id': annotator.pk}, format='json').status_code == 400
+    assert client.post(prepare_path, {'exclusive_attestation': '0' * 64}, format='json').status_code == 400
+    assert client.post(prepare_path, {}, format='json').status_code == 400
+    description = StringIO()
+    call_command('describe_bbox_source', task=task.pk, stdout=description)
+    described = json.loads(description.getvalue())
+    assert described['exclusive_source_claim'] == bbox_prepare.exclusive_source_claim(task, upload.url)
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = {f'{org.pk}:{project.pk}': {str(task.pk): '0' * 64}}
+    assert client.post(prepare_path, {}, format='json').status_code == 400
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = {
+        f'{org.pk}:{project.pk}': {str(task.pk): bbox_prepare.exclusive_source_claim(task, upload.url)}}
+    original_claims = settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS
+    capture_upload = bbox_media.capture_managed_upload
+
+    def revoke_during_capture(*args):
+        captured = capture_upload(*args)
+        settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = {}
+        return captured
+
+    monkeypatch.setattr(bbox_media, 'capture_managed_upload', revoke_during_capture)
+    assert client.post(prepare_path, {}, format='json').status_code == 400
+    assert not hasattr(task, 'bbox_media_pin')
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = original_claims
+    monkeypatch.setattr(bbox_media, 'capture_managed_upload', capture_upload)
     response = client.post(prepare_path, {}, format='json')
     assert response.status_code == 201, response.content
     replay = client.post(prepare_path, {}, format='json')
     assert replay.status_code == 201 and replay.json()['media_token'] == response.json()['media_token']
+    shared = TaskFactory(project=project, data={'image': upload.url})
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS[f'{org.pk}:{project.pk}'][str(shared.pk)] = (
+        bbox_prepare.exclusive_source_claim(shared, upload.url))
+    refused = client.post(f'/api/projects/{project.pk}/bbox-media/tasks/{shared.pk}/prepare/', {}, format='json')
+    assert refused.status_code == 400 and not hasattr(shared, 'bbox_media_pin')
     task.refresh_from_db()
     url = task.data['image']
+    assert task.bbox_media_pin.source['exclusive_attestation'] == settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS[
+        f'{org.pk}:{project.pk}'][str(task.pk)]
     assert '/bbox-media/' in url and upload.url != url
     assert client.get(upload.url).status_code == 404
     assert client.get(unrelated.url).status_code == 200
@@ -352,6 +385,11 @@ def test_task_linked_gcs_capture_pins_generation(settings, tmp_path, monkeypatch
     path = f'/api/projects/{project.pk}/bbox-media/tasks/{task.pk}/prepare/'
     assert client.post(path, {}, format='json').status_code == 400
     GCSImportStorageLink.objects.create(storage=storage, task=task, key='images/example.png')
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = {
+        f'{org.pk}:{project.pk}': {str(task.pk): bbox_prepare.exclusive_source_claim(task, task.data[settings.DATA_UNDEFINED_NAME])}}
+    GCSImportStorage.objects.filter(pk=storage.pk).update(prefix='')
+    assert client.post(path, {}, format='json').status_code == 400
+    GCSImportStorage.objects.filter(pk=storage.pk).update(prefix='images')
     capture = bbox_media.capture_gcs
 
     def changed_storage(blob):
@@ -420,6 +458,8 @@ def test_task_linked_s3_capture_uses_single_bounded_response(settings, tmp_path,
     storage = S3ImportStorage.objects.create(project=project, bucket='test-bucket', prefix='images')
     task = TaskFactory(project=project, data={'image': 's3://test-bucket/images/example.png'})
     S3ImportStorageLink.objects.create(storage=storage, task=task, key='images/example.png')
+    settings.ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS = {
+        f'{org.pk}:{project.pk}': {str(task.pk): bbox_prepare.exclusive_source_claim(task, task.data['image'])}}
     client = APIClient()
     client.force_authenticate(user=org.created_by)
     response = client.post(f'/api/projects/{project.pk}/bbox-media/tasks/{task.pk}/prepare/', {}, format='json')

@@ -73,7 +73,9 @@ class Command(BaseCommand):
             upload = FileUpload.objects.create(project=project, user=manager,
                                                file=ContentFile(image.getvalue(), name='bbox.png'))
             task = Task.objects.create(project=project, data={'image': upload.url})
-            with override_settings(ANNOTATION_BBOX_MEDIA_ENABLED=True, ANNOTATION_BBOX_MEDIA_PROJECTS=media_modes):
+            claims = {key: {str(task.pk): bbox_prepare.exclusive_source_claim(task, upload.url)}}
+            with override_settings(ANNOTATION_BBOX_MEDIA_ENABLED=True, ANNOTATION_BBOX_MEDIA_PROJECTS=media_modes,
+                                   ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS=claims):
                 bbox_prepare.prepare_managed(task, local_principal(manager))
                 task.refresh_from_db()
                 sources, assignments = {}, {}

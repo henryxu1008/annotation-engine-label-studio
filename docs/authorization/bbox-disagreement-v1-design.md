@@ -61,6 +61,26 @@ also query JSON source evidence on media reads; index and load-test the lookup
 before enabling it at scale. Do not claim that blocking the current server routes
 revokes earlier third-party credentials, cached content or already-issued URLs.
 
+### Exclusive-source admission
+
+Before preparing a task, migrate any shared image to an independent object and
+verify the storage access policy and outstanding signed URLs. A trusted operator
+then runs `python label_studio/manage.py describe_bbox_source --task <id>` and
+places its project key, task ID and claim in the server-side JSON setting
+`ANNOTATION_BBOX_EXCLUSIVE_SOURCE_ATTESTATIONS`, for example
+`{"<org>:<project>": {"<task>": "<claim>"}}`. Preparation defaults to deny
+without a matching claim, binds it to the exact original reference and its
+server-side upload or object-storage configuration, and stores it in the
+immutable pin. It also refuses a known existing pin for the same source;
+database uniqueness prevents two concurrent pins for the same known object or
+upload. A changed source requires a new operator verification and claim.
+
+The claim is an operator attestation, not an automated proof that no other
+object alias, external principal or previously issued URL exists. Operators must
+complete migration and verify isolation before configuring it. Routes that
+cannot identify a unique task still deny the mutable original, including if a
+new task later begins referencing it. The scope remains opt-in and default-off.
+
 ### Candidate reconciliation deployment requirement
 
 The cleanup command is a bounded one-shot sweep. The optional systemd timer in
