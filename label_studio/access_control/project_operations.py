@@ -31,6 +31,7 @@ RECORD_SECOND_REVIEW_FOLLOWUP = 'record_second_review_followup'
 EXPORT_REVIEW_AUDIT = 'export_review_audit'
 PROVIDE_REVIEW_CONFIDENCE = 'provide_review_confidence'
 ORGANIZE_CLASSIFICATION = 'organize_classification'
+ORGANIZE_CLASSIFICATION_GOLD = 'organize_classification_gold'
 ORGANIZE_NER = 'organize_ner'
 ORGANIZE_BBOX = 'organize_bbox'
 ORGANIZE_BBOX_ARBITRATION = 'organize_bbox_arbitration'
@@ -64,6 +65,8 @@ class LegacyProjectOperationProvider:
             operations = operations | {ORGANIZE_REVIEW}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_CLASSIFICATION}
+        if getattr(settings, 'ANNOTATION_CLASSIFICATION_GOLD_ENABLED', False):
+            operations = operations | {ORGANIZE_CLASSIFICATION_GOLD}
         if getattr(settings, 'ANNOTATION_FIELD_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_FIELD}
         if getattr(settings, 'ANNOTATION_NER_BATCHES_ENABLED', False):

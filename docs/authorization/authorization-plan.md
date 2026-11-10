@@ -1747,6 +1747,10 @@ across projects; equal S3 bucket/key names on distinct endpoints can be blocked,
 and existing signed URLs cannot be revoked. The working design and incomplete
 acceptance gates are in `bbox-disagreement-v1-design.md`.
 
+The opt-in manager-only classification gold evidence boundary, its operation
+policy, hash-bound revision selection, and explicit exclusion of blind delivery
+are documented in `classification-gold-v1.md` (#82).
+
 Local bbox quality and arbitration evidence is separate from Host review and
 release authority and is gated by explicit `fork_review` configuration. Do not
 enable the experimental endpoints until their UI, replay, permissions, lifecycle,
