@@ -14,6 +14,8 @@ def pinned_upload(upload):
 
     if connection.vendor not in ('postgresql', 'sqlite'):
         return BboxMediaPin.objects.exists()
+    if BboxMediaPin.objects.filter(source__kind='managed-upload', source__upload_name=upload.file.name).exists():
+        return True
     uploads = list(FileUpload.objects.filter(file=upload.file.name).values_list('pk', flat=True)[:2])
     if len(uploads) != 1:
         return BboxMediaPin.objects.filter(source__kind='managed-upload').exists()
@@ -30,6 +32,8 @@ def pinned_local_path(path):
         relative = Path(path).resolve(strict=True).relative_to(Path(settings.MEDIA_ROOT).resolve())
     except (OSError, RuntimeError, ValueError):
         return False
+    if BboxMediaPin.objects.filter(source__kind='managed-upload', source__upload_name=relative.as_posix()).exists():
+        return True
     uploads = list(FileUpload.objects.filter(file=relative.as_posix()).values_list('pk', flat=True)[:2])
     if len(uploads) > 1:
         # Multiple uploads with one path cannot safely be attributed to a pin.

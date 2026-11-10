@@ -21,6 +21,8 @@ from tasks.tests.factories import TaskFactory
      {'kind': 'managed-upload', 'upload_id': 123, 'reference': '/data/upload/alias.png'}),
     ({'kind': 'managed-upload', 'upload_id': 123, 'reference': '/data/upload/shared.png'},
      {'kind': 'managed-upload', 'upload_id': 456, 'reference': '/data/upload/shared.png'}),
+    ({'kind': 'managed-upload', 'upload_id': 123, 'reference': '/data/upload/one.png', 'upload_name': 'upload/same.png'},
+     {'kind': 'managed-upload', 'upload_id': 456, 'reference': '/data/upload/two.png', 'upload_name': 'upload/same.png'}),
 ])
 def test_duplicate_source_pin_is_rejected_by_database(source, other_source):
     def values(current_source):

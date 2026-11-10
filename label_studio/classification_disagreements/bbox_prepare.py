@@ -46,8 +46,15 @@ def require_exclusive_source(task, reference):
     project_claims = claims.get(key) if isinstance(claims, dict) else None
     supplied = project_claims.get(str(task.pk)) if isinstance(project_claims, dict) else None
     expected = exclusive_source_claim(task, reference)
+    pins = BboxMediaPin.objects.exclude(task=task)
+    duplicate = pins.filter(source__reference=reference).exists()
+    if not duplicate and not reference.startswith(('gs://', 's3://')):
+        upload, _ = upload_for(reference, task.project)
+        uploads = pins.filter(source__kind='managed-upload')
+        duplicate = (uploads.filter(source__upload_id=upload.pk).exists()
+                     or uploads.filter(source__upload_name=upload.file.name).exists())
     if (not isinstance(supplied, str) or not constant_time_compare(supplied, expected)
-            or BboxMediaPin.objects.filter(source__reference=reference).exclude(task=task).exists()):
+            or duplicate):
         raise ValidationError({'detail': 'Migrate shared images to an independent object and configure the exclusive-source attestation before capture.'})
     return expected
 
@@ -145,8 +152,9 @@ def prepare_managed(task, principal):
             if not duplicate and not reference.startswith(('gs://', 's3://')):
                 try:
                     upload, _ = upload_for(reference, project)
-                    duplicate = BboxMediaPin.objects.filter(source__kind='managed-upload',
-                                                             source__upload_id=upload.pk).exclude(task=task).exists()
+                    pins = BboxMediaPin.objects.filter(source__kind='managed-upload').exclude(task=task)
+                    duplicate = (pins.filter(source__upload_id=upload.pk).exists()
+                                 or pins.filter(source__upload_name=upload.file.name).exists())
                 except Exception:
                     pass
             if duplicate:
@@ -170,7 +178,11 @@ def capture_and_publish(task, principal, project, reference, field, source_field
                       'config_fingerprint': config_fingerprint}
     else:
         content, image, upload_id = bbox_media.capture_managed_upload(reference, project)
-        source = {'kind': 'managed-upload', 'upload_id': upload_id, 'reference': reference}
+        upload, _ = upload_for(reference, project)
+        if upload.pk != upload_id:
+            raise ValidationError({'detail': 'Managed upload changed during capture.'})
+        source = {'kind': 'managed-upload', 'upload_id': upload_id, 'upload_name': upload.file.name,
+                  'reference': reference}
     source['exclusive_attestation'] = exclusive_claim
     token = attempt.token
     key, storage_id = bbox_storage.publish(token, content, expected_binding=attempt.storage_binding)

@@ -111,6 +111,13 @@ def test_managed_upload_editor_and_submission_are_bound(settings, tmp_path, monk
     assert client.get(upload.url, HTTP_RANGE='bytes=0-1').status_code == 404
     assert client.get('/storage-data/uploaded/', {'filepath': upload.file.name}).status_code == 404
     assert client.get(local_url, {'d': upload.file.name}).status_code == 404
+    old_upload_name = upload.file.name
+    FileUpload.objects.filter(pk=upload.pk).update(file='upload/rebound-away.png')
+    assert client.get(local_url, {'d': old_upload_name}).status_code == 404
+    FileUpload.objects.create(project=project, user=org.created_by, file=old_upload_name)
+    assert client.get(upload.url).status_code == 404
+    assert client.get('/storage-data/uploaded/', {'filepath': old_upload_name}).status_code == 404
+    FileUpload.objects.filter(pk=upload.pk).update(file=old_upload_name)
     assignment = TaskAssignment.objects.create(task=task, project=project, assignee=annotator)
     client.force_authenticate(user=annotator)
     task_response = client.get(f'/api/tasks/{task.pk}/?resolve_uri=false')

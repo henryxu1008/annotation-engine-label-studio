@@ -75,6 +75,11 @@ immutable pin. It also refuses a known existing pin for the same source;
 database uniqueness prevents two concurrent pins for the same known object or
 upload. A changed source requires a new operator verification and claim.
 
+For managed uploads the pin also records the original storage path. Legacy
+upload and LocalFiles reads use that frozen path even if an upload record is
+later deleted, recreated or rebound, so those changes cannot expose the mutable
+original through the old name.
+
 The claim is an operator attestation, not an automated proof that no other
 object alias, external principal or previously issued URL exists. Operators must
 complete migration and verify isolation before configuring it. Routes that
