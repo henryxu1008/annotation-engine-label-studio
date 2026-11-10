@@ -76,7 +76,7 @@ class Command(BaseCommand):
             with override_settings(ANNOTATION_BBOX_MEDIA_ENABLED=True, ANNOTATION_BBOX_MEDIA_PROJECTS=media_modes):
                 bbox_prepare.prepare_managed(task, local_principal(manager))
                 task.refresh_from_db()
-                sources = {}
+                sources, assignments = {}, {}
                 for role, x in (('a', 0), ('b', 60)):
                     region = {'id': 'box', 'type': 'rectanglelabels', 'from_name': 'box', 'to_name': 'img',
                               'original_width': 100, 'original_height': 100, 'image_rotation': 0,
@@ -84,8 +84,9 @@ class Command(BaseCommand):
                                         'rectanglelabels': ['Car']}}
                     annotation = Annotation.objects.create(task=task, project=project, completed_by=users[role], result=[region])
                     assignment = TaskAssignment.objects.create(task=task, project=project, assignee=users[role], annotation=annotation)
+                    assignments[role] = assignment.pk
                     sources[role] = create_submission(assignment=assignment, annotation=annotation, actor=users[role]).pk
-            projects[locale] = {'id': project.pk, 'task': task.pk, 'sources': sources}
+            projects[locale] = {'id': project.pk, 'task': task.pk, 'sources': sources, 'assignments': assignments}
         value = {'schema': 'bbox-e2e/v1', 'password': password, 'organization': org.pk,
                  'users': {key: {'id': value.pk, 'email': value.email} for key, value in users.items()},
                  'projects': projects, 'media_modes': media_modes, 'quality_modes': quality_modes}

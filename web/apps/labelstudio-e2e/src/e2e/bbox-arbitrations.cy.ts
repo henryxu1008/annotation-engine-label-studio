@@ -48,6 +48,11 @@ describe('frozen bbox batch and arbitration', () => {
       cy.get('[data-testid="open-bbox-arbitrations"]').should('not.exist');
       cy.then(() => cy.request({ url: `/api/projects/${scope.id}/bbox-arbitrations/${arbitration}/`, failOnStatusCode: false }))
         .its('status').should('be.oneOf', [403, 404]);
+      cy.visit(`/projects/${scope.id}/data?task=${scope.task}&assignment=${scope.assignments.a}`);
+      cy.get('#label-studio-dm img[alt="image"]', { timeout: 30000 }).should(($image) => {
+        expect(($image[0] as HTMLImageElement).naturalWidth).to.eq(100);
+        expect(($image[0] as HTMLImageElement).src).to.contain('/bbox-media/');
+      });
     });
   }
 });
