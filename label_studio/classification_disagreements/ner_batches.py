@@ -112,7 +112,8 @@ def scoped_sources(project, ids):
     return Submission.objects.filter(pk__in=ids, assignment__project=project, assignment__task__project=project)
 
 
-def build_plan(project, ids, *, lock=False):
+def collect_inputs(project, ids, *, lock=False):
+    """Select bounded active cohorts and their latest validated revisions."""
     ids = positive_ids(ids)
     tasks = Task.objects.filter(pk__in=ids).only('pk', 'project_id').order_by('pk')
     if lock:
@@ -143,6 +144,11 @@ def build_plan(project, ids, *, lock=False):
     if {s.pk for s in sources} != set(selected):
         fail('SOURCE_CHANGED')
     by_assignment = {s.assignment_id: s for s in sources}
+    return ids, grouped, by_assignment
+
+
+def build_plan(project, ids, *, lock=False):
+    ids, grouped, by_assignment = collect_inputs(project, ids, lock=lock)
     items, prepared = [], {}
     for task_id in ids:
         cohort, rows, reason = [], [], None
@@ -251,9 +257,13 @@ def checked(batch, project):
     return batch
 
 
+def can_view_item(item, actor, role):
+    return role == 'manager' or (role == 'reviewer' and not any(
+        e['assignee_id'] == actor.pk or (e['source'] or {}).get('submitter_id') == actor.pk for e in item['cohort']))
+
+
 def visible_items(batch, actor, role):
-    return [item for item in batch.manifest['tasks'] if role == 'manager' or not any(
-        e['assignee_id'] == actor.pk or (e['source'] or {}).get('submitter_id') == actor.pk for e in item['cohort'])]
+    return [item for item in batch.manifest['tasks'] if can_view_item(item, actor, role)]
 
 
 def visible_batches(project, actor, role):

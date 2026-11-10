@@ -243,7 +243,8 @@ def private_root():
     return root
 
 
-def storage_binding(*, root=None, create=False):
+def storage_binding(*, root=None, create=False, domain='review-audit-storage/v1',
+                    marker_name='.review-audit-storage-v1'):
     """Bind workers to the private storage namespace captured by the web process.
 
     The random marker lives on the shared filesystem; only capture may create
@@ -251,7 +252,7 @@ def storage_binding(*, root=None, create=False):
     of the public package and only a domain-separated digest is frozen.
     """
     root = root or private_root()
-    marker = root / '.review-audit-storage-v1'
+    marker = root / marker_name
     try:
         no_links(marker)
         if create:
@@ -283,7 +284,7 @@ def storage_binding(*, root=None, create=False):
         # A copied marker must not make two separate directories equivalent.
         # Shared volumes must expose stable directory identities to both
         # processes; a mismatched mount fails closed instead of publishing.
-        return c.digest(c.exact({'domain': 'review-audit-storage/v1', 'marker': value.decode('ascii'),
+        return c.digest(c.exact({'domain': domain, 'marker': value.decode('ascii'),
                                  'path': os.path.normcase(str(root.resolve())),
                                  'device': root_info.st_dev, 'inode': root_info.st_ino}))
     except FileNotFoundError:

@@ -27,6 +27,9 @@ import { FieldDisagreement, FieldEntry, FieldTitle } from "./FieldDisagreement";
 import { FieldBatches, FieldBatchEntry, FieldBatchTitle } from "./FieldBatches";
 import { NerDisagreement, NerEntry, NerTitle } from "./NerDisagreement";
 import { NerBatches, NerBatchEntry, NerBatchTitle } from "./NerBatches";
+import { BboxBatchEntry, BboxBatchTitle } from "./BboxBatches";
+import { BboxBatchWorkspace } from "./BboxWorkspaces";
+import { BboxArbitrationEntry, BboxArbitrationTitle, BboxArbitrations } from "./BboxArbitrations";
 import { NerArbitrations, NerArbitrationEntry, NerArbitrationTitle } from "./NerArbitrations";
 import { FieldArbitrations, FieldArbitrationEntry, FieldArbitrationTitle } from "./FieldArbitrations";
 import { ClassificationBatches, ClassificationBatchEntry, ClassificationBatchTitle } from "./ClassificationBatches";
@@ -511,6 +514,26 @@ DataManagerPage.context = ({ dmRef }) => {
       style: { width: 1100, maxWidth: "calc(100vw - 32px)" } });
   };
 
+  const openBboxBatches = () => {
+    if (!project) return;
+    const trigger = document.activeElement;
+    modal({ title: <BboxBatchTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <BboxBatchWorkspace projectId={project.id} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" } });
+  };
+
+  const openBboxArbitrations = () => {
+    if (!project) return;
+    const trigger = document.activeElement;
+    modal({ title: <BboxArbitrationTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <BboxArbitrations projectId={project.id} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 1100, maxWidth: "calc(100vw - 32px)" } });
+  };
+
   const openFieldBatches = () => {
     if (!project) return;
     const trigger = document.activeElement;
@@ -643,6 +666,8 @@ DataManagerPage.context = ({ dmRef }) => {
       <NerEntry projectId={project.id} onOpen={openNerDisagreement} disabled={!localePreference.ready} />
       <FieldBatchEntry projectId={project.id} onOpen={openFieldBatches} disabled={!localePreference.ready} />
       <NerBatchEntry projectId={project.id} onOpen={openNerBatches} disabled={!localePreference.ready} />
+      <BboxBatchEntry projectId={project.id} onOpen={openBboxBatches} disabled={!localePreference.ready} />
+      <BboxArbitrationEntry projectId={project.id} onOpen={openBboxArbitrations} disabled={!localePreference.ready} />
       <NerArbitrationEntry projectId={project.id} onOpen={openNerArbitrations} disabled={!localePreference.ready} />
       <FieldArbitrationEntry projectId={project.id} onOpen={openFieldArbitrations} disabled={!localePreference.ready} />
       <ClassificationBatchEntry projectId={project.id} onOpen={openClassificationBatches} disabled={!localePreference.ready} />

@@ -458,6 +458,13 @@ class Task(TaskMixin, FsmHistoryStateModel):
 
             # try resolve URLs via storage associated with that task
             for field in task_data:
+                value = task_data[field]
+                if isinstance(value, str) and '/bbox-media/' in value:
+                    from classification_disagreements.models import BboxMediaPin
+
+                    pin = BboxMediaPin.objects.filter(task_id=self.pk, field=field).first()
+                    if pin and value == reverse('projects:api:bbox-media', kwargs={'pk': project.pk, 'token': pin.token}):
+                        continue
                 # file saved in django file storage
                 prepared_filename = self.prepare_filename(task_data[field])
                 if settings.CLOUD_FILE_STORAGE_ENABLED and self.is_upload_file(prepared_filename):

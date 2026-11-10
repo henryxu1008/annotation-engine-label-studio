@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile Label Studio frozen bbox media candidates
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/label-studio/bbox-reconcile.env
+ExecStart=/usr/bin/docker compose --project-directory ${BBOX_COMPOSE_DIRECTORY} --file ${BBOX_COMPOSE_FILE} run --rm --no-deps -T app python3 /label-studio/label_studio/manage.py reconcile_bbox_media --limit 50
+TimeoutStartSec=240

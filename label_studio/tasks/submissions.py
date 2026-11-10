@@ -92,6 +92,15 @@ def create_submission(*, assignment, annotation, actor):
         submitted_by=actor,
     )
 
+    # A pinned task must bind this exact revision to its verified media in the
+    # same transaction. Tasks without a pin retain their existing behavior.
+    from classification_disagreements.models import BboxMediaPin
+
+    if BboxMediaPin.objects.filter(task=task).exists():
+        from classification_disagreements.bbox_evidence import bind_submission
+
+        bind_submission(submission, task=task, project=project)
+
     # Bump the optimistic-lock token so another tab holding the pre-submit
     # assignment version cannot overwrite this newly submitted revision.
     assignment.version += 1
