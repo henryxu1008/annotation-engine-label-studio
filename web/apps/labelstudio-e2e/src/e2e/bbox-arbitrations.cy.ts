@@ -48,10 +48,15 @@ describe('frozen bbox batch and arbitration', () => {
       cy.get('[data-testid="open-bbox-arbitrations"]').should('not.exist');
       cy.then(() => cy.request({ url: `/api/projects/${scope.id}/bbox-arbitrations/${arbitration}/`, failOnStatusCode: false }))
         .its('status').should('be.oneOf', [403, 404]);
+      cy.intercept({ method: 'GET', pathname: new RegExp(`/api/projects/${scope.id}/bbox-media/[^/]+/?$`) }).as('frozenEditorImage');
       cy.visit(`/projects/${scope.id}/data?task=${scope.task}&assignment=${scope.assignments.a}`);
+      cy.wait('@frozenEditorImage').then(({ response }) => {
+        expect(response?.statusCode).to.eq(200);
+        expect(response?.headers['content-type']).to.contain('image/png');
+        expect(response?.headers['cache-control']).to.contain('no-store');
+      });
       cy.get('#label-studio-dm img[alt="image"]', { timeout: 30000 }).should(($image) => {
         expect(($image[0] as HTMLImageElement).naturalWidth).to.eq(100);
-        expect(($image[0] as HTMLImageElement).src).to.contain('/bbox-media/');
       });
     });
   }
