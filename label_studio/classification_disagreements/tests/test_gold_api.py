@@ -148,6 +148,23 @@ class TestGoldAPI(APITestCase):
         assert self.client.get(self.base + str(response.data['id']) + '/').status_code == 404
         assert self.create(body, key).status_code == 404
 
+    def test_existing_task_and_export_routes_do_not_expose_gold_evidence(self):
+        self.set_answer(self.second, 'Negative')
+        ref = self.create({'kind': 'reference', 'submission_id': self.second.pk})
+        assert ref.status_code == 201
+        marker = ref.data['manifest_hash'].encode()
+        task = self.first.assignment.task_id
+        self.client.force_authenticate(self.worker)
+        for url in (f'/api/tasks/{task}/', f'/api/tasks/?project={self.project.pk}',
+                    f'/api/tasks/{task}/annotations/', f'/api/projects/{self.project.pk}/export?exportType=JSON',
+                    '/data/local-files/?d=synthetic-missing-gold.txt', '/data/upload/0/synthetic-missing-gold.txt'):
+            response = self.client.get(url)
+            assert response.status_code in (200, 400, 403, 404, 405), (url, response.status_code)
+            assert marker not in response.content
+            assert b'classification-gold-evidence/v1' not in response.content
+            if url.startswith('/api/tasks/'):
+                assert b'Negative' not in response.content
+
     def test_database_rejects_modifying_evidence(self):
         ref = self.reference()
         with self.assertRaises(DatabaseError), transaction.atomic():
