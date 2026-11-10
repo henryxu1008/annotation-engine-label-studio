@@ -4,8 +4,12 @@ from . import batch_api
 from .api import CapabilityAPI, ReportAPI, SourcesAPI
 from .partial_api import PartialAPI
 from .overview_api import OverviewAPI
+from .gold_api import GoldAPI, GoldSourcesAPI
 
 urlpatterns = [
+    path('gold/', GoldAPI.as_view()),
+    path('gold/tasks/<int:task_id>/sources/', GoldSourcesAPI.as_view()),
+    path('gold/<int:evidence_id>/', GoldAPI.as_view()),
     path('batches/<int:batch_id>/quality-overview/', OverviewAPI.as_view()),
     path('tasks/<int:task_id>/partial-match/', PartialAPI.as_view()),
     path('batches/<int:batch_id>/items/<int:task_id>/partial-match/', PartialAPI.as_view()),

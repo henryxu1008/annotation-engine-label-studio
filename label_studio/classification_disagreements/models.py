@@ -5,6 +5,28 @@ from django.db import models
 from django.utils import timezone
 
 
+class ClassificationGoldEvidence(models.Model):
+    """Append-only manager-curated reference or exact-revision score."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='classification_gold_evidence')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    actor_id_frozen = models.PositiveBigIntegerField()
+    principal = models.CharField(max_length=512)
+    principal_source = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+    kind = models.CharField(max_length=12)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    manifest = models.JSONField()
+    manifest_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='classification_gold_project_key_unique'),
+            models.CheckConstraint(condition=models.Q(kind__in=['reference', 'score']), name='classification_gold_kind_valid'),
+        ]
+
+
 class ClassificationBatch(models.Model):
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='classification_batches')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)

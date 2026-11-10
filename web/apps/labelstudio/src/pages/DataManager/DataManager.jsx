@@ -33,6 +33,7 @@ import { BboxArbitrationEntry, BboxArbitrationTitle, BboxArbitrations } from "./
 import { NerArbitrations, NerArbitrationEntry, NerArbitrationTitle } from "./NerArbitrations";
 import { FieldArbitrations, FieldArbitrationEntry, FieldArbitrationTitle } from "./FieldArbitrations";
 import { ClassificationBatches, ClassificationBatchEntry, ClassificationBatchTitle } from "./ClassificationBatches";
+import { ClassificationGold, ClassificationGoldEntry, ClassificationGoldTitle } from "./ClassificationGold";
 import { ClassificationArbitrations, ClassificationArbitrationEntry, ClassificationArbitrationTitle } from "./ClassificationArbitrations";
 import { SubmissionReleaseWorkspace } from "./SubmissionReleaseWorkspace";
 import { isDisplayLocale, useLocalePreference, useLocaleTranslation } from "@humansignal/i18n";
@@ -584,6 +585,17 @@ DataManagerPage.context = ({ dmRef }) => {
     });
   };
 
+  const openClassificationGold = () => {
+    const trigger = document.activeElement;
+    modal({
+      title: <ClassificationGoldTitle />,
+      header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
+      body: <ClassificationGold projectId={project.id} />,
+      onHidden: () => { if (trigger?.isConnected) trigger.focus(); },
+      style: { width: 960, maxWidth: "calc(100vw - 32px)" },
+    });
+  };
+
   const openMyWork = () => {
     if (!localePreference.ready) return;
     const dialog = modal({
@@ -671,6 +683,7 @@ DataManagerPage.context = ({ dmRef }) => {
       <NerArbitrationEntry projectId={project.id} onOpen={openNerArbitrations} disabled={!localePreference.ready} />
       <FieldArbitrationEntry projectId={project.id} onOpen={openFieldArbitrations} disabled={!localePreference.ready} />
       <ClassificationBatchEntry projectId={project.id} onOpen={openClassificationBatches} disabled={!localePreference.ready} />
+      <ClassificationGoldEntry projectId={project.id} onOpen={openClassificationGold} disabled={!localePreference.ready} />
       <ClassificationArbitrationEntry projectId={project.id} onOpen={() => openArbitrations()} disabled={!localePreference.ready} />
       {canManageAssignments && (
         <Button
