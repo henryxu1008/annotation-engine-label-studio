@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule Label Studio bbox candidate reconciliation
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=label-studio-bbox-reconcile.service
+
+[Install]
+WantedBy=timers.target

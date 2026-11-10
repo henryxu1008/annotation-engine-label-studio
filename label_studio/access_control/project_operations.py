@@ -32,6 +32,9 @@ EXPORT_REVIEW_AUDIT = 'export_review_audit'
 PROVIDE_REVIEW_CONFIDENCE = 'provide_review_confidence'
 ORGANIZE_CLASSIFICATION = 'organize_classification'
 ORGANIZE_NER = 'organize_ner'
+ORGANIZE_BBOX = 'organize_bbox'
+ORGANIZE_BBOX_ARBITRATION = 'organize_bbox_arbitration'
+ARBITRATE_BBOX = 'arbitrate_bbox'
 ORGANIZE_FIELD = 'organize_field'
 ORGANIZE_ARBITRATION = 'organize_arbitration'
 ARBITRATE = 'arbitrate'
@@ -65,6 +68,10 @@ class LegacyProjectOperationProvider:
             operations = operations | {ORGANIZE_FIELD}
         if getattr(settings, 'ANNOTATION_NER_BATCHES_ENABLED', False):
             operations = operations | {ORGANIZE_NER}
+        if getattr(settings, 'ANNOTATION_BBOX_QUALITY_ENABLED', False):
+            operations = operations | {ORGANIZE_BBOX}
+        if getattr(settings, 'ANNOTATION_BBOX_ARBITRATION_ENABLED', False):
+            operations = operations | {ORGANIZE_BBOX_ARBITRATION, ARBITRATE_BBOX}
         if getattr(settings, 'ANNOTATION_CLASSIFICATION_ARBITRATION_ENABLED', False):
             operations = operations | {ORGANIZE_ARBITRATION, ARBITRATE}
         if getattr(settings, 'ANNOTATION_FIELD_ARBITRATION_ENABLED', False):

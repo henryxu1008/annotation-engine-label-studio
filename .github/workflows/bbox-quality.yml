@@ -1,0 +1,136 @@
+name: Frozen Bbox Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bbox-quality-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  TEST_ENVIRONMENT: "1"
+  SENTRY_DSN: ""
+  POETRY_VERSION: 2.3.2
+  DJANGO_SETTINGS_MODULE: core.settings.label_studio
+  DJANGO_DB: postgresql
+  POSTGRE_HOST: localhost
+  POSTGRE_PORT: "5432"
+  POSTGRE_NAME: bbox_quality
+  POSTGRE_USER: postgres
+  POSTGRE_PASSWORD: bbox-ci-synthetic-only
+  APPROVED_EXPORT_ROOT: /tmp/bbox81-ci-private
+  LABEL_STUDIO_BASE_DATA_DIR: /tmp/bbox81-ci-data
+  DEBUG: "true"
+  HOSTNAME: http://localhost:8080
+  FRONTEND_HOSTNAME: http://localhost:8080
+  FRONTEND_HMR: "false"
+  COLLECT_ANALYTICS: "false"
+  LATEST_VERSION_CHECK: "false"
+  SENTRY_RATE: "0"
+  JSON_LOG: "0"
+
+jobs:
+  bbox-quality:
+    name: PostgreSQL and bilingual bbox browser journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: bbox-ci-synthetic-only
+          POSTGRES_DB: bbox_quality
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bbox_quality"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          test -n "$(fc-list :lang=zh-cn family)"
+      - name: Install backend dependencies
+        run: poetry install --with test
+      - name: Verify reconciliation timer definition
+        run: |
+          sudo install -D -m 0644 deploy/bbox-reconcile/bbox-reconcile.env.example /etc/label-studio/bbox-reconcile.env
+          systemd-analyze verify deploy/bbox-reconcile/label-studio-bbox-reconcile.service deploy/bbox-reconcile/label-studio-bbox-reconcile.timer
+          systemd-analyze calendar '*:0/5'
+      - name: Test backend and shared arbitration regressions
+        working-directory: label_studio
+        run: |
+          poetry run python core/version.py
+          poetry run pytest -q classification_disagreements/tests/test_bbox*.py classification_disagreements/tests/test_ner_batches.py classification_disagreements/tests/test_ner_arbitration.py
+      - name: Prepare synthetic database
+        run: |
+          poetry run python label_studio/core/version.py
+          poetry run python label_studio/manage.py compilemessages -l en_US -l zh_Hans
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py collectstatic --noinput
+          poetry run python label_studio/manage.py seed_bbox_e2e
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Install and test frontend
+        working-directory: web
+        run: |
+          yarn install --frozen-lockfile
+          NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
+            apps/labelstudio/src/pages/DataManager/BboxBatches.test.jsx \
+            apps/labelstudio/src/pages/DataManager/BboxArbitrations.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationArbitrations.test.jsx
+          yarn i18n:catalogs
+          yarn i18n:literals
+          yarn ls:build
+      - name: Start isolated server
+        run: |
+          export ANNOTATION_BBOX_MEDIA_ENABLED=true ANNOTATION_BBOX_QUALITY_ENABLED=true ANNOTATION_BBOX_ARBITRATION_ENABLED=true
+          export ANNOTATION_BBOX_MEDIA_PROJECTS="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.bbox-e2e.json"))["media_modes"]))')"
+          export ANNOTATION_BBOX_QUALITY_MODES="$(python -c 'import json; print(json.dumps(json.load(open("web/apps/labelstudio-e2e/.bbox-e2e.json"))["quality_modes"]))')"
+          export ANNOTATION_BBOX_ARBITRATION_MODES="$ANNOTATION_BBOX_QUALITY_MODES"
+          nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/bbox-quality.log 2>&1 &
+          echo $! > /tmp/bbox-quality.pid
+          for i in {1..90}; do
+            if curl --fail --silent http://localhost:8080/health/ >/dev/null \
+              && curl --fail --silent http://localhost:8080/react-app/main.js >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          tail -200 /tmp/bbox-quality.log
+          exit 1
+      - name: Run bilingual browser journeys
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.bbox.config.ts --browser chrome \
+            --config baseUrl=http://localhost:8080,video=true \
+            --spec apps/labelstudio-e2e/src/e2e/bbox-arbitrations.cy.ts
+      - name: Stop owned server
+        if: always()
+        run: |
+          if test -f /tmp/bbox-quality.pid; then kill "$(cat /tmp/bbox-quality.pid)" || true; fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: bbox-quality-e2e
+          if-no-files-found: ignore
+          path: |
+            web/dist/cypress/apps/labelstudio-e2e/screenshots/**
+            web/dist/cypress/apps/labelstudio-e2e/videos/**
+            /tmp/bbox-quality.log

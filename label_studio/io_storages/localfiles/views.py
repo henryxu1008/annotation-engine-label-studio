@@ -125,6 +125,10 @@ def localfiles_data(request):
 
         # Open through pinned, no-follow directory handles after authorization.
         if authorized_root is not None:
+            from classification_disagreements.bbox_source_guard import pinned_local_path
+
+            if pinned_local_path(resolved):
+                return HttpResponseNotFound()
             # Detect mime type and encoding
             return build_localfile_response(
                 request=request,

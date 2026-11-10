@@ -105,11 +105,12 @@ def guard(pk, principal, actor, *, create=False, decide=False, cancel=False, cap
     return project, role
 
 
-def guarded(query, fields):
+def guarded(query, fields, *, limits=None):
     """SQL byte gates run before Django JSON/Text decoding, including TOCTOU growth."""
+    limits = JSON_LIMITS if limits is None else limits
     table = connection.ops.quote_name(query.model._meta.db_table)
     for field in fields:
-        stored = JSON_LIMITS[field][1] if field in JSON_LIMITS else 16 * 1024
+        stored = limits[field][1] if field in limits else 16 * 1024
         column = table + '.' + connection.ops.quote_name(field)
         size = (
             f'OCTET_LENGTH(CAST({column} AS TEXT))'
@@ -117,7 +118,7 @@ def guarded(query, fields):
             else f'LENGTH(CAST({column} AS BLOB))'
         )
         query = query.annotate(**{f'_size_{field}': RawSQL(size, [], output_field=models.BigIntegerField())})
-        output = models.JSONField() if field in JSON_LIMITS else models.TextField()
+        output = models.JSONField() if field in limits else models.TextField()
         query = query.annotate(
             **{
                 f'_safe_{field}': Case(
@@ -128,18 +129,19 @@ def guarded(query, fields):
     return query
 
 
-def hydrate(row, fields):
+def hydrate(row, fields, *, limits=None):
+    limits = JSON_LIMITS if limits is None else limits
     for field in fields:
         if hasattr(row, f'_safe_{field}'):
             size = getattr(row, f'_size_{field}')
             if size is not None and (
                 type(size) is not int
                 or size < 0
-                or size > (JSON_LIMITS[field][1] if field in JSON_LIMITS else 16 * 1024)
+                or size > (limits[field][1] if field in limits else 16 * 1024)
             ):
                 error('LEDGER_INVALID')
             setattr(row, field, getattr(row, f'_safe_{field}'))
-        bounded(getattr(row, field), JSON_LIMITS[field][0] if field in JSON_LIMITS else 16 * 1024)
+        bounded(getattr(row, field), limits[field][0] if field in limits else 16 * 1024)
     return row
 
 
@@ -147,24 +149,25 @@ def rows(project):
     return guarded(NerArbitrationTask.objects.filter(project=project), ('origin', 'participant_ids', 'cancellation'))
 
 
+def independent_query(query, actor):
+    """Filter assigned reviewers and their whole cohort before pagination."""
+    if connection.vendor == 'postgresql':
+        safe = "CASE WHEN OCTET_LENGTH(participant_ids::text)<=4096 AND jsonb_typeof(participant_ids)='array' THEN participant_ids ELSE 'null'::jsonb END"
+        expression = f"jsonb_typeof({safe})='array' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof({safe})='array' THEN {safe} ELSE '[]'::jsonb END) v WHERE jsonb_typeof(v)<>'number' OR v::text=%s)"
+        args = (str(actor.pk),)
+    else:
+        safe = "CASE WHEN LENGTH(CAST(participant_ids AS BLOB))<=4096 AND json_type(participant_ids)='array' THEN participant_ids ELSE 'null' END"
+        expression = f"json_type({safe})='array' AND NOT EXISTS (SELECT 1 FROM json_each({safe}) v WHERE v.type<>'integer' OR v.value=%s)"
+        args = (actor.pk,)
+    return (query.filter(assignee_id_frozen=actor.pk).exclude(actor_id_frozen=actor.pk)
+            .annotate(_independent=RawSQL(expression, args, output_field=models.BooleanField()))
+            .filter(_independent=True))
+
+
 def scoped(project, actor, role):
     query = rows(project)
     if role == 'reviewer':
-        # Bound/type-check before expanding. Invalid membership cannot admit a row.
-        if connection.vendor == 'postgresql':
-            safe = "CASE WHEN OCTET_LENGTH(participant_ids::text)<=4096 AND jsonb_typeof(participant_ids)='array' THEN participant_ids ELSE 'null'::jsonb END"
-            expression = f"jsonb_typeof({safe})='array' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof({safe})='array' THEN {safe} ELSE '[]'::jsonb END) v WHERE jsonb_typeof(v)<>'number' OR v::text=%s)"
-            args = (str(actor.pk),)
-        else:
-            safe = "CASE WHEN LENGTH(CAST(participant_ids AS BLOB))<=4096 AND json_type(participant_ids)='array' THEN participant_ids ELSE 'null' END"
-            expression = f"json_type({safe})='array' AND NOT EXISTS (SELECT 1 FROM json_each({safe}) v WHERE v.type<>'integer' OR v.value=%s)"
-            args = (actor.pk,)
-        query = (
-            query.filter(assignee_id_frozen=actor.pk)
-            .exclude(actor_id_frozen=actor.pk)
-            .annotate(_independent=RawSQL(expression, args, output_field=models.BooleanField()))
-            .filter(_independent=True)
-        )
+        query = independent_query(query, actor)
     return query.order_by('-pk')
 
 

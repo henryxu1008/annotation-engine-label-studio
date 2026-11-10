@@ -980,6 +980,11 @@ class UploadedFileResponse(generics.RetrieveAPIView):
         if not file_upload.has_permission(actor) or not authorization.can_view_project(principal, file_upload.project):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
+        from classification_disagreements.bbox_source_guard import pinned_upload
+
+        if pinned_upload(file_upload):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
         file = file_upload.file
         if file.storage.exists(file.name):
             content_type, encoding = mimetypes.guess_type(str(file.name))
@@ -1046,6 +1051,10 @@ class DownloadStorageData(APIView):
                 and file_upload.has_permission(actor)
                 and authorization.can_view_project(principal, file_upload.project)
             ):
+                from classification_disagreements.bbox_source_guard import pinned_upload
+
+                if pinned_upload(file_upload):
+                    return Response(status=status.HTTP_404_NOT_FOUND)
                 file_obj = file_upload.file
         elif filepath.startswith(settings.AVATAR_PATH):
             user = User.objects.filter(avatar=filepath).first()

@@ -8,6 +8,7 @@ from urllib.parse import unquote
 from core.utils.exceptions import extract_message
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect, StreamingHttpResponse
+from django.urls import reverse
 from drf_spectacular.utils import extend_schema
 from projects.models import Project
 from rest_framework import status
@@ -41,6 +42,17 @@ class ResolveStorageUriAPIMixin:
 
         # Try to find storage by URL
         project = instance if isinstance(instance, Project) else instance.project
+        if isinstance(instance, (Task, Project)):
+            from classification_disagreements.bbox_source_guard import pinned_storage, pinned_task_redirect
+
+            if pinned_storage(project, fileuri):
+                pin = pinned_task_redirect(instance, fileuri) if isinstance(instance, Task) else None
+                if pin:
+                    response = HttpResponseRedirect(reverse('projects:api:bbox-media', kwargs={
+                        'pk': project.pk, 'token': pin.token}), status=303)
+                    response['Cache-Control'] = 'private, no-store'
+                    return response
+                return Response(status=status.HTTP_404_NOT_FOUND)
         storage_objects = project.get_all_import_storage_objects
         storage = get_storage_by_url(fileuri, storage_objects)
         if not storage:

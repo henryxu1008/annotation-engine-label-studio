@@ -567,6 +567,8 @@ class TestGCSStorageMixinGetBytesStream(unittest.TestCase):
             # Test streaming functionality
             chunks = list(result_stream.iter_chunks(chunk_size=1024))
             self.assertEqual(chunks, [b'fake pdf data'])
+            result_stream.close()
+            mock_response.close.assert_called_once_with()
 
             # Check content type and metadata
             self.assertEqual(result_content_type, 'application/pdf')

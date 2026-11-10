@@ -18,10 +18,10 @@ from google.auth.transport.requests import AuthorizedSession
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
-    serialize_mutable_delivery,
     ImportStorage,
     ImportStorageLink,
     ProjectStorageMixin,
+    serialize_mutable_delivery,
 )
 from io_storages.gcs.utils import GCS
 from io_storages.utils import (
@@ -136,7 +136,6 @@ class GCSStorageMixin(models.Model):
 
             # Monkey patch methods directly onto the response object
             stream.iter_chunks = types.MethodType(_iter_chunks, stream)
-            stream.close = types.MethodType(lambda self: self.close() if hasattr(self, 'close') else None, stream)
 
             # Get content length from the response headers
             total = int(stream.headers.get('Content-Length', '0'))

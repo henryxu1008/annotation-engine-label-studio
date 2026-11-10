@@ -1735,3 +1735,19 @@ boundary does not protect against a hostile process that controls the service
 UID or quarantine, and it cannot identify a replacement made before the first
 identity check. The configured private roots and deployment filesystem remain
 part of the trusted boundary.
+
+### Bbox media and local quality work (unreleased)
+
+The #81 worktree adds a default-off, project-opt-in pre-assignment media pin and
+per-submission evidence. It changes task URI resolution, upload downloads,
+LocalFiles reads, storage proxy reads, submission creation and private storage
+binding. These are upgrade-sensitive enforcement points and must be reconciled
+against upstream changes. Source guards intentionally deny a pinned original
+across projects; equal S3 bucket/key names on distinct endpoints can be blocked,
+and existing signed URLs cannot be revoked. The working design and incomplete
+acceptance gates are in `bbox-disagreement-v1-design.md`.
+
+Local bbox quality and arbitration evidence is separate from Host review and
+release authority and is gated by explicit `fork_review` configuration. Do not
+enable the experimental endpoints until their UI, replay, permissions, lifecycle,
+cleanup scheduling and complete cross-platform tests have been reviewed.

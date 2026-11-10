@@ -79,7 +79,8 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
   const [caps, setCaps] = useState(null), [list, setList] = useState(null), [data, setData] = useState(null), [roster, setRoster] = useState(null);
   const [page, setPage] = useState(1), [filter, setFilter] = useState("pending"), [rosterPage, setRosterPage] = useState(1);
   const [assignee, setAssignee] = useState(""), [winner, setWinner] = useState(""), [reason, setReason] = useState("");
-  const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); };
+  const [evidenceReady, setEvidenceReady] = useState(false);
+  const clear = () => { setCaps(null); setList(null); setData(null); setRoster(null); setHandoffContext(null); setHandoffDetail(null); setEvidenceReady(false); };
   const fetch = async (method, params, schema, body, headers) => {
     const isHandoff = Object.prototype.hasOwnProperty.call(classificationReviewHandoff.methods, method)
       || method === "reviewHandoffProvenance";
@@ -348,14 +349,15 @@ export const FrozenArbitrationWorkspace = ({ projectId, initialOrigin = null, ha
           {t("classificationSource", { id: source.submission_id, revision: source.revision, actor: source.submitter_id ?? "—" })}: {data.report.locations.map((location) => `${location.from_name}: ${location.values.find((v) => v.submission_id === source.submission_id)?.choices.join(", ") ?? ""}`).join("; ")}
         </label>)}
         <label>{t("arbitrationReason")}<textarea maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-        <Button disabled={!winner || !reason.trim() || (adapter && !adapter.canAdopt(data, Number(winner)))} onClick={() => begin("decision", { expected_version: data.version,
+        <Button disabled={!winner || !reason.trim() || (adapter && (!adapter.canAdopt(data, Number(winner)) ||
+          (adapter.requiresEvidenceReady && !evidenceReady)))} onClick={() => begin("decision", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, winner_submission_id: Number(winner), reason }, data.id)}>{t("arbitrationAdopt")}</Button>
       </fieldset>}
       {caps?.can_cancel && data.can_cancel && <fieldset disabled={busy || unknown}><legend>{t("arbitrationCancel")}</legend>
         <label>{t("arbitrationReason")}<textarea maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         <Button disabled={!reason.trim()} onClick={() => begin("cancel", { expected_version: data.version,
           expected_input_set_hash: data.input_set_hash, reason }, data.id)}>{t("arbitrationConfirmCancel")}</Button></fieldset>}
-      {adapter && data.available && adapter.renderEvidence({ data, busy,
+      {adapter && data.available && adapter.renderEvidence({ data, busy, onEvidenceState: setEvidenceReady,
         onSelectPair: (pair) => openTask(data.id, pair, true) })}
       {!adapter && report && <details><summary>{t("arbitrationEvidence")}</summary><ClassificationResult report={report} durable /></details>}
     </>}

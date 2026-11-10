@@ -77,6 +77,9 @@ dependencies = [
     ## HumanSignal repo dependencies :start
     "label-studio-sdk (==2.0.18)",
     ## HumanSignal repo dependencies :end
+    "munkres (==1.1.4)",
+    "pillow (==12.1.1)",
+    "pycocotools (==2.0.11)"
 ]
 
 [project.urls]
