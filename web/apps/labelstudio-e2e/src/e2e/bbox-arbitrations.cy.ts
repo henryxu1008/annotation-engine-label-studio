@@ -40,6 +40,10 @@ describe('frozen bbox batch and arbitration', () => {
         expect(response.body).not.to.have.property('origin_manifest_hash');
       }));
       cy.screenshot(`bbox-arbitration-${locale}`, { capture: 'fullPage' });
+      cy.task('bboxRevokeReviewer', locale);
+      button('Refresh read-only view', '刷新只读视图').click();
+      cy.get('[data-testid="bbox-arbitrations"] [role="alert"]').should('be.visible');
+      cy.get('[data-testid="bbox-arbitrations"] svg').should('not.exist');
       login('a');
       cy.get('[data-testid="open-bbox-arbitrations"]').should('not.exist');
       cy.then(() => cy.request({ url: `/api/projects/${scope.id}/bbox-arbitrations/${arbitration}/`, failOnStatusCode: false }))

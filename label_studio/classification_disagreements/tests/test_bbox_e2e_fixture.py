@@ -4,6 +4,7 @@ import pytest
 from classification_disagreements import bbox_storage
 from classification_disagreements.models import BboxMediaPin, BboxSubmissionProof
 from django.core.management import call_command
+from projects.models import ProjectMember
 
 
 @pytest.mark.django_db
@@ -21,3 +22,8 @@ def test_synthetic_browser_fixture_captures_and_binds_evidence(settings, tmp_pat
     assert set(fixture['projects']) == {'en-US', 'zh-CN'}
     assert BboxMediaPin.objects.filter(project__organization_id=fixture['organization']).count() == 2
     assert BboxSubmissionProof.objects.filter(media__project__organization_id=fixture['organization']).count() == 4
+    call_command('seed_bbox_e2e', output=str(output), operation='revoke_reviewer', locale='en-US')
+    assert not ProjectMember.objects.get(project_id=fixture['projects']['en-US']['id'],
+                                         user_id=fixture['users']['reviewer']['id']).enabled
+    assert ProjectMember.objects.get(project_id=fixture['projects']['zh-CN']['id'],
+                                     user_id=fixture['users']['reviewer']['id']).enabled

@@ -25,11 +25,28 @@ XML = '<View><Image name="img" value="$image"/><RectangleLabels name="box" toNam
 class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--output', default='web/apps/labelstudio-e2e/.bbox-e2e.json')
+        parser.add_argument('--operation', choices=['seed', 'revoke_reviewer'], default='seed')
+        parser.add_argument('--locale', choices=['en-US', 'zh-CN'], default='en-US')
 
     def handle(self, *args, **options):
         if not settings.TEST_ENVIRONMENT:
             raise CommandError('Synthetic TEST_ENVIRONMENT required')
         output = Path(options['output'])
+        if options['operation'] == 'revoke_reviewer':
+            if not output.is_file():
+                raise CommandError('Owned bbox fixture required')
+            fixture = json.loads(output.read_text(encoding='utf-8'))
+            if fixture.get('schema') != 'bbox-e2e/v1':
+                raise CommandError('Unexpected fixture schema')
+            project = Project.objects.get(pk=fixture['projects'][options['locale']]['id'],
+                organization_id=fixture['organization'], organization__title='BBox synthetic scope',
+                created_by__email='manager@' + DOMAIN)
+            changed = ProjectMember.objects.filter(project=project, user_id=fixture['users']['reviewer']['id'],
+                user__email='reviewer@' + DOMAIN, role='reviewer', enabled=True).update(enabled=False)
+            if changed != 1:
+                raise CommandError('Synthetic reviewer membership unavailable')
+            self.stdout.write(json.dumps({'ok': True, 'project': project.pk}))
+            return
         if output.exists() or User.objects.filter(email__endswith='@' + DOMAIN).exists():
             raise CommandError('Fresh synthetic output and database required')
         password = secrets.token_urlsafe(24)

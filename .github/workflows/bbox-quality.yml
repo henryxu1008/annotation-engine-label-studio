@@ -118,7 +118,7 @@ jobs:
       - name: Run bilingual browser journeys
         working-directory: web
         run: |
-          yarn cypress run --project apps/labelstudio-e2e --browser chrome \
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.bbox.config.ts --browser chrome \
             --config baseUrl=http://localhost:8080,video=true \
             --spec apps/labelstudio-e2e/src/e2e/bbox-arbitrations.cy.ts
       - name: Stop owned server
