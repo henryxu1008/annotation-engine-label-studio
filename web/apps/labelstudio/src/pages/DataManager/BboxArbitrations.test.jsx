@@ -1,5 +1,8 @@
 import { bboxArbitrationAdapter } from "./BboxArbitrations";
 
+jest.mock("../../providers/ApiProvider", () => ({ useAPI: () => ({ callApi: jest.fn() }) }));
+jest.mock("@humansignal/ui", () => ({ Button: () => null }));
+
 const h = (value) => value.repeat(64);
 const pin = (id) => ({ submission_id: id, assignment_id: id, assignee_id: id + 10, task_id: 8, revision: 1,
   submitter_id: id + 10, result_hash: h("a"), config_hash: h("b"), task_data_hash: h("c"),

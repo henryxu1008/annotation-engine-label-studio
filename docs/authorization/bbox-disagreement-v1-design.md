@@ -41,17 +41,20 @@ but the complete endpoint and concurrency audit is not finished. Expired or
 abandoned candidates have a durable lease, fenced publication and repeatable
 `reconcile_bbox_media` management command; operators must schedule that command,
 and retention/deletion for already published artifacts is not implemented.
-Bbox quality batch and local arbitration API prototypes now persist immutable
-evidence and have initial server-side access checks, but their shared-workspace
-UI integration, complete negative-path coverage, concurrency and browser
-acceptance remain unfinished. The local storage tests substitute the trusted parent root, so they
+Bbox quality batch and local arbitration persist immutable evidence and are
+wired into the existing batch and arbitration workspaces. Complete negative-path
+coverage, concurrency and browser acceptance still require verification on the
+final commit. The local storage tests substitute the trusted parent root, so they
 do not establish that any actual Windows or shared deployment meets its ACL and
 namespace requirements. PostgreSQL and SQLite tests do not replace hosted CI,
 browser tests, provider integration, or Host acceptance.
 
 The legacy-source guards deny a pinned original even when another task or project
 references it; equal S3 bucket/key names on separate endpoints are also blocked
-conservatively. Callers must migrate those tasks or accept the denial. Existing
+conservatively. A legacy task-scoped GCS/S3 resolve for the task that owns a pin
+redirects to that task's authenticated frozen-media endpoint. Project-scoped and
+other-task reads cannot choose among potentially different frozen generations;
+callers must migrate those tasks or accept the denial. Existing
 presigned URLs issued before a pin cannot be revoked by this
 fork, and local tests do not prove what an annotator actually viewed. The guards
 also query JSON source evidence on media reads; index and load-test the lookup
