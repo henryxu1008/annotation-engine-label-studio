@@ -602,6 +602,12 @@ class TestMyWork(APITestCase):
 
     def test_actual_list_and_count_queries_recheck_membership_after_preflight(self):
         from tasks.my_work import work_projects
+        # Load modules that import this function before replacing it; otherwise
+        # their first lazy import can retain the mock after this test ends.
+        import task_packages.access
+        import task_packages.api
+        import task_packages.progress
+        import task_packages.scope
 
         assignment = self.assignment(result=[])
         self.submission(assignment)
@@ -617,6 +623,10 @@ class TestMyWork(APITestCase):
             assert data['results'] == []
             assert data['count'] == 0
             assert sum(data['counts'].values()) == 0
+        assert task_packages.scope.work_projects is work_projects
+        assert task_packages.access.work_projects is work_projects
+        assert task_packages.progress.work_projects is work_projects
+        assert task_packages.api.work_projects is work_projects
 
     @override_settings(
         ANNOTATION_PROJECT_OPERATION_PROVIDER='tasks.tests.test_project_operation_policy.PausedProvider'
