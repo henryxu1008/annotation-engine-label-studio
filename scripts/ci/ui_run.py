@@ -35,7 +35,8 @@ def cypress_failure_indices(path):
                 or value['failed'] != sorted(set(value['failed']))
                 or not isinstance(value['categories'], list)
                 or len(value['categories']) != len(value['failed'])
-                or any(c not in ('task', 'request', 'timeout', 'uncaught', 'assertion', 'other')
+                or any(c not in ('task', 'request', 'timeout', 'timeout-value', 'timeout-element',
+                                 'timeout-network', 'uncaught', 'assertion', 'other')
                        for c in value['categories'])):
             return [], []
         return value['failed'], value['categories']

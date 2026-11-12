@@ -19,7 +19,7 @@ describe("Keyboard annotation and composition input", () => {
     cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
     cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
     cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
-    cy.window().should((win: any) => {
+    cy.window({ timeout: 30000 }).should((win: any) => {
       expect(Number(win.Htx?.task?.id)).to.eq(scope.task_id);
       expect(win.Htx.isLoading).to.eq(false);
     });

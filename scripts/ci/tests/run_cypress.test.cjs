@@ -39,6 +39,10 @@ test('failure diagnostics expose only bounded numeric test positions', () => {
   value.runs[0].tests[1].displayError = 'cy.task( failed; private payload';
   assert.deepEqual(failureIndices(value, call).categories, ['task']);
   assert.ok(!JSON.stringify(failureIndices(value, call)).includes('private payload'));
+  value.runs[0].tests[1].displayError = 'Timed out retrying: expected undefined to equal false; private payload';
+  assert.deepEqual(failureIndices(value, call).categories, ['timeout-value']);
+  value.runs[0].tests[1].displayError = 'Timed out retrying: Expected to find element: private payload';
+  assert.deepEqual(failureIndices(value, call).categories, ['timeout-element']);
 });
 test('Module API launch failure or incomplete result cannot be a passing report', () => {
   for (const value of [undefined, {}, { failures: 1 }, { runs: [] }, { ...result(), totalTests: 0 }]) {

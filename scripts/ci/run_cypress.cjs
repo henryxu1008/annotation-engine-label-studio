@@ -15,7 +15,12 @@ function failureIndices(result, call) {
       .filter((part) => typeof part === 'string').join('\n');
     if (/cy\.task\(/i.test(message)) return 'task';
     if (/cy\.request\(|status code.*(?:4\d\d|5\d\d)/i.test(message)) return 'request';
-    if (/timed out|timeout/i.test(message)) return 'timeout';
+    if (/timed out|timeout/i.test(message)) {
+      if (/expected (?:undefined|null|NaN) to (?:equal|eq)/i.test(message)) return 'timeout-value';
+      if (/expected to find (?:element|content)/i.test(message)) return 'timeout-element';
+      if (/cy\.(?:visit|request|wait)\(/i.test(message)) return 'timeout-network';
+      return 'timeout';
+    }
     if (/uncaught|unhandled/i.test(message)) return 'uncaught';
     if (/assertionerror|expected/i.test(message)) return 'assertion';
     return 'other';

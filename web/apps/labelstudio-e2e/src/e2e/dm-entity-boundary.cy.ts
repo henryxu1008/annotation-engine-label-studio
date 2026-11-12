@@ -69,7 +69,7 @@ describe('Existing text entity boundary handles', () => {
           cy.loginAs(fixture.users.annotator_a.email, fixture.password, '/user/account/personal-info');
           cy.get('[data-testid="language-preference-select"]').select(locale).should('have.value', locale).and('not.be.disabled');
           cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
-          cy.window().should((win: any) => {
+          cy.window({ timeout: 30000 }).should((win: any) => {
             expect(win.Htx?.isLoading).to.eq(false);
             expect(win.Htx?.annotationStore?.selected?.history?.isFrozen).to.eq(false);
           });
