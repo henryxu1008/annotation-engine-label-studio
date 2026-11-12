@@ -29,7 +29,7 @@ test('failure diagnostics expose only bounded numeric test positions', () => {
   value.totalFailed = 1;
   value.runs[0].tests[1].state = 'failed';
   const diagnostic = failureIndices(value, call);
-  assert.deepEqual(diagnostic, { schema: 'ui-cypress-failure-indices/v2', total: 2, failed: [2], categories: ['other'] });
+  assert.deepEqual(diagnostic, { schema: 'ui-cypress-failure-indices/v3', total: 2, failed: [2], categories: ['other'], lines: [0] });
   assert.ok(!JSON.stringify(diagnostic).includes('private-diagnostic'));
   assert.equal(failureIndices(result(), call), null);
   const wrongSpec = result(); wrongSpec.runs[0].tests[0].state = 'failed'; wrongSpec.runs[0].spec.absolute = '/other/spec';
@@ -43,6 +43,9 @@ test('failure diagnostics expose only bounded numeric test positions', () => {
   assert.deepEqual(failureIndices(value, call).categories, ['timeout-value']);
   value.runs[0].tests[1].displayError = 'Timed out retrying: Expected to find element: private payload';
   assert.deepEqual(failureIndices(value, call).categories, ['timeout-element']);
+  value.runs[0].tests[1].displayError += '\n at /private/review-confidence.cy.ts:127:8 private payload';
+  assert.deepEqual(failureIndices(value, call).lines, [127]);
+  assert.ok(!JSON.stringify(failureIndices(value, call)).includes('private payload'));
 });
 test('Module API launch failure or incomplete result cannot be a passing report', () => {
   for (const value of [undefined, {}, { failures: 1 }, { runs: [] }, { ...result(), totalTests: 0 }]) {

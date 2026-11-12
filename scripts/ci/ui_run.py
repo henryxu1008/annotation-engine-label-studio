@@ -27,21 +27,23 @@ def cypress_failure_indices(path):
     """Accept only bounded numeric test positions, never Cypress diagnostics."""
     try:
         value = read_json(path)
-        if (not isinstance(value, dict) or set(value) != {'schema', 'total', 'failed', 'categories'}
-                or value['schema'] != 'ui-cypress-failure-indices/v2'
+        if (not isinstance(value, dict) or set(value) != {'schema', 'total', 'failed', 'categories', 'lines'}
+                or value['schema'] != 'ui-cypress-failure-indices/v3'
                 or type(value['total']) is not int or not 1 <= value['total'] <= 500
                 or not isinstance(value['failed'], list) or not value['failed']
                 or any(type(n) is not int or not 1 <= n <= value['total'] for n in value['failed'])
                 or value['failed'] != sorted(set(value['failed']))
                 or not isinstance(value['categories'], list)
                 or len(value['categories']) != len(value['failed'])
+                or not isinstance(value['lines'], list) or len(value['lines']) != len(value['failed'])
+                or any(type(n) is not int or not 0 <= n <= 5000 for n in value['lines'])
                 or any(c not in ('task', 'request', 'timeout', 'timeout-value', 'timeout-element',
                                  'timeout-network', 'uncaught', 'assertion', 'other')
                        for c in value['categories'])):
-            return [], []
-        return value['failed'], value['categories']
+            return [], [], []
+        return value['failed'], value['categories'], value['lines']
     except (OSError, ValueError, TypeError, KeyError):
-        return [], []
+        return [], [], []
 
 
 def command_prefix(argv):
@@ -475,10 +477,11 @@ def browser(ctx, shard, out, build_identity, build_manifest):
                 )
                 print('UI_BROWSER', call['id'], 'SUCCESS' if valid else 'FAILED', flush=True)
                 if not valid:
-                    indices, categories = cypress_failure_indices(diagnostic)
+                    indices, categories, lines = cypress_failure_indices(diagnostic)
                     if indices:
                         print('UI_BROWSER_FAILED_TEST_POSITIONS', call['id'], ','.join(map(str, indices)), flush=True)
                         print('UI_BROWSER_FAILURE_CATEGORIES', call['id'], ','.join(categories), flush=True)
+                        print('UI_BROWSER_FAILURE_LINES', call['id'], ','.join(map(str, lines)), flush=True)
                 if not valid:
                     success = False
                     break

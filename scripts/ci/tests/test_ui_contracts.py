@@ -40,17 +40,18 @@ class CypressFailureIndicesTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'failure.json'
-            assert cypress_failure_indices(path) == ([], [])
-            base = {'schema': 'ui-cypress-failure-indices/v2', 'total': 4, 'failed': [1, 4], 'categories': ['task', 'other']}
+            assert cypress_failure_indices(path) == ([], [], [])
+            base = {'schema': 'ui-cypress-failure-indices/v3', 'total': 4, 'failed': [1, 4], 'categories': ['task', 'other'], 'lines': [12, 0]}
             path.write_text(json.dumps(base), encoding='utf-8')
-            assert cypress_failure_indices(path) == ([1, 4], ['task', 'other'])
+            assert cypress_failure_indices(path) == ([1, 4], ['task', 'other'], [12, 0])
             for invalid in (
                 {**base, 'message': 'private'}, {**base, 'failed': [True]},
                 {**base, 'failed': [4, 1]}, {**base, 'failed': [5]},
                 {**base, 'total': 501}, {**base, 'failed': []}, {**base, 'categories': ['private', 'task']},
+                {**base, 'lines': [12, 5001]}, {**base, 'lines': [True, 0]},
             ):
                 path.write_text(json.dumps(invalid), encoding='utf-8')
-                assert cypress_failure_indices(path) == ([], [])
+                assert cypress_failure_indices(path) == ([], [], [])
 
 
 def ctx(attempt=1):

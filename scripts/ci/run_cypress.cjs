@@ -10,9 +10,17 @@ function failureIndices(result, call) {
   const tests = result.runs[0]?.tests;
   if (!Array.isArray(tests) || tests.length === 0 || tests.length > 500) return null;
   const failed = tests.flatMap((entry, index) => entry?.state === 'failed' ? [index + 1] : []);
-  const categories = tests.filter((entry) => entry?.state === 'failed').map((entry) => {
-    const message = [entry.displayError, ...(entry.attempts || []).map((a) => a?.error?.message)]
-      .filter((part) => typeof part === 'string').join('\n');
+  const basename = path.posix.basename(call.spec).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const location = new RegExp('(?:^|[\\s/\\\\(])' + basename + ':(\\d{1,4}):\\d{1,4}(?:\\D|$)', 'm');
+  const messages = tests.filter((entry) => entry?.state === 'failed').map((entry) =>
+    [entry.displayError, ...(entry.attempts || []).flatMap((a) => [a?.error?.message, a?.error?.stack])]
+      .filter((part) => typeof part === 'string').join('\n'));
+  const lines = messages.map((message) => {
+    const match = message.match(location);
+    const line = match ? Number(match[1]) : 0;
+    return Number.isSafeInteger(line) && line >= 1 && line <= 5000 ? line : 0;
+  });
+  const categories = messages.map((message) => {
     if (/cy\.task\(/i.test(message)) return 'task';
     if (/cy\.request\(|status code.*(?:4\d\d|5\d\d)/i.test(message)) return 'request';
     if (/timed out|timeout/i.test(message)) {
@@ -25,7 +33,7 @@ function failureIndices(result, call) {
     if (/assertionerror|expected/i.test(message)) return 'assertion';
     return 'other';
   });
-  return failed.length ? { schema: 'ui-cypress-failure-indices/v2', total: tests.length, failed, categories } : null;
+  return failed.length ? { schema: 'ui-cypress-failure-indices/v3', total: tests.length, failed, categories, lines } : null;
 }
 
 function summarize(result, call) {
