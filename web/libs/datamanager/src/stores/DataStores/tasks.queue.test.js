@@ -18,6 +18,58 @@ const Root = types.model("QueueResponseRoot", {
   apiCall: jest.fn(),
 }));
 
+const RestrictedRoot = types.model("RestrictedTaskRoot", {
+  taskStore: create([{ id: "data", type: "List", target: "tasks" }]),
+  viewsStore: types.frozen(),
+}).volatile(() => ({
+  SDK: { type: "LS", projectId: 7, settings: { blindProtocol: true }, invoke: jest.fn() },
+  API: { getSettingsByMethodName: () => ({}) },
+  invokeAction: jest.fn(),
+  apiCall: jest.fn(),
+}));
+const taskHandle = 2 ** 51 + 31;
+const restrictedTask = (id = taskHandle) => ({
+  id, project: 7, assignment_id: id + 2, assignment_version: 1, can_label: true,
+  data: { text: "synthetic" }, annotations: [], drafts: [], predictions: [], default_selected_annotation: null,
+});
+
+it("loads a bound restricted task into the editor store", async () => {
+  const root = RestrictedRoot.create({ taskStore: {}, viewsStore: {} });
+  root.apiCall.mockResolvedValue(restrictedTask());
+  try {
+    const task = await root.taskStore.loadTask(taskHandle);
+    expect(task.id).toBe(taskHandle);
+    expect(root.taskStore.selected.id).toBe(taskHandle);
+    expect(root.taskStore.selected.data).toEqual({ text: "synthetic" });
+    expect(root.apiCall).toHaveBeenCalledTimes(1);
+  } finally { destroy(root); }
+});
+
+it("ignores obsolete, wrong-project and malformed restricted editor responses", async () => {
+  const root = RestrictedRoot.create({ taskStore: {}, viewsStore: {} });
+  let finishOld;
+  root.apiCall.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+    .mockResolvedValueOnce(restrictedTask(taskHandle + 10))
+    .mockResolvedValueOnce({ ...restrictedTask(), assignment_id: 12 })
+    .mockRejectedValueOnce(new Error("network"));
+  try {
+    const pending = root.taskStore.loadTask(taskHandle);
+    expect((await root.taskStore.loadTask(taskHandle + 10)).id).toBe(taskHandle + 10);
+    finishOld(restrictedTask());
+    expect(await pending).toBeNull();
+    expect(root.taskStore.selected.id).toBe(taskHandle + 10);
+    expect(await root.taskStore.loadTask(taskHandle)).toBeNull();
+    expect(await root.taskStore.loadTask(taskHandle)).toBeNull();
+    let finishProject;
+    root.apiCall.mockImplementationOnce(() => new Promise((resolve) => { finishProject = resolve; }));
+    const switching = root.taskStore.loadTask(taskHandle);
+    root.SDK.projectId = 8;
+    finishProject(restrictedTask());
+    expect(await switching).toBeNull();
+    expect(root.taskStore.list.some((task) => task.id === taskHandle)).toBe(false);
+  } finally { destroy(root); }
+});
+
 it("loads history with the same package context as the native next-task queue", async () => {
   const root = Root.create({ taskStore: {}, viewsStore: { selected: { id: 7 } } });
   const params = jest.spyOn(History, "getParams").mockReturnValue({ task_package: "4" });

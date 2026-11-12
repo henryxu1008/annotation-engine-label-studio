@@ -52,6 +52,12 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres -d classification_gold"
           --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v6
       - name: Install Poetry
@@ -72,6 +78,11 @@ jobs:
         run: |
           poetry run python core/version.py
           poetry run pytest -q classification_disagreements/tests/test_gold_api.py classification_disagreements/tests/test_gold_scoring.py classification_disagreements/tests/test_comparison.py
+      - name: Test isolated score worker process
+        working-directory: label_studio
+        env:
+          LS82_TEST_REDIS_URL: redis://localhost:6379/0
+        run: poetry run pytest -q classification_disagreements/tests/test_blind_quality_boundary.py::TestBlindScoreWorkerProcess
       - name: Prepare synthetic database
         run: |
           poetry run python label_studio/core/version.py
@@ -79,6 +90,9 @@ jobs:
           poetry run python label_studio/manage.py migrate --noinput
           poetry run python label_studio/manage.py collectstatic --noinput
           poetry run python label_studio/manage.py seed_classification_e2e
+          LS82_SYNTHETIC_BLIND_FIXTURE=1 poetry run python label_studio/manage.py seed_classification_blind_e2e \
+            --source web/apps/labelstudio-e2e/.classification81-e2e.json \
+            --output web/apps/labelstudio-e2e/.classification82-blind-e2e.json
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -89,7 +103,20 @@ jobs:
         run: |
           yarn install --frozen-lockfile
           NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
-            apps/labelstudio/src/pages/DataManager/ClassificationGold.test.jsx
+            apps/labelstudio/src/pages/DataManager/ClassificationGold.test.jsx \
+            apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.test.jsx
+          NX_DAEMON=false yarn jest --config libs/datamanager/jest.config.ts --runInBand --runTestsByPath \
+            libs/datamanager/src/sdk/blind-protocol.test.js \
+            libs/datamanager/src/utils/api-proxy/blind-guard.test.js \
+            libs/datamanager/src/components/Common/Form/Form.blind.test.jsx \
+            libs/datamanager/src/components/App/App.blind.test.jsx \
+            libs/datamanager/src/components/Label/Label.blind.test.jsx \
+            libs/datamanager/src/stores/AppStore.setTask.test.js \
+            libs/datamanager/src/stores/DataStores/tasks.queue.test.js \
+            libs/datamanager/src/stores/AppStore.fetchUsers.test.js \
+            libs/datamanager/src/sdk/dm-sdk.locale.test.js \
+            libs/datamanager/src/sdk/lsf-sdk.locale.test.jsx \
+            libs/datamanager/src/sdk/app-create.test.jsx
           yarn i18n:catalogs
           yarn i18n:literals
           yarn ls:build
@@ -97,6 +124,8 @@ jobs:
         run: |
           export ANNOTATION_CLASSIFICATION_GOLD_ENABLED=true
           export ANNOTATION_CLASSIFICATION_GOLD_PROJECTS="$(python -c 'import json; print(json.dumps({k: True for k in json.load(open("web/apps/labelstudio-e2e/.classification81-e2e.json"))["modes"]}))')"
+          export ANNOTATION_CLASSIFICATION_BLIND_ENABLED=true
+          export ANNOTATION_CLASSIFICATION_BLIND_PROJECTS="$ANNOTATION_CLASSIFICATION_GOLD_PROJECTS"
           nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/classification-gold.log 2>&1 &
           echo $! > /tmp/classification-gold.pid
           for i in {1..90}; do
@@ -111,7 +140,7 @@ jobs:
         run: |
           yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts --browser chrome \
             --config baseUrl=http://localhost:8080,video=true \
-            --spec apps/labelstudio-e2e/src/e2e/classification-gold.cy.ts
+            --spec 'apps/labelstudio-e2e/src/e2e/classification-gold.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-privacy.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-editor.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-mixed.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-draft-revocation.cy.ts'
       - name: Stop owned server
         if: always()
         run: |

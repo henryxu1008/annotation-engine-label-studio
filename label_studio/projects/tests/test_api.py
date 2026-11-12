@@ -8,7 +8,7 @@ from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
 from projects.models import Project, ProjectMember
 from projects.tests.factories import ProjectFactory
-from rest_framework.test import APIClient, APITestCase
+from rest_framework.test import APIClient, APIRequestFactory, APITestCase, force_authenticate
 from tasks.models import Task
 from tasks.tests.factories import PredictionFactory, TaskFactory
 from users.tests.factories import UserFactory
@@ -242,19 +242,17 @@ class TestProjectMemberAuthorizationHardening(APITestCase):
         locked_queryset = Project.objects.filter(pk=self.project.pk)
 
         view = ProjectMemberAPI()
-        view.kwargs = {'pk': self.project.pk}
+        membership = ProjectMember.objects.get(project=self.project, user=self.manager)
+        view.kwargs = {'pk': self.project.pk, 'member_pk': membership.pk}
         request = APIRequestFactory().patch('/api/projects/member/')
         force_authenticate(request, user=self.manager)
         view.request = view.initialize_request(request)
 
-        class LockedManager:
-            def filter(self, **kwargs):
-                events.append('lock_queryset')
-                return locked_queryset.filter(**kwargs)
-
         with (
-            patch.object(Project.objects, 'select_for_update', return_value=LockedManager()),
-            patch('projects.api.generics.get_object_or_404', side_effect=lambda queryset, **kwargs: (
+            patch.object(Project.objects, 'select_for_update', side_effect=lambda: (
+                events.append('lock_queryset') or locked_queryset
+            )),
+            patch('access_control.project_operations.get_object_or_404', side_effect=lambda queryset, **kwargs: (
                 events.append('locked_read') or self.project
             )),
             patch.object(view, '_authorize_locked_project', side_effect=lambda project: events.append('authorize')),

@@ -52,6 +52,9 @@ class ExportMixin:
             annotated: optional None or str:("include|exclude")
         })
         """
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
+
+        tasks = tasks.exclude(pk__in=quality_task_ids(self.project_id))
         if not isinstance(task_filter_options, dict):
             return tasks
         if 'view' in task_filter_options:
@@ -60,7 +63,12 @@ class ExportMixin:
                 prepare_params = View.objects.get(project=self.project, id=value).get_prepare_tasks_params(
                     add_selected_items=True
                 )
-                tab_tasks = Task.prepared.only_filtered(prepare_params=prepare_params).values_list('id', flat=True)
+                # Background exports have no HTTP request: derive the principal
+                # from their persisted creator and recheck its current role.
+                from access_control.project_operations import local_principal
+                creator = getattr(self, 'created_by', None)
+                principal = local_principal(creator) if creator is not None else None
+                tab_tasks = Task.prepared.only_filtered(prepare_params=prepare_params, trusted_principal=principal).values_list('id', flat=True)
                 tasks = tasks.filter(id__in=tab_tasks)
             except (ValueError, View.DoesNotExist) as exc:
                 logger.warning(f'Incorrect view params {exc}')
@@ -153,6 +161,7 @@ class ExportMixin:
 
     def get_task_queryset(self, ids, annotation_filter_options):
         from core.feature_flags import flag_set
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
 
         annotations_qs = self._get_filtered_annotations_queryset(annotation_filter_options=annotation_filter_options)
 
@@ -167,7 +176,7 @@ class ExportMixin:
             annotations_qs = annotations_qs.with_state()
 
         qs = (
-            Task.objects.filter(id__in=ids)
+            Task.objects.filter(id__in=ids).exclude(id__in=quality_task_ids(self.project_id))
             .select_related('file_upload')  # select_related more efficient for regular foreign-key relationship
             .prefetch_related(
                 Prefetch('annotations', queryset=annotations_qs),

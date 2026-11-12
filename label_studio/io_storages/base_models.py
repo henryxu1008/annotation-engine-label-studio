@@ -774,7 +774,7 @@ class ExportStorage(Storage, ProjectStorageMixin):
     def has_formal_submissions(self):
         return has_immutable_release_boundary(self.project_id)
 
-    def require_mutable_delivery_allowed(self, *, lock_project=False):
+    def require_mutable_delivery_allowed(self, *, lock_project=False, annotation=None):
         if lock_project:
             Project.objects.select_for_update().get(pk=self.project_id)
         if self.has_formal_submissions():
@@ -782,6 +782,11 @@ class ExportStorage(Storage, ProjectStorageMixin):
                 'Export storage delivery is disabled after formal submissions exist. '
                 'Release approved immutable submissions through the submission release API.'
             )
+        if annotation is not None:
+            from classification_disagreements.models import BlindQualityAssignment
+
+            if BlindQualityAssignment.objects.filter(task_id=annotation.task_id).exists():
+                raise ValidationError('This annotation is unavailable for mutable delivery.')
 
     @contextmanager
     def mutable_delivery_lock(self):
@@ -813,7 +818,10 @@ class ExportStorage(Storage, ProjectStorageMixin):
         raise NotImplementedError
 
     def save_annotations(self, annotations: models.QuerySet[Annotation]):
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
+
         self.require_mutable_delivery_allowed()
+        annotations = annotations.exclude(task_id__in=quality_task_ids(self.project_id))
         annotation_exported = 0
         total_annotations = annotations.count()
         self.info_set_in_progress()

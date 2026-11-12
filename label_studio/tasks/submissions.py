@@ -71,6 +71,8 @@ def create_submission(*, assignment, annotation, actor):
         raise ValidationError({'detail': 'Annotation does not belong to this assignment.'})
     if annotation.task_id != assignment.task_id or annotation.project_id != assignment.project_id:
         raise ValidationError({'detail': 'Annotation task/project must match the locked assignment.'})
+    if annotation.completed_by_id != actor.id:
+        raise ValidationError({'detail': 'Annotation author must match the assignment owner.'})
 
     last_revision = (
         Submission.objects.filter(assignment=assignment).aggregate(max_revision=Max('revision'))['max_revision'] or 0
@@ -91,6 +93,14 @@ def create_submission(*, assignment, annotation, actor):
         result_hash=_snapshot_hash(snapshot),
         submitted_by=actor,
     )
+
+    from classification_disagreements.blind_mix import release_source_after_submission
+
+    release_source_after_submission(submission=submission, assignment=assignment, project=project)
+
+    from classification_disagreements.blind_score_outbox import record_submission
+
+    record_submission(submission, project)
 
     # A pinned task must bind this exact revision to its verified media in the
     # same transaction. Tasks without a pin retain their existing behavior.
@@ -127,6 +137,11 @@ def review_submission(*, submission, reviewer, decision, reason='', principal=No
     assignments.get(pk=submission.assignment_id, project=project)
     # submitted_by is nullable; its ID is sufficient for the self-review check.
     submission = submissions.get(pk=submission.pk)
+
+    from classification_disagreements.blind_quality_boundary import is_quality_only_assignment
+
+    authorization.require(not is_quality_only_assignment(submission.assignment_id),
+                          'This submission is not available for ordinary review.')
 
     if review_batch_id is not None:
         from review_batches.service import require_selected

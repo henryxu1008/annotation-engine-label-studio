@@ -1,7 +1,6 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license."""
 
 import logging
-from contextlib import nullcontext
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
@@ -18,7 +17,7 @@ from data_manager.functions import evaluate_predictions
 from data_manager.models import PrepareParams
 from data_manager.serializers import DataManagerTaskSerializer
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
@@ -96,6 +95,32 @@ def lock_active_assignment(request, principal, task, *, require_token=True):
     if role not in (ProjectMember.Role.ANNOTATOR, ProjectMember.Role.MANAGER):
         raise PermissionDenied('An enabled labeling role is required for this task.')
 
+    # Transitional write adapter: the full participant read contract is not
+    # exposed yet. When a handle is supplied, both identifiers and the
+    # version must resolve to this exact task under the write locks.
+    if require_token and 'task_handle' in request.data:
+        from classification_disagreements.blind_task_handles import lock_handle_for_write
+
+        def positive_integer(value):
+            if type(value) is int and value > 0:
+                return value
+            if (isinstance(value, str) and len(value) <= 19 and value.isascii()
+                    and value.isdecimal() and int(value) > 0):
+                return int(value)
+            raise AssignmentConflictError()
+
+        assignment = lock_handle_for_write(
+            principal=principal,
+            task_handle=positive_integer(request.data.get('task_handle')),
+            assignment_handle=positive_integer(request.data.get('assignment_id')),
+            assignment_version=positive_integer(request.data.get('assignment_version')),
+            expected_task_id=task.pk,
+            expected_project_id=project.pk,
+        )
+        if assignment.task_id != task.pk or assignment.project_id != project.pk:
+            raise AssignmentConflictError()
+        return assignment
+
     assignment_id = request.data.get('assignment_id') if require_token else None
     if assignment_id is not None:
         try:
@@ -108,6 +133,9 @@ def lock_active_assignment(request, principal, task, *, require_token=True):
         assignee_id=principal.local_user_id,
         status__in=TaskAssignment.ACTIVE_STATUSES,
     )
+    from classification_disagreements.blind_mix import deferred_source_ids
+
+    queryset = queryset.exclude(pk__in=deferred_source_ids(principal.local_user_id))
     if assignment_id is not None:
         queryset = queryset.filter(pk=assignment_id)
 
@@ -116,6 +144,20 @@ def lock_active_assignment(request, principal, task, *, require_token=True):
         raise AssignmentConflictError()
     if require_token:
         require_assignment_token(request, assignment)
+    # A retained task marker means all later generations are quality work as
+    # well.  Recheck the exact admission under the same transaction as the
+    # labeling write, including the locked capture generation.
+    from classification_disagreements.blind_provenance import checked_quality_proof
+    from classification_disagreements.models import BlindQualityAssignment
+
+    if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+        marker = BlindQualityAssignment.objects.filter(assignment_id=assignment.pk, task_id=task.pk).first()
+        if marker is None:
+            raise AssignmentConflictError()
+        try:
+            checked_quality_proof(assignment=assignment, marker=marker)
+        except ValidationError:
+            raise AssignmentConflictError()
     return assignment
 
 
@@ -948,6 +990,10 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
             annotations = annotations.filter(
                 task_assignment__assignee=actor,
                 task_assignment__status__in=TaskAssignment.ACTIVE_STATUSES,
+                task_assignment__task=task,
+                task_assignment__project=task.project,
+                project=task.project,
+                completed_by=actor,
             )
         return annotations.order_by('pk')
 
@@ -1176,15 +1222,26 @@ def submissions_for_actor(actor):
     Submission history may survive cancellation, but never project or
     organization revocation. Repeat live membership in the executed SQL.
     """
+    from classification_disagreements.blind_provenance import current_quality_assignment_ids
+    from classification_disagreements.blind_participant_projection import sensitive_project_filter
+    from classification_disagreements.models import BlindQualityAssignment
+
     projects = visible_projects_for_actor(actor)
+    quality_ids = BlindQualityAssignment.objects.values('task_id')
     return Submission.objects.filter(assignment__project_id__in=projects.values('pk')).filter(
-        Q(assignment__assignee=actor)
+        (Q(assignment__assignee=actor) & ~sensitive_project_filter('assignment__project') &
+         (~Q(assignment__task_id__in=quality_ids) | (
+             Q(assignment__status__in=TaskAssignment.ACTIVE_STATUSES)
+             & Q(assignment_id__in=current_quality_assignment_ids(actor.pk)))))
         | Q(assignment__project__created_by=actor)
         | Q(
             assignment__project__members__user=actor,
             assignment__project__members__enabled=True,
-            assignment__project__members__role__in=['manager', 'reviewer'],
+            assignment__project__members__role='manager',
         )
+        | (Q(assignment__project__members__user=actor,
+            assignment__project__members__enabled=True,
+            assignment__project__members__role='reviewer') & ~Q(assignment__task_id__in=quality_ids))
     ).distinct()
 
 
@@ -1193,7 +1250,17 @@ class SubmissionListAPI(generics.ListAPIView):
     permission_required = all_permissions.annotations_view
     pagination_class = SubmissionPagination
 
+    @transaction.atomic
     def list(self, request, *args, **kwargs):
+        project_id = request.query_params.get('project')
+        if project_id:
+            from access_control.project_operations import READ_WORK, lock_project_operation
+            from classification_disagreements.blind_participant_projection import sensitive_project
+
+            principal, actor = resolve_actor(request)
+            project = generics.get_object_or_404(Project.objects.for_user(actor), pk=project_id)
+            if sensitive_project(project):
+                lock_project_operation(project.pk, principal, READ_WORK)
         response = super().list(request, *args, **kwargs)
         if request.query_params.getlist('task_package'):
             # Serialization may race revocation or another review. Reuse the
@@ -1225,6 +1292,15 @@ class SubmissionListAPI(generics.ListAPIView):
         reviewable = bool_from_request(self.request.GET, 'reviewable', False)
         history = bool_from_request(self.request.GET, 'history', False)
 
+        if not project_id:
+            from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
+            managed = Project.objects.filter(
+                Q(created_by=actor) | Q(members__user=actor, members__enabled=True, members__role='manager')
+            ).values('pk')
+            queryset = queryset.exclude(sensitive_project_filter('assignment__project')
+                                        & ~Q(assignment__project_id__in=managed))
+
         from access_control.project_operations import REVIEW, require_project_operation
         from task_packages.scope import PackageScope, requested_package
 
@@ -1235,6 +1311,7 @@ class SubmissionListAPI(generics.ListAPIView):
             )
 
         if reviewable:
+            from classification_disagreements.models import BlindQualityAssignment
             if not project_id:
                 raise ValidationError({'project': 'Project is required for the review queue.'})
             project = generics.get_object_or_404(Project.objects.for_user(actor), pk=project_id)
@@ -1245,7 +1322,8 @@ class SubmissionListAPI(generics.ListAPIView):
             queryset = queryset.filter(
                 assignment__project=project,
                 status=Submission.Status.PENDING,
-            ).exclude(submitted_by=actor)
+            ).exclude(submitted_by=actor).exclude(
+                assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
             if package_id is not None:
                 scope = PackageScope.from_request(self.request, project)
                 require_project_operation(scope.project, REVIEW)
@@ -1273,6 +1351,17 @@ class SubmissionAPI(generics.RetrieveAPIView):
     permission_classes = (HasActorObjectPermission, IsAuthenticated)
     serializer_class = SubmissionSerializer
     permission_required = all_permissions.annotations_view
+
+    @transaction.atomic
+    def get(self, request, *args, **kwargs):
+        from access_control.project_operations import READ_WORK, lock_project_operation
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        submission = self.get_object()
+        project = submission.assignment.project
+        if sensitive_project(project):
+            lock_project_operation(project.pk, resolve_principal(request), READ_WORK)
+        return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
         _, actor = resolve_actor(self.request)
@@ -1306,10 +1395,10 @@ class SubmissionReviewAPI(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         from task_packages.scope import requested_package
 
-        # A scoped response is part of the frozen-evidence boundary. Keep the
-        # existing write fence until serialization and final access checks pass.
-        # Ordinary reviews retain their existing transaction/read contract.
-        with transaction.atomic() if batch_id is not None else nullcontext():
+        # Hold the review write fence through response serialization, including
+        # ordinary reviews, so membership cannot be revoked between the decision
+        # and delivery of its submitted snapshot.
+        with transaction.atomic():
             review_submission(
                 submission=submission,
                 reviewer=actor,
@@ -1662,12 +1751,68 @@ class TaskAssignmentAPI(generics.RetrieveDestroyAPIView):
 )
 class PredictionAPI(viewsets.ModelViewSet):
     serializer_class = PredictionSerializer
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     permission_required = all_permissions.predictions_any
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['task', 'task__project', 'project']
 
     def get_queryset(self):
-        return Prediction.objects.filter(project__organization=self.request.user.active_organization)
+        _, user = resolve_actor(self.request)
+        # A prediction can contain the answer to an unassigned reference task.
+        # Project membership alone is not permission to read every task.
+        queryset = Prediction.objects.filter(
+            project_id=F('task__project_id'),
+            project_id__in=visible_projects_for_actor(user).values('pk'),
+            task_id__in=Task.objects.for_user(user).values('pk'),
+        )
+        from classification_disagreements.blind_participant_projection import restrict_prediction_queryset
+
+        return restrict_prediction_queryset(queryset, self.request)
+
+    @staticmethod
+    def _locked_write_scope(task, principal):
+        from classification_disagreements.models import BlindQualityAssignment
+
+        project, _ = lock_project_operation(task.project_id, principal, EDIT)
+        authorization.require(authorization.can_manage_project(principal, project),
+                              'Project manager role is required to manage predictions.')
+        task = generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
+        if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+            raise ValidationError({'detail': 'Predictions are unavailable for quality tasks.'})
+        return project, task
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        principal, _ = resolve_actor(self.request)
+        task = serializer.validated_data['task']
+        project, task = self._locked_write_scope(task, principal)
+        requested_project = serializer.validated_data.get('project')
+        if requested_project is not None and requested_project.pk != project.pk:
+            raise ValidationError({'project': 'Project must match the task.'})
+        serializer.save(project=project, task=task)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        principal, _ = resolve_actor(self.request)
+        instance = serializer.instance
+        project, task = self._locked_write_scope(instance.task, principal)
+        if (serializer.validated_data.get('task', task).pk != task.pk
+                or (serializer.validated_data.get('project') is not None
+                    and serializer.validated_data['project'].pk != project.pk)):
+            raise ValidationError({'detail': 'Prediction task and project cannot be changed.'})
+        serializer.instance = generics.get_object_or_404(
+            Prediction.objects.select_for_update(), pk=instance.pk, task=task, project=project,
+        )
+        serializer.save(project=project, task=task)
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        principal, _ = resolve_actor(self.request)
+        project, task = self._locked_write_scope(instance.task, principal)
+        prediction = generics.get_object_or_404(
+            Prediction.objects.select_for_update(), pk=instance.pk, task=task, project=project,
+        )
+        prediction.delete()
 
 
 @method_decorator(name='get', decorator=extend_schema(exclude=True))
@@ -1703,6 +1848,9 @@ class AnnotationConvertAPI(generics.RetrieveAPIView):
         organization = annotation.project.organization
         project = annotation.project
         pk = annotation.pk
+        from classification_disagreements.blind_quality_boundary import is_quality_only_assignment
+
+        suppress_quality_webhook = is_quality_only_assignment(assignment.pk)
 
         draft = AnnotationDraft.objects.create(
             result=annotation.result,
@@ -1717,6 +1865,7 @@ class AnnotationConvertAPI(generics.RetrieveAPIView):
 
         annotation.delete()
 
-        emit_webhooks_for_instance(organization, project, WebhookAction.ANNOTATIONS_DELETED, [pk])
+        if not suppress_quality_webhook:
+            emit_webhooks_for_instance(organization, project, WebhookAction.ANNOTATIONS_DELETED, [pk])
         data = AnnotationDraftSerializer(instance=draft).data
         return Response(status=201, data=data)

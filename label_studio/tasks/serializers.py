@@ -99,8 +99,25 @@ class PredictionSerializer(ModelSerializer):
     )
     created_ago = serializers.CharField(default='', read_only=True, help_text='Delta time from creation time')
 
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request')
+        if request is not None and getattr(request.user, 'is_authenticated', False):
+            from access_control.project_access import visible_projects_for_actor
+
+            _, actor = resolve_actor(request)
+            projects = visible_projects_for_actor(actor)
+            fields['task'].queryset = Task.objects.for_user(actor).filter(project__in=projects)
+            fields['project'].queryset = projects
+        return fields
+
     def validate(self, data):
         """Validate prediction using LabelInterface against project configuration"""
+        request = self.context.get('request')
+        task = data.get('task') or (self.instance.task if self.instance is not None else None)
+        if request is not None and request.method in ('POST', 'PUT', 'PATCH') and task is not None:
+            authorization.require(authorization.can_manage_task(resolve_principal(request), task),
+                                  'Project manager role is required to manage predictions.')
         project = None
         if 'task' in data:
             project = data['task'].project
@@ -381,7 +398,10 @@ class TaskSimpleSerializer(FlexFieldsModelSerializer):
             data = instance.data
             replace_task_data_undefined_with_config_field(data, project)
 
-        return super().to_representation(instance)
+        result = super().to_representation(instance)
+        from classification_disagreements.blind_participant_projection import participant_task_metadata
+
+        return participant_task_metadata(result, self.context.get('request'), project)
 
     class Meta:
         model = Task
@@ -438,7 +458,10 @@ class BaseTaskSerializer(FlexFieldsModelSerializer):
             data = instance.data
             replace_task_data_undefined_with_config_field(data, project)
 
-        return super().to_representation(instance)
+        result = super().to_representation(instance)
+        from classification_disagreements.blind_participant_projection import participant_task_metadata
+
+        return participant_task_metadata(result, self.context.get('request'), project)
 
     class Meta:
         model = Task
@@ -993,7 +1016,13 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
     updated_by = serializers.SerializerMethodField(default=[], read_only=True)
 
     def get_updated_by(self, task):
-        return [{'user_id': task.updated_by_id}] if task.updated_by_id else []
+        actor = self._get_user()
+        if task.updated_by_id is None or actor is None:
+            return []
+        request = self.context.get('request')
+        if task.updated_by_id != actor.pk and (request is None or not authorization.can_manage_project(resolve_principal(request), task.project)):
+            return []
+        return [{'user_id': task.updated_by_id}]
 
     def get_can_label(self, task):
         request = self.context.get('request')
@@ -1027,6 +1056,12 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
+        request = self.context.get('request')
+        if request is not None and not authorization.can_manage_project(resolve_principal(request), instance.project):
+            assignment = self._get_assignment(instance)
+            ret['is_labeled'] = bool(assignment and assignment.annotation_id and instance.annotations.filter(
+                pk=assignment.annotation_id, completed_by_id=assignment.assignee_id, was_cancelled=False,
+            ).exists())
         if ret.get('assignment_id') is None:
             ret.pop('assignment_id', None)
             ret.pop('assignment_version', None)
@@ -1101,27 +1136,19 @@ class NextTaskSerializer(TaskWithAnnotationsAndPredictionsAndDraftsSerializer):
         return PredictionSerializer(predictions, many=True, read_only=True, default=[], context=self.context).data
 
     def get_annotations(self, task):
-        result = []
-        if self.context.get('annotations', False):
-            # Support lazy loading of annotations (FIT-720)
-            # When annotations_stub is True, return lightweight stubs without result field
-            use_stub = self.context.get('annotations_stub', False)
-            user = self.context['request'].user
-
-            if use_stub:
-                # Get annotations queryset and filter by user
-                annotations = task.annotations
-                if user.is_annotator:
-                    annotations = annotations.filter(completed_by=user)
-                else:
-                    annotations = annotations.filter(completed_by=user)
-                return AnnotationStubSerializer(annotations, many=True, read_only=True, context=self.context).data
-            else:
-                annotations = super().get_annotations(task)
-                for annotation in annotations:
-                    if annotation.get('completed_by') == user.id:
-                        result.append(annotation)
-        return result
+        if not self.context.get('annotations', False):
+            return []
+        actor = self._get_user()
+        assignment = self._get_assignment(task)
+        if actor is None or assignment is None or assignment.annotation_id is None:
+            return []
+        # The session user may differ from the trusted mapped actor. Scope to
+        # the current actor's active assignment, including its exact annotation;
+        # historical or peer annotations must not enter either serializer.
+        annotations = task.annotations.filter(pk=assignment.annotation_id, project_id=task.project_id,
+                                              completed_by_id=actor.pk)
+        serializer = AnnotationStubSerializer if self.context.get('annotations_stub', False) else AnnotationSerializer
+        return serializer(annotations, many=True, read_only=True, context=self.context).data
 
 
 class TaskIDWithAnnotationsAndPredictionsSerializer(ModelSerializer):

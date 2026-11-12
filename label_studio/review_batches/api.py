@@ -420,6 +420,8 @@ class DetailAPI(BatchAPI):
 
 class QueueAPI(BatchAPI):
     def get(self, request, pk, batch_id):
+        from classification_disagreements.models import BlindQualityAssignment
+
         principal, actor, project, role, _ = self.context(request, pk)
         if role != 'reviewer':
             raise PermissionDenied()
@@ -433,9 +435,10 @@ class QueueAPI(BatchAPI):
         ids = [item['submission_id'] for item in service.visible_candidates(batch, actor, role) if item['selected']]
         rows = (
             Submission.objects.filter(
-                pk__in=ids, status='pending', assignment__project=project, assignment__task__project=project
+                pk__in=ids, status='pending', assignment__project=project, assignment__task__project=project,
             )
             .exclude(submitted_by=actor)
+            .exclude(assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
             .select_related('assignment__project', 'submitted_by', 'review__reviewer')
         )
 
@@ -462,6 +465,7 @@ class QueueAPI(BatchAPI):
                 assignment__task__project=project,
             )
             .exclude(submitted_by=actor)
+            .exclude(assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
             .count()
         )
         if current != len(data) or any(item['id'] not in sources for item in data):

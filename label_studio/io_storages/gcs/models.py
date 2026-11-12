@@ -250,7 +250,7 @@ class GCSExportStorage(GCSStorageMixin, ExportStorage):
     @serialize_mutable_delivery
     @transaction.atomic
     def save_annotation(self, annotation):
-        self.require_mutable_delivery_allowed(lock_project=True)
+        self.require_mutable_delivery_allowed(lock_project=True, annotation=annotation)
         bucket = self.get_bucket()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)

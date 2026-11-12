@@ -218,6 +218,15 @@ def api_webhook(action):
             action_meta = WebhookAction.ACTIONS[action]
             many = action_meta['many']
             instance = action_meta['model'].objects.get(id=response.data.get('id'))
+            if action in (WebhookAction.ANNOTATION_CREATED, WebhookAction.ANNOTATION_UPDATED):
+                # Blind participant routes use the same observable event policy
+                # for ordinary and sampled work, and never emit pre-commit.
+                if getattr(self, 'suppress_work_webhooks', False):
+                    return response
+                from classification_disagreements.blind_quality_boundary import is_quality_only_annotation
+
+                if is_quality_only_annotation(instance.pk):
+                    return response
             if many:
                 instance = [instance]
             project = None
@@ -255,6 +264,11 @@ def api_webhook_for_delete(action):
         @wraps(func)
         def wrap(self, request, *args, **kwargs):
             instance = self.get_object()
+            suppress_quality = False
+            if action == WebhookAction.ANNOTATIONS_DELETED:
+                from classification_disagreements.blind_quality_boundary import is_quality_only_annotation
+
+                suppress_quality = is_quality_only_annotation(instance.pk)
             action_meta = WebhookAction.ACTIONS[action]
             many = action_meta['many']
             project = None
@@ -267,6 +281,8 @@ def api_webhook_for_delete(action):
 
             response = func(self, request, *args, **kwargs)
 
+            if suppress_quality:
+                return response
             emit_webhooks_for_instance(request.user.active_organization, project, action, obj)
             return response
 

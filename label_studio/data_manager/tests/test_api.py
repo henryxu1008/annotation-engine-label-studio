@@ -27,7 +27,9 @@ class TestTaskPaginationMemoryOptimization(TestCase):
         self.mock_request = MagicMock()
         self.mock_request.query_params = {'page': '1', 'page_size': '30'}
 
-    def test_sync_paginate_queryset_uses_only_id(self):
+    @patch('classification_disagreements.blind_participant_projection.restrict_prediction_queryset',
+           side_effect=lambda queryset, request: queryset)
+    def test_sync_paginate_queryset_uses_only_id(self, _restrict_predictions):
         """Test sync_paginate_queryset applies .only('id') optimization.
 
         This test validates:
@@ -84,7 +86,9 @@ class TestTaskPaginationMemoryOptimization(TestCase):
             call_args = mock_parent_paginate.call_args
             assert call_args[0][0] is mock_id_only_queryset
 
-    def test_count_queries_use_original_queryset(self):
+    @patch('classification_disagreements.blind_participant_projection.restrict_prediction_queryset',
+           side_effect=lambda queryset, request: queryset)
+    def test_count_queries_use_original_queryset(self, restrict_predictions):
         """Test that count queries use the original queryset (for correct subqueries).
 
         This test validates:
@@ -108,6 +112,8 @@ class TestTaskPaginationMemoryOptimization(TestCase):
                     mock_prediction.objects.filter.assert_called_once()
                     prediction_filter_kwargs = mock_prediction.objects.filter.call_args[1]
                     assert prediction_filter_kwargs['task_id__in'] is mock_queryset
+                    restrict_predictions.assert_called_once_with(mock_prediction.objects.filter.return_value,
+                                                                self.mock_request)
 
                     mock_annotation.objects.filter.assert_called_once()
                     annotation_filter_kwargs = mock_annotation.objects.filter.call_args[1]

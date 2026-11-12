@@ -25,6 +25,7 @@ import { queryClient, shouldBypassCache } from "@humansignal/core/lib/utils/quer
  * mockDelay: number,
  * mockDisabled: boolean,
  * sharedParams: Dict<any>,
+ * operationGuard?: (method: string, params: Dict<any>, shared: Dict<any>, endpoint: EndpointConfig, parent: string[]) => boolean,
  * alwaysExpectJSON: boolean,
  * }} APIProxyOptions
  */
@@ -64,6 +65,7 @@ export class APIProxy {
     this.sharedParams = options.sharedParams ?? {};
     this.alwaysExpectJSON = options.alwaysExpectJSON ?? true;
     this.endpoints = options.endpoints;
+    this.operationGuard = options.operationGuard;
 
     this.resolveMethods(options.endpoints);
   }
@@ -133,11 +135,11 @@ export class APIProxy {
         const { scope, ...restSettings } = this.getSettings(settings);
 
         Object.defineProperty(this, methodName, {
-          value: this.createApiCallExecutor(restSettings, [parentPath]),
+          value: this.createApiCallExecutor(restSettings, [parentPath], false, methodName),
         });
 
         Object.defineProperty(this, `${methodName}Raw`, {
-          value: this.createApiCallExecutor(restSettings, [parentPath], true),
+          value: this.createApiCallExecutor(restSettings, [parentPath], true, `${methodName}Raw`),
         });
 
         if (scope) this.resolveMethods(scope, [...(parentPath ?? []), restSettings.path]);
@@ -150,8 +152,12 @@ export class APIProxy {
    * @param {EndpointConfig} settings
    * @private
    */
-  createApiCallExecutor(methodSettings, parentPath, raw = false) {
+  createApiCallExecutor(methodSettings, parentPath, raw = false, methodName) {
     return async (urlParams, { headers, body, options } = {}) => {
+      const guardParams = { ...(methodSettings.params ?? {}), ...(urlParams ?? {}), ...(this.sharedParams ?? {}) };
+      if (this.operationGuard && !this.operationGuard(methodName, guardParams, this.sharedParams, methodSettings, parentPath)) {
+        return { error: "Work operation is unavailable", status: 403 };
+      }
       let responseResult;
       let responseMeta;
       const alwaysExpectJSON = options?.alwaysExpectJSON === undefined ? true : options.alwaysExpectJSON;

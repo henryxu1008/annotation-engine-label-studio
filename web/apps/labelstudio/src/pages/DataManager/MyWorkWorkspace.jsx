@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@humansignal/ui";
+import { observer } from "mobx-react";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
@@ -11,7 +12,70 @@ export { displayWorkState } from "./workDisplay";
 
 const myWork = cn("my-work-workspace");
 
-export const MyWorkWorkspace = ({ projectId, onOpenReviewQueue }) => {
+const BlindWorkWorkspace = observer(({ projectId, store, onOpenTask }) => {
+  const { t } = useLocaleTranslation("collaboration");
+  const [loading, setLoading] = useState(true);
+  const [requestFailed, setRequestFailed] = useState(false);
+  const generation = useRef(0);
+  const binding = useRef({ projectId, store });
+  const sameBinding = binding.current.projectId === projectId && binding.current.store === store;
+  const load = useCallback(async (page) => {
+    const current = ++generation.current;
+    setLoading(true);
+    setRequestFailed(false);
+    try {
+      await store.loadBlindWork(page);
+    } catch {
+      if (current === generation.current) setRequestFailed(true);
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
+  }, [store]);
+
+  useEffect(() => {
+    binding.current = { projectId, store };
+    load(1);
+    return () => { generation.current += 1; };
+  }, [load, projectId]);
+
+  const page = sameBinding ? store.blindWorkPage : null;
+  return (
+    <div className={myWork.toClassName()}>
+      <p>{t("myWorkDescription")}</p>
+      <Button disabled={loading || !sameBinding} onClick={() => load(page?.page ?? 1)}>{t("myWorkRefresh")}</Button>
+      {(loading || !sameBinding) && <p role="status">{t("myWorkLoading")}</p>}
+      {!loading && sameBinding && (requestFailed || store.blindWorkError) && <p role="alert">{displayCollaborationError("myWorkLoadFailed", t)}</p>}
+      {!loading && sameBinding && !requestFailed && !store.blindWorkError && page && (
+        <>
+          {!page.results.length && <p>{t("myWorkEmpty")}</p>}
+          <ul className={myWork.elem("rows").toClassName()}>
+            {page.results.map((row) => (
+              <li key={row.assignment_id}>
+                <span>{Object.values(row.data)[0].slice(0, 160)}</span>
+                <Button disabled={!row.can_label || !onOpenTask} onClick={() => onOpenTask(row.task_id)}>
+                  {t("myWorkOpenEditor")}
+                </Button>
+                {!row.can_label && <p>{t("myWorkReadOnly")}</p>}
+              </li>
+            ))}
+          </ul>
+          <div className={myWork.elem("filters").toClassName()}>
+            <Button disabled={page.page <= 1} onClick={() => load(page.page - 1)}>{t("previous")}</Button>
+            <span>{t("myWorkPage", { page: page.page })}</span>
+            <Button disabled={!page.has_next || page.page >= 1000} onClick={() => load(page.page + 1)}>{t("next")}</Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+});
+
+export const MyWorkWorkspace = ({ blindStore, onOpenBlindTask, ...props }) => (
+  blindStore ? <BlindWorkWorkspace projectId={props.projectId} store={blindStore} onOpenTask={onOpenBlindTask} />
+    : <LegacyMyWorkWorkspace {...props} />
+);
+
+const LegacyMyWorkWorkspace = ({ projectId, onOpenReviewQueue }) => {
   const { t } = useLocaleTranslation("collaboration");
   const { t: tp } = useLocaleTranslation("taskPackages");
   const api = useAPI();

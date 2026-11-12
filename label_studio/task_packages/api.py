@@ -104,6 +104,11 @@ class PackageAPIBase(generics.GenericAPIView):
         role = authorization.project_role(principal, project)
         if role not in ('manager', 'annotator', 'reviewer'):
             raise PermissionDenied()
+        if role == 'annotator' and not capability:
+            from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+            if sensitive_nonmanager(project, principal):
+                raise NotFound('Work is unavailable.')
         policy = require_project_operation(project, READ_WORK)
         if not capability and not settings.ANNOTATION_FIXED_PACKAGES_ENABLED:
             raise NotFound()
@@ -167,6 +172,18 @@ class PackageListAPI(PackageAPIBase):
                     'PACKAGE_TASKS_UNAVAILABLE',
                     'Some selected tasks are unavailable in this project.',
                 )
+            from classification_disagreements.models import BlindMixEvidence, BlindQualityAssignment
+            from tasks.models import TaskAssignment
+
+            task_ids = [task.pk for task in tasks]
+            if (BlindQualityAssignment.objects.filter(task_id__in=task_ids).exists()
+                    or BlindMixEvidence.objects.filter(
+                        source_task_id_frozen__in=task_ids,
+                        source_id_frozen__in=TaskAssignment.objects.filter(
+                            status__in=TaskAssignment.ACTIVE_STATUSES,
+                        ).values('pk'),
+                    ).exists()):
+                fail(ValidationError, 'PACKAGE_TASKS_UNAVAILABLE', 'Some selected tasks are unavailable in this project.')
             package = TaskPackage.objects.create(
                 project=project,
                 created_by=actor,

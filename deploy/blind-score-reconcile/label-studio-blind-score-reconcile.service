@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile Label Studio blind quality score jobs
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/label-studio/blind-score-reconcile.env
+ExecStart=/usr/bin/docker compose --project-directory ${BLIND_SCORE_COMPOSE_DIRECTORY} --file ${BLIND_SCORE_COMPOSE_FILE} run --rm --no-deps -T app python3 /label-studio/label_studio/manage.py reconcile_blind_scores --limit 50
+TimeoutStartSec=240

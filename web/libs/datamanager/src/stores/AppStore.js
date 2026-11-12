@@ -11,6 +11,7 @@ import { TabStore } from "./Tabs";
 import { CustomJSON } from "./types";
 import { User } from "./Users";
 import { ActivityObserver } from "../utils/ActivityObserver";
+import { blindRequest, validBlindWorkPage } from "../sdk/blind-protocol";
 
 /**
  * @type {ActivityObserver | null}
@@ -126,6 +127,9 @@ export const AppStore = types
     requestsInFlight: new Map(),
     taskNavigationPending: false,
     editorLocation: null,
+    blindWorkPage: null,
+    blindWorkError: false,
+    blindWorkRequestId: 0,
   }))
   .actions((self) => ({
     startPolling() {
@@ -206,12 +210,28 @@ export const AppStore = types
       self.taskNavigationPending = true;
       const lsf = self._sdk?.lsf;
       try {
+        if (self._sdk?.settings?.blindProtocol === true && lsf?.pendingBlindWrite) {
+          let result;
+          try {
+            result = yield lsf.pendingBlindWrite;
+          } catch {
+            restoreLocation();
+            return false;
+          }
+          const status = result?.$meta?.status;
+          if (status !== 200 && status !== 201) {
+            restoreLocation();
+            return false;
+          }
+          if (!isAlive(self) || self._sdk?.lsf !== lsf) return false;
+        }
         if (lsf && (yield lsf.saveDraft()) === false) {
           restoreLocation();
           return false;
         }
         if (!isAlive(self) || self._sdk?.lsf !== lsf) return false;
-        yield Promise.resolve(navigate());
+        const outcome = yield Promise.resolve(navigate());
+        if (outcome === false) return false;
         self.editorLocation = History.getParams();
         return true;
       } finally {
@@ -227,6 +247,7 @@ export const AppStore = types
     },
 
     setTaskAfterSave: flow(function* ({ taskID, annotationID, pushState, interface: interfaceOption }) {
+      const restricted = self.SDK.settings?.blindProtocol === true;
       if (pushState !== false) {
         History.navigate({
           task: taskID,
@@ -259,20 +280,27 @@ export const AppStore = types
         });
       }
 
-      runInAction(() => {
-        if (annotationID !== undefined) {
-          self.annotationStore.setSelected(annotationID);
-        } else {
-          self.taskStore.setSelected(taskID);
-        }
-      });
+      if (!restricted) {
+        runInAction(() => {
+          if (annotationID !== undefined) {
+            self.annotationStore.setSelected(annotationID);
+          } else {
+            self.taskStore.setSelected(taskID);
+          }
+        });
+      }
 
       const taskPromise = self.taskStore.loadTask(taskID, {
-        select: !!taskID && !!annotationID,
+        select: restricted || (!!taskID && !!annotationID),
       });
 
       // wait for the task to be loaded and LSF to be initialized
-      yield taskPromise.then(async () => {
+      return yield taskPromise.then(async (loaded) => {
+        if (restricted && (!loaded || String(loaded.id) !== String(taskID)
+            || String(self.taskStore.selected?.id) !== String(taskID))) {
+          self.failBlindTaskOpen();
+          return false;
+        }
         // wait for self.LSF to be initialized with currentAnnotation
         let maxWait = 1000;
         while (!self.LSF?.currentAnnotation && maxWait > 0) {
@@ -324,6 +352,15 @@ export const AppStore = types
 
       }).finally(() => self.setLoadingData(false));
     }),
+
+    failBlindTaskOpen() {
+      self.unsetTask();
+      self.blindWorkPage = null;
+      self.blindWorkError = true;
+      self.blindWorkRequestId += 1;
+      self.SDK.destroyLSF?.();
+      self.SDK.setMode("explorer");
+    },
 
     setLoadingData(value) {
       self.loadingData = value;
@@ -480,6 +517,13 @@ export const AppStore = types
     handlePopState: (({ state }) => {
       const { tab, task, annotation, labeling, region } = state ?? {};
 
+      if (self.SDK.settings?.blindProtocol === true) {
+        if (task != null && blindRequest("task", { taskID: task })) {
+          return self.setTask({ taskID: Number(task), pushState: false });
+        }
+        return self.closeLabeling({ pushState: false });
+      }
+
       if (tab) {
         const tabId = Number.parseInt(tab);
 
@@ -522,6 +566,8 @@ export const AppStore = types
 
     fetchProject: flow(function* (options = {}) {
       self.projectFetch = options.force === true;
+      const sdk = self.SDK;
+      const restrictedProject = sdk.settings?.blindProtocol === true ? String(sdk.projectId) : null;
 
       const isTimer = options.interaction === "timer";
       const params =
@@ -545,6 +591,11 @@ export const AppStore = types
       try {
         const newProject = yield self.apiCall("project", params);
         if (!isAlive(self)) return false;
+        if (restrictedProject !== null && (self.SDK !== sdk || self.SDK.settings?.blindProtocol !== true
+            || String(self.SDK.projectId) !== restrictedProject || String(newProject?.id) !== restrictedProject)) {
+          self.projectFetch = false;
+          return false;
+        }
         if (newProject?.error) {
           self.projectFetch = false;
           return false;
@@ -626,12 +677,67 @@ export const AppStore = types
       self.users.push(...list);
     }),
 
+    loadBlindWork: flow(function* (page = 1) {
+      const sdk = self.SDK;
+      const project = sdk.projectId;
+      const requestId = ++self.blindWorkRequestId;
+      self.blindWorkPage = null;
+      self.blindWorkError = false;
+      if (sdk.settings?.blindProtocol !== true || !Number.isSafeInteger(page) || page < 1 || page > 1000) {
+        self.blindWorkError = true;
+        return false;
+      }
+      let result;
+      try {
+        result = yield self.apiCall("workList", { page }, {}, { errorHandler: () => true });
+      } catch {
+        if (isAlive(self) && self.SDK === sdk && sdk.settings?.blindProtocol === true
+            && String(sdk.projectId) === String(project) && requestId === self.blindWorkRequestId) {
+          self.blindWorkError = true;
+        }
+        return false;
+      }
+      if (!isAlive(self) || self.SDK !== sdk || self.SDK.settings?.blindProtocol !== true
+          || String(self.SDK.projectId) !== String(project) || requestId !== self.blindWorkRequestId) return false;
+      if (result?.error || !validBlindWorkPage(result, page, project)) {
+        self.blindWorkError = true;
+        return false;
+      }
+      self.blindWorkPage = result;
+      return true;
+    }),
+
     fetchData: flow(function* ({ isLabelStream } = {}) {
       self.setLoading(true);
 
       const { tab, task, labeling, query } = History.getParams();
 
       self.viewsStore.fetchColumns();
+
+      if (self.SDK.settings?.blindProtocol === true) {
+        // Do not load saved views, the organization roster or legacy task
+        // queues while the participant work-list is being integrated.
+        self.project = {};
+        self.blindWorkPage = null;
+        self.blindWorkRequestId += 1;
+        const projectFetched = yield self.fetchProject();
+        if (!isAlive(self)) return;
+        const workFetched = projectFetched ? yield self.loadBlindWork() : false;
+        if (!isAlive(self)) return;
+        self.setLoading(false);
+        if (projectFetched) {
+          self.resolveURLParams();
+          if (task != null && workFetched) {
+            if (blindRequest("task", { taskID: task })) {
+              yield self.setTask({ taskID: Number(task), pushState: false });
+            } else {
+              History.navigate({ task: null, annotation: null, region: null }, true);
+              self.blindWorkError = true;
+            }
+          }
+        }
+        return;
+      }
 
       const requests = [self.fetchProject()];
 
@@ -694,6 +800,21 @@ export const AppStore = types
      */
     apiCall: flow(function* (methodName, params, body, options) {
       if (!isAlive(self)) return { error: "Data Manager was destroyed", isCanceled: true };
+      const blindProtocol = self.SDK.settings?.blindProtocol;
+      if (blindProtocol !== undefined && blindProtocol !== true && blindProtocol !== false) {
+        return { error: "Work operation is unavailable", status: 403 };
+      }
+      if (blindProtocol === true) {
+        // A mode switched on after APIProxy construction must not inherit
+        // legacy shared parameters that override IDs or enter request bodies.
+        if (Object.keys(self.API.sharedParams ?? {}).length) {
+          return { error: "Work operation is unavailable", status: 403 };
+        }
+        const adapted = blindRequest(methodName, params, self.LSF?.task?.id, self.SDK.projectId);
+        if (!adapted) return { error: "Work operation is unavailable", status: 403 };
+        methodName = adapted.methodName;
+        params = adapted.params;
+      }
       const isAllowCancel = options?.allowToCancel;
       const controller = new AbortController();
       const signal = controller.signal;

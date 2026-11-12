@@ -490,8 +490,17 @@ class DataManagerTaskSerializer(TaskSerializer):
                 visible_annotations = obj.annotations.filter(
                     task_assignment__assignee_id=principal.local_user_id,
                     task_assignment__status__in=['assigned', 'in_progress'],
+                    task_assignment__task_id=obj.pk,
+                    task_assignment__project_id=obj.project_id,
+                    project_id=obj.project_id,
+                    completed_by_id=principal.local_user_id,
                 )
                 ret['total_annotations'] = visible_annotations.filter(was_cancelled=False).count()
+                # These task-wide fields otherwise reveal a peer's activity
+                # even when their annotation payload is correctly filtered.
+                ret['is_labeled'] = visible_annotations.filter(was_cancelled=False).exists()
+                if obj.updated_by_id != principal.local_user_id:
+                    ret['updated_by'] = []
                 # Aggregate annotation metadata can reveal another annotator's work.
                 ret['annotations_results'] = ''
                 ret['annotations_ids'] = ','.join(str(pk) for pk in visible_annotations.values_list('id', flat=True))
@@ -595,6 +604,10 @@ class DataManagerTaskSerializer(TaskSerializer):
                 annotations = annotations.filter(
                     task_assignment__assignee_id=principal.local_user_id,
                     task_assignment__status__in=['assigned', 'in_progress'],
+                    task_assignment__task_id=task.pk,
+                    task_assignment__project_id=task.project_id,
+                    project_id=task.project_id,
+                    completed_by_id=principal.local_user_id,
                 )
 
         # Use stub serializer if requested (feature flag checked at API level)

@@ -196,8 +196,9 @@ class Task(TaskMixin, FsmHistoryStateModel):
     @classmethod
     def get_random(cls, project):
         """Get random task from a project, this should not be used lightly as its expensive method to run"""
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
 
-        ids = cls.objects.filter(project=project).values_list('id', flat=True)
+        ids = cls.objects.filter(project=project).exclude(pk__in=quality_task_ids()).values_list('id', flat=True)
         if len(ids) == 0:
             return None
 
@@ -520,6 +521,8 @@ class Task(TaskMixin, FsmHistoryStateModel):
             return self.annotations.filter(Q_finished_annotations)
 
     def increase_project_summary_counters(self):
+        if getattr(self, '_blind_quality_creation', False):
+            return
         if hasattr(self.project, 'summary'):
             summary = self.project.summary
             summary.update_data_columns([self])
@@ -705,20 +708,41 @@ class Submission(models.Model):
     def has_permission(self, user):
         if user is None or not getattr(user, 'is_authenticated', False):
             return False
+        from classification_disagreements.blind_quality_boundary import is_quality_only_submission
+
         if self.assignment.assignee_id == user.id:
-            return True
+            if not is_quality_only_submission(self):
+                return True
+            from classification_disagreements.blind_provenance import checked_quality_proof
+            from classification_disagreements.models import BlindQualityAssignment
+            from rest_framework.exceptions import ValidationError
+
+            assignment = TaskAssignment.objects.filter(
+                pk=self.assignment_id, assignee_id=user.id, status__in=TaskAssignment.ACTIVE_STATUSES,
+            ).first()
+            marker = BlindQualityAssignment.objects.filter(assignment_id=self.assignment_id).first()
+            if assignment is not None and marker is not None:
+                try:
+                    checked_quality_proof(assignment=assignment, marker=marker, lock_epoch=False)
+                except ValidationError:
+                    pass
+                else:
+                    return True
         project = self.assignment.project
         if project.created_by_id == user.id:
             return True
+        roles = ['manager'] if is_quality_only_submission(self) else ['manager', 'reviewer']
         return project.members.filter(
             user=user,
             enabled=True,
-            role__in=['manager', 'reviewer'],
+            role__in=roles,
         ).exists()
 
     @property
     def is_releasable(self):
-        return self.status == self.Status.APPROVED
+        from classification_disagreements.blind_quality_boundary import is_quality_only_submission
+
+        return self.status == self.Status.APPROVED and not is_quality_only_submission(self)
 
 
 class ReviewDecision(models.Model):
@@ -931,6 +955,13 @@ class Annotation(AnnotationMixin, FsmHistoryStateModel):
 
     def has_permission(self, user: 'User') -> bool:  # noqa: F821
         user.project = self.project  # link for activity log
+        from classification_disagreements.models import BlindQualityAssignment
+
+        if self.task_id and BlindQualityAssignment.objects.filter(task_id=self.task_id).exists():
+            from access_control.authorization import authorization
+            from access_control.project_operations import local_principal
+
+            return authorization.can_view_annotation(local_principal(user), self)
         if self.project.created_by_id == user.id:
             return True
         if self.project.members.filter(user=user, enabled=True, role='manager').exists():
@@ -1153,6 +1184,14 @@ class AnnotationDraft(FsmHistoryStateModel):
         user.project = self.task.project  # link for activity log
         if self.user_id != user.id or self.assignment_id is None:
             return False
+        from classification_disagreements.models import BlindQualityAssignment
+
+        if BlindQualityAssignment.objects.filter(task_id=self.task_id).exists():
+            from access_control.authorization import authorization
+            from access_control.project_operations import local_principal
+
+            assignment = authorization.active_task_assignment(local_principal(user), self.task)
+            return assignment is not None and assignment.pk == self.assignment_id
         return (
             self.assignment.assignee_id == user.id
             and self.assignment.status in TaskAssignment.ACTIVE_STATUSES
@@ -1246,8 +1285,15 @@ class Prediction(models.Model):
         return timesince(self.created_at)
 
     def has_permission(self, user):
+        if self.task_id is None or self.project_id is None or self.project_id != self.task.project_id:
+            return False
         user.project = self.project  # link for activity log
-        return self.project.has_permission(user)
+        from access_control.authorization import authorization
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        principal = local_principal(user)
+        return not sensitive_nonmanager(self.project, principal) and authorization.can_view_task(principal, self.task)
 
     @classmethod
     def prepare_prediction_result(cls, result, project):

@@ -1,3 +1,5 @@
+import { blindEndpoints } from "./blind-protocol";
+
 /** @type {import("../utils/api-proxy").APIProxyOptions} */
 export const APIConfig = {
   gateway: "/api/dm",
@@ -60,6 +62,9 @@ export const APIConfig = {
 
     /** Single task (sample) */
     task: "/tasks/:taskID",
+
+    // Used only by the explicitly enabled blind participant adapter.
+    ...blindEndpoints,
 
     /** Next task (labelstream, default sequential) */
     nextTask: "/tasks/next",

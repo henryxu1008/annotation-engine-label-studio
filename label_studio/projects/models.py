@@ -1107,7 +1107,9 @@ class Project(ProjectMixin, FsmHistoryStateModel):
         :param extended: Boolean, if True, returns additional information. Default is False.
         :return: Dict or list containing model versions and their count predictions.
         """
-        predictions = Prediction.objects.filter(project=self)
+        from projects.functions import quality_task_ids
+
+        predictions = Prediction.objects.filter(project=self).exclude(task_id__in=quality_task_ids())
 
         model_versions = (
             predictions.values('model_version')
@@ -1492,7 +1494,31 @@ class ProjectSummary(models.Model):
         self.created_labels_drafts = {}
         self.save()
 
+    @staticmethod
+    def _ordinary_items(items, *, tasks=False):
+        """Exclude retained quality tasks from ordinary cached summaries."""
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
+
+        if isinstance(items, models.QuerySet):
+            return items.exclude(**{('pk__in' if tasks else 'task_id__in'): quality_task_ids()})
+        items = list(items)
+        def task_id(item):
+            if tasks and isinstance(item, Task):
+                return item.pk
+            if not tasks and isinstance(item, (Annotation, AnnotationDraft)):
+                return item.task_id
+            return None
+
+        ids = {task_id(item) for item in items} - {None}
+        if not ids:
+            return items
+        quality = set(quality_task_ids().filter(task_id__in=ids).values_list('task_id', flat=True))
+        return [item for item in items if task_id(item) not in quality]
+
     def update_data_columns(self, tasks):
+        tasks = self._ordinary_items(tasks, tasks=True)
+        if not tasks:
+            return
         common_data_columns = set()
         all_data_columns = dict(self.all_data_columns)
         for task in tasks:
@@ -1516,6 +1542,9 @@ class ProjectSummary(models.Model):
         self.save(update_fields=['all_data_columns', 'common_data_columns'])
 
     def remove_data_columns(self, tasks):
+        tasks = self._ordinary_items(tasks, tasks=True)
+        if not tasks:
+            return
         all_data_columns = dict(self.all_data_columns)
         keys_to_remove = []
 
@@ -1576,6 +1605,9 @@ class ProjectSummary(models.Model):
         return labels
 
     def update_created_annotations_and_labels(self, annotations):
+        annotations = self._ordinary_items(annotations)
+        if not annotations:
+            return
         created_annotations = dict(self.created_annotations)
         labels = dict(self.created_labels)
         for annotation in annotations:
@@ -1605,8 +1637,11 @@ class ProjectSummary(models.Model):
         self.save(update_fields=['created_annotations', 'created_labels'])
 
     def remove_created_annotations_and_labels(self, annotations):
+        annotations = self._ordinary_items(annotations)
+        if not annotations:
+            return
         # we are going to remove all annotations, so we'll reset the corresponding fields on the summary
-        remove_all_annotations = self.project.annotations.count() == len(annotations)
+        remove_all_annotations = self._ordinary_items(self.project.annotations.all()).count() == len(annotations)
         created_annotations, created_labels = (
             ({}, {}) if remove_all_annotations else (dict(self.created_annotations), dict(self.created_labels))
         )
@@ -1645,6 +1680,9 @@ class ProjectSummary(models.Model):
         self.save(update_fields=['created_annotations', 'created_labels'])
 
     def update_created_labels_drafts(self, drafts):
+        drafts = self._ordinary_items(drafts)
+        if not drafts:
+            return
         labels = dict(self.created_labels_drafts)
         for draft in drafts:
             results = get_attr_or_item(draft, 'result') or []
@@ -1668,8 +1706,11 @@ class ProjectSummary(models.Model):
         self.save(update_fields=['created_labels_drafts'])
 
     def remove_created_drafts_and_labels(self, drafts):
+        drafts = self._ordinary_items(drafts)
+        if not drafts:
+            return
         # we are going to remove all drafts, so we'll reset the corresponding field on the summary
-        remove_all_drafts = AnnotationDraft.objects.filter(task__project=self.project).count() == len(drafts)
+        remove_all_drafts = self._ordinary_items(AnnotationDraft.objects.filter(task__project=self.project)).count() == len(drafts)
         labels = {} if remove_all_drafts else dict(self.created_labels_drafts)
 
         if not remove_all_drafts:
