@@ -867,6 +867,26 @@ class TestBlindQualityBoundary(APITestCase):
         assert len(queries) == 1
         assert not project_file_scope_supported(-1)
 
+    def test_shared_external_scope_fence_denies_collection_and_object_access(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from django.db.models import Exists
+        from rest_framework.exceptions import NotFound
+        from users.models import User
+
+        self.qualified_submission(answer('Positive'))
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        assert Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+        # Keep the epoch and certificate valid while simulating a live global
+        # fence, so the test cannot pass merely because a trigger revoked it.
+        blocked = {'external_test': Exists(User.objects.filter(pk=self.manager.pk))}
+        with patch('classification_disagreements.blind_provenance._external_scope_checks', return_value=blocked):
+            assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=principal, task_handle=handle.task_handle)
+
     def test_collection_prefilter_is_not_a_substitute_for_integrity_verification(self):
         from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
         from classification_disagreements.tests.test_gold_scoring import answer

@@ -481,6 +481,12 @@ reads. These diagnostics confirm that revocation alignment alone does not close
 the timing gap. After factoring the shared exposure predicate, another fresh
 fixture measured 32.2 ms (28.8–38.9 ms, 33 queries) versus 15.5 ms (14.2–21.1
 ms, 20 queries), again using 14 warm paired reads. The gap remains a blocker.
+Consolidating global storage, model and credential fences into the object
+authorization query reduced the sampled path to 32 database queries. A fresh
+paired run still measured 42.7 ms median (34.4–64.0 ms) for quality versus
+20.8 ms (17.8–30.4 ms, 20 queries) for ordinary work, with 14 samples each.
+This change shares the live fence predicates but does not unify the complete
+ordinary and quality evidence paths or establish timing privacy.
 For repeatable local diagnostics, `measure_classification_blind_e2e` accepts
 the two outputs of the isolated synthetic seed commands, alternates the two
 reads and reports aggregate latency and query counts without returning handles.

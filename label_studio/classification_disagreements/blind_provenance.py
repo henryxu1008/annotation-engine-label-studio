@@ -43,23 +43,26 @@ def _projects_with_external_credentials(using='default'):
     )
 
 
+def _external_scope_checks(using='default'):
+    """Build the same global storage, model and credential fences for each caller."""
+    from io_storages.models import get_storage_classes
+    from ml.models import MLBackend
+
+    checks = {'external_credentials': Exists(_projects_with_external_credentials(using)),
+              'external_ml': Exists(MLBackend.objects.using(using).all())}
+    checks.update({f'external_storage_{index}': Exists(model.objects.using(using).all())
+                   for index, model in enumerate(get_storage_classes('import'))})
+    return checks
+
+
 def project_file_scope_supported(project_id):
     """External project storage can issue links outside prospective read capture."""
     if not _local_upload_backend_supported():
         return False
-    from io_storages.models import get_storage_classes
-    from ml.models import MLBackend
     from projects.models import Project
 
-    # Remote object links can be shared across projects and may bypass this
-    # process after issuance. Until cross-project identity is enforced, any
-    # configured remote import storage makes this capture generation unsuitable.
-    # Evaluate the same global fences in one database snapshot and round trip.
-    # The project anchor also fails closed when the requested scope disappeared.
-    checks = {'external_credentials': Exists(_projects_with_external_credentials()),
-              'external_ml': Exists(MLBackend.objects.all())}
-    checks.update({f'external_storage_{index}': Exists(model.objects.all())
-                   for index, model in enumerate(get_storage_classes('import'))})
+    # Evaluate global fences in one snapshot, anchored to the live project.
+    checks = _external_scope_checks()
     state = Project.all_objects.filter(pk=project_id).annotate(**checks).values(*checks).first()
     return state is not None and not any(state.values())
 
@@ -280,13 +283,8 @@ def current_quality_assignment_ids(account_id, using='default'):
                           _current_data__isnull=False, _pinned_config=F('_current_config')).annotate(
                      _matching_data=JSONContentEqual(F('_pinned_data'), F('_current_data')),
                  ).filter(_matching_data=True).values('assignment_id')
-    from io_storages.models import get_storage_classes
-    from ml.models import MLBackend
-
-    for model in get_storage_classes('import'):
-        result = result.filter(~Exists(model.objects.using(using).all()))
-    result = result.filter(~Exists(MLBackend.objects.using(using).all()))
-    result = result.filter(~Exists(_projects_with_external_credentials(using)))
+    for blocked in _external_scope_checks(using).values():
+        result = result.filter(~blocked)
     return result
 
 
@@ -354,7 +352,7 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
     if (epoch is None or proof is None or type(proof._gold_bytes) is not int
             or not 0 <= proof._gold_bytes <= 16384):
         unavailable()
-    if not project_file_scope_supported(assignment.project_id):
+    if not _local_upload_backend_supported():
         unavailable()
     value = proof.manifest
     try:
@@ -415,10 +413,16 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
         'has_source_exposure': Exists(BlindAssignmentExposure.objects.filter(
             account_id=assignment.assignee_id, task_id=value.get('source_task_id'), generation=epoch.generation)),
     }
+    from projects.models import Project
+
+    scope_checks = _external_scope_checks()
+    checks.update(scope_checks)
+    checks['has_project'] = Exists(Project.all_objects.filter(pk=assignment.project_id))
     guard = (BlindCaptureEpoch.objects.filter(pk=1, generation=epoch.generation, enabled=True)
              .annotate(**checks).values(*checks).first())
     if (guard is None or not all(guard[key] for key in (
-            'has_certificate', 'has_history', 'has_account_event', 'has_reference_event'))
+            'has_project', 'has_certificate', 'has_history', 'has_account_event', 'has_reference_event'))
+            or any(guard[key] for key in scope_checks)
             or guard['has_file_exposure'] or guard['has_label_exposure']
             or guard['has_mix'] != guard['has_mix_history']
             or (guard['has_mix'] and not guard['has_valid_mix'])):
