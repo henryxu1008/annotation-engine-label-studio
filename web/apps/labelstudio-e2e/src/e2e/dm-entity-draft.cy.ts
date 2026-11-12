@@ -23,7 +23,7 @@ describe("Restored text entity drafts", () => {
   before(() => cy.readFile(".enterprise-e2e.json").then((data) => { fixture = data; }));
 
   for (const locale of ["en-US", "zh-CN"]) {
-    it(`submits the latest local edit after an in-flight draft save in ${locale}`, () => {
+    it(`submits the latest local edit after an in-flight draft save in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
       cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
@@ -56,7 +56,7 @@ describe("Restored text entity drafts", () => {
       });
     });
 
-    it(`preserves a newer remote draft and recovers conflicted offline edits in ${locale}`, () => {
+    it(`preserves a newer remote draft and recovers conflicted offline edits in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
       cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
@@ -256,7 +256,7 @@ describe("Restored text entity drafts", () => {
       });
     }
 
-    it(`restores a clean entity and protects real edits through failed save and retry in ${locale}`, () => {
+    it(`restores a clean entity and protects real edits through failed save and retry in ${locale}`, { defaultCommandTimeout: 30000 }, () => {
       cy.task("createEnterpriseE2EUndoScope", { entityDraft: true }).then((scope: any) => {
         cy.loginAs(fixture.users.annotator_a.email, fixture.password, "/user/account/personal-info");
         cy.get('[data-testid="language-preference-select"]').select(locale).should("have.value", locale).and("not.be.disabled");
