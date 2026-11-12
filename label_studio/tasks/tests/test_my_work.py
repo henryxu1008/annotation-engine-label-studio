@@ -591,6 +591,8 @@ class TestMyWork(APITestCase):
                 assert tasks.status_code == 200, tasks.content
                 assert tasks.json()['tasks'] == []
                 assert tasks.json()['total'] == 0
+                assert tasks.json()['total_annotations'] == 0
+                assert tasks.json()['total_predictions'] == 0
                 assert self.client.get(f'/api/submissions/{pending.pk}/').status_code == 404
                 assert self.client.get('/api/submissions/', {'project': self.project.pk}).json() == []
                 if actor == self.reviewer:

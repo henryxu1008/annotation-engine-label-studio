@@ -516,9 +516,16 @@ class TaskListAPI(generics.ListCreateAPIView):
         # Resolve the project from either input before applying the same rule.
         from classification_disagreements.blind_participant_projection import sensitive_nonmanager
         from access_control.project_operations import lock_project_actor
+        from rest_framework.exceptions import PermissionDenied
 
         principal = resolve_principal(request)
-        project, _ = lock_project_actor(project.pk, principal)
+        try:
+            project, _ = lock_project_actor(project.pk, principal)
+        except PermissionDenied:
+            # Keep the legacy empty-list contract after organization access is
+            # revoked, without reading project task data or its counts.
+            page = self.paginate_queryset(Task.objects.none())
+            return self.get_paginated_response([]) if page is not None else Response([])
         self.check_object_permissions(request, project)
         if sensitive_nonmanager(project, principal):
             from access_control.project_operations import READ_WORK, lock_project_operation

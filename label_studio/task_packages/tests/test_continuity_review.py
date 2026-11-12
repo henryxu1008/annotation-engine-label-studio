@@ -164,8 +164,15 @@ class TestPackageReviewFindings(PackageFixture, APITestCase):
                 )
             else:
                 response = self.client.get(f'/api/tasks/{self.tasks[0].pk}/', {'task_package': self.package_a})
-        assert self.client.get(f'/api/annotations/{annotation.pk}/').status_code in (403, 404)
         assert response.status_code in (403, 404), response.content
+        # The simulated reassignment ran on this thread inside the read's
+        # transaction. Denial rolls it back; a real concurrent writer instead
+        # waits for the read fence. Verify the rollback, then independently
+        # commit reassignment and check that the old annotation is inaccessible.
+        self.assignment_a.refresh_from_db()
+        assert self.assignment_a.status in TaskAssignment.ACTIVE_STATUSES
+        self.reassign_same_actor()
+        assert self.client.get(f'/api/annotations/{annotation.pk}/').status_code in (403, 404)
 
     def test_next_rejects_old_payload_after_same_actor_reassignment(self):
         self.materialized_reassignment(NextTaskSerializer, next_task=True)

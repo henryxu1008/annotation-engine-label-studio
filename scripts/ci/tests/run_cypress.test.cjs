@@ -29,13 +29,16 @@ test('failure diagnostics expose only bounded numeric test positions', () => {
   value.totalFailed = 1;
   value.runs[0].tests[1].state = 'failed';
   const diagnostic = failureIndices(value, call);
-  assert.deepEqual(diagnostic, { schema: 'ui-cypress-failure-indices/v1', total: 2, failed: [2] });
+  assert.deepEqual(diagnostic, { schema: 'ui-cypress-failure-indices/v2', total: 2, failed: [2], categories: ['other'] });
   assert.ok(!JSON.stringify(diagnostic).includes('private-diagnostic'));
   assert.equal(failureIndices(result(), call), null);
   const wrongSpec = result(); wrongSpec.runs[0].tests[0].state = 'failed'; wrongSpec.runs[0].spec.absolute = '/other/spec';
   assert.equal(failureIndices(wrongSpec, call), null);
   const tooMany = result(); tooMany.runs[0].tests = Array(501).fill({ state: 'failed' });
   assert.equal(failureIndices(tooMany, call), null);
+  value.runs[0].tests[1].displayError = 'cy.task( failed; private payload';
+  assert.deepEqual(failureIndices(value, call).categories, ['task']);
+  assert.ok(!JSON.stringify(failureIndices(value, call)).includes('private payload'));
 });
 test('Module API launch failure or incomplete result cannot be a passing report', () => {
   for (const value of [undefined, {}, { failures: 1 }, { runs: [] }, { ...result(), totalTests: 0 }]) {

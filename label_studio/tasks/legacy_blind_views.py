@@ -9,7 +9,7 @@ from access_control.project_operations import lock_project_actor
 from classification_disagreements.blind_participant_projection import sensitive_nonmanager
 from django.db import transaction
 from projects.models import Project
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, PermissionDenied
 
 from . import api
 from .models import Annotation, AnnotationDraft, Task
@@ -45,8 +45,11 @@ class LegacyParticipantFence:
         if len(locked) != len(project_ids):
             raise NotFound('Work is unavailable.')
         locked = [lock_project_actor(project.pk, principal)[0] for project in locked]
-        if any(not authorization.can_view_project(principal, project)
-               or sensitive_nonmanager(project, principal) for project in locked):
+        if any(sensitive_nonmanager(project, principal) for project in locked):
+            raise NotFound('Work is unavailable.')
+        if any(not authorization.can_view_project(principal, project) for project in locked):
+            if self.resource_model in (Annotation, AnnotationDraft):
+                raise PermissionDenied('Work is unavailable.')
             raise NotFound('Work is unavailable.')
         current = self.resource_model.objects.select_related(*self.project_paths).filter(pk=kwargs['pk']).first()
         if current is None:

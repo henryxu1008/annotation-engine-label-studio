@@ -10,7 +10,17 @@ function failureIndices(result, call) {
   const tests = result.runs[0]?.tests;
   if (!Array.isArray(tests) || tests.length === 0 || tests.length > 500) return null;
   const failed = tests.flatMap((entry, index) => entry?.state === 'failed' ? [index + 1] : []);
-  return failed.length ? { schema: 'ui-cypress-failure-indices/v1', total: tests.length, failed } : null;
+  const categories = tests.filter((entry) => entry?.state === 'failed').map((entry) => {
+    const message = [entry.displayError, ...(entry.attempts || []).map((a) => a?.error?.message)]
+      .filter((part) => typeof part === 'string').join('\n');
+    if (/cy\.task\(/i.test(message)) return 'task';
+    if (/cy\.request\(|status code.*(?:4\d\d|5\d\d)/i.test(message)) return 'request';
+    if (/timed out|timeout/i.test(message)) return 'timeout';
+    if (/uncaught|unhandled/i.test(message)) return 'uncaught';
+    if (/assertionerror|expected/i.test(message)) return 'assertion';
+    return 'other';
+  });
+  return failed.length ? { schema: 'ui-cypress-failure-indices/v2', total: tests.length, failed, categories } : null;
 }
 
 function summarize(result, call) {

@@ -27,16 +27,20 @@ def cypress_failure_indices(path):
     """Accept only bounded numeric test positions, never Cypress diagnostics."""
     try:
         value = read_json(path)
-        if (not isinstance(value, dict) or set(value) != {'schema', 'total', 'failed'}
-                or value['schema'] != 'ui-cypress-failure-indices/v1'
+        if (not isinstance(value, dict) or set(value) != {'schema', 'total', 'failed', 'categories'}
+                or value['schema'] != 'ui-cypress-failure-indices/v2'
                 or type(value['total']) is not int or not 1 <= value['total'] <= 500
                 or not isinstance(value['failed'], list) or not value['failed']
                 or any(type(n) is not int or not 1 <= n <= value['total'] for n in value['failed'])
-                or value['failed'] != sorted(set(value['failed']))):
-            return []
-        return value['failed']
+                or value['failed'] != sorted(set(value['failed']))
+                or not isinstance(value['categories'], list)
+                or len(value['categories']) != len(value['failed'])
+                or any(c not in ('task', 'request', 'timeout', 'uncaught', 'assertion', 'other')
+                       for c in value['categories'])):
+            return [], []
+        return value['failed'], value['categories']
     except (OSError, ValueError, TypeError, KeyError):
-        return []
+        return [], []
 
 
 def command_prefix(argv):
@@ -470,9 +474,10 @@ def browser(ctx, shard, out, build_identity, build_manifest):
                 )
                 print('UI_BROWSER', call['id'], 'SUCCESS' if valid else 'FAILED', flush=True)
                 if not valid:
-                    indices = cypress_failure_indices(diagnostic)
+                    indices, categories = cypress_failure_indices(diagnostic)
                     if indices:
                         print('UI_BROWSER_FAILED_TEST_POSITIONS', call['id'], ','.join(map(str, indices)), flush=True)
+                        print('UI_BROWSER_FAILURE_CATEGORIES', call['id'], ','.join(categories), flush=True)
                 if not valid:
                     success = False
                     break
