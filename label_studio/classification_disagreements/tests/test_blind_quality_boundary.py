@@ -1477,6 +1477,24 @@ class TestBlindQualityBoundary(APITestCase):
         with self.assertRaises(NotFound):
             issue_handle(principal=principal, assignment_id=self.assignment.pk)
 
+    def test_reused_account_id_cannot_resolve_previous_blind_handle(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+        from users.models import User
+
+        self.qualified_submission(answer('Positive'))
+        old_id = self.annotator.pk
+        handle = issue_handle(principal=local_principal(self.annotator), assignment_id=self.assignment.pk)
+        User.objects.filter(pk=old_id).delete()
+        replacement = UserFactory(id=old_id, active_organization=self.organization)
+        self.organization.add_user(replacement)
+        ProjectMember.objects.create(project=self.project, user=replacement, role='annotator')
+        with self.assertRaises(NotFound):
+            resolve_handle(principal=local_principal(replacement), task_handle=handle.task_handle)
+
     def test_batched_quality_snapshot_needs_no_per_submission_query(self):
         bind_marker(self.assignment)
         _, submission = self._submit_new_annotation()

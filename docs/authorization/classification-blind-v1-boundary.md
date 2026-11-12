@@ -198,8 +198,13 @@ and quality work are indistinguishable to participants.
 Deleting an individual task retains its receipt and makes replay fail closed;
 deleting the project removes the receipt while retaining the minimal quality
 purpose tombstone.
-The internal records retain numeric account and reference IDs after deletion;
-explicit ID reuse can therefore fail and requires a reviewed restoration plan.
+The internal records retain numeric account and reference IDs after deletion.
+Account ID reuse preserves the original birth record and marks the replacement
+ineligible for blind admission, even if its privilege history row was removed
+while other birth or certificate evidence remained. The history's ordinary
+update guard cannot reset that mark; deleting retained evidence or restoring an
+incomplete backup requires a reviewed recovery plan. Reference ID reuse also
+requires such a plan.
 In particular, SQLite table rebuilds can silently remove triggers. The local
 worktree adds a disabled-by-default capture generation: changes to the Django
 migration ledger disable it, and re-enabling requires a new generation so old
@@ -476,6 +481,12 @@ reads. These diagnostics confirm that revocation alignment alone does not close
 the timing gap. After factoring the shared exposure predicate, another fresh
 fixture measured 32.2 ms (28.8–38.9 ms, 33 queries) versus 15.5 ms (14.2–21.1
 ms, 20 queries), again using 14 warm paired reads. The gap remains a blocker.
+For repeatable local diagnostics, `measure_classification_blind_e2e` accepts
+the two outputs of the isolated synthetic seed commands, alternates the two
+reads and reports aggregate latency and query counts without returning handles.
+It requires `TEST_ENVIRONMENT`, the explicit synthetic fixture flag and the
+synthetic database name. It is not a production measurement or an acceptance
+threshold; the command cannot prove the absence of a timing side channel.
 The existing personal-work flow can consume that store and open the editor by
 handle when its caller explicitly supplies the disabled protocol mode. A
 synthetic browser harness has exercised ordinary work in English and Chinese,

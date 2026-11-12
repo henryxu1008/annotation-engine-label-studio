@@ -38,6 +38,53 @@ env:
   JSON_LOG: "0"
 
 jobs:
+  blind-boundary:
+    name: Blind quality boundaries / ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgresql]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: gold-ci-synthetic-only
+          POSTGRES_DB: classification_gold
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d classification_gold"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+      - name: Install backend dependencies
+        run: poetry install --with test
+      - name: Test blind and related authorization boundaries
+        working-directory: label_studio
+        env:
+          DJANGO_DB: ${{ matrix.database }}
+        run: |
+          poetry run python core/version.py
+          poetry run pytest -q \
+            tasks/tests/test_prediction_authorization.py tasks/tests/test_my_work.py \
+            data_manager/tests/test_api.py data_manager/tests/test_private_filter_scope.py \
+            io_storages/tests/test_proxy_api.py io_storages/tests/test_localfiles_view.py \
+            classification_disagreements/tests/test_bbox_media_flow.py \
+            classification_disagreements/tests/test_blind_provenance.py \
+            classification_disagreements/tests/test_blind_quality_boundary.py \
+            organizations/tests/test_api.py tests/test_organizations.py
+
   classification-gold:
     name: PostgreSQL and bilingual gold browser journeys
     runs-on: ubuntu-latest

@@ -92,14 +92,6 @@ jobs:
             session_policy/tests/test_session_policy.py \
             access_control/tests/test_identity.py \
             tasks/tests/test_annotation_actor_security.py \
-            tasks/tests/test_prediction_authorization.py \
-            data_manager/tests/test_api.py \
-            data_manager/tests/test_private_filter_scope.py \
-            io_storages/tests/test_proxy_api.py io_storages/tests/test_localfiles_view.py \
-            classification_disagreements/tests/test_bbox_media_flow.py \
-            classification_disagreements/tests/test_blind_provenance.py \
-            classification_disagreements/tests/test_blind_quality_boundary.py \
-            organizations/tests/test_api.py tests/test_organizations.py \
             projects/tests/test_project_authorization.py \
             projects/tests/test_project_member_management.py \
             projects/tests/test_project_write_surface_hardening.py \
@@ -134,15 +126,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
-      quality-redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
       session-postgres:
         image: postgres:17-alpine
         env:
@@ -188,18 +171,11 @@ jobs:
           POSTGRE_NAME: session_security
           POSTGRE_USER: postgres
           POSTGRE_PASSWORD: session-security-test-only
-          LS82_TEST_REDIS_URL: redis://127.0.0.1:6379/15
         run: |
           poetry run pytest -q \
             users/tests/test_session_contract.py users/tests/test_session_revocation.py users/tests/test_session_version_migration.py \
             tasks/tests/test_submission_review_workflow.py tasks/tests/test_enterprise_collaboration_acceptance.py \
-            tasks/tests/test_task_assignment_authorization.py data_manager/tests/test_private_filter_scope.py \
-            tasks/tests/test_prediction_authorization.py \
-            io_storages/tests/test_proxy_api.py io_storages/tests/test_localfiles_view.py \
-            classification_disagreements/tests/test_bbox_media_flow.py \
-            classification_disagreements/tests/test_blind_provenance.py \
-            organizations/tests/test_api.py tests/test_organizations.py \
-            classification_disagreements/tests/test_blind_quality_boundary.py
+            tasks/tests/test_task_assignment_authorization.py
           poetry run pytest -q \
             tasks/tests/test_project_write_concurrency.py \
             review_batches/tests

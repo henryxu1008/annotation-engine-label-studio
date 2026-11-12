@@ -59,6 +59,44 @@ class TestBlindProvenance(TestCase):
         User.objects.filter(pk=before.pk).update(date_joined='2099-01-01T00:00:00Z')
         assert not account_born_after_reference(account_id=before.pk, reference_id=reference.pk)
 
+    def test_reused_account_id_cannot_inherit_eligibility_or_replace_birth_evidence(self):
+        reference = self.reference()
+        member = UserFactory()
+        account_id = member.pk
+        prior_birth = BlindProvenanceEvent.objects.get(kind='account', subject_id=account_id).sequence
+        assert account_born_after_reference(account_id=account_id, reference_id=reference.pk)
+        assert account_has_untainted_privilege_history(account_id=account_id)
+        User.objects.filter(pk=account_id).delete()
+        replacement = UserFactory(id=account_id)
+        assert replacement.pk == account_id
+        assert BlindProvenanceEvent.objects.get(kind='account', subject_id=account_id).sequence == prior_birth
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindPrivilegeHistory.objects.filter(account_id=account_id).update(elevated=False)
+
+    def test_reused_account_with_missing_history_remains_ineligible(self):
+        member = UserFactory()
+        account_id = member.pk
+        prior_birth = BlindProvenanceEvent.objects.get(kind='account', subject_id=account_id).sequence
+        User.objects.filter(pk=account_id).delete()
+        BlindPrivilegeHistory.objects.filter(account_id=account_id).delete()
+        replacement = UserFactory(id=account_id)
+        assert replacement.pk == account_id
+        assert BlindProvenanceEvent.objects.get(kind='account', subject_id=account_id).sequence == prior_birth
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+
+    def test_reused_account_with_only_retained_certificate_remains_ineligible(self):
+        member = UserFactory()
+        account_id = member.pk
+        assert BlindCaptureCertificate.objects.filter(account_id=account_id).exists()
+        User.objects.filter(pk=account_id).delete()
+        BlindPrivilegeHistory.objects.filter(account_id=account_id).delete()
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).delete()
+        replacement = UserFactory(id=account_id)
+        assert replacement.pk == account_id
+        assert BlindCaptureCertificate.objects.filter(account_id=account_id).exists()
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+
     def test_bulk_insert_is_captured_and_missing_events_fail_closed(self):
         reference = self.reference()
         # bulk_create does not invoke Django model save hooks.
