@@ -516,6 +516,13 @@ draft detail, project task list, next-task and annotator work/package routes
 deny non-manager participants in sensitive projects. The legacy task-list shell
 is available to reviewers with an empty task queryset under a membership lock,
 so the ordinary review workspace can open without leaking participant tasks.
+Legacy task detail, task-list, next-task, stream-history and project-task-list
+requests now lock the project and recheck live membership before deciding
+whether the project is sensitive. This orders those reads against quality-marker
+creation, including transitions from an ordinary project. The lock is held
+while the response is assembled; ordinary task paths that perform external
+prediction evaluation can therefore increase lock hold time, which needs
+throughput and timeout review before rollout.
 Saved data-manager views can carry raw task IDs in filters and selections;
 annotators cannot list, retrieve, create or move them into sensitive projects.
 Reviewers retain project-scoped view access under the same membership fence.

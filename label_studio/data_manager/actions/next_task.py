@@ -4,8 +4,9 @@ import logging
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
-from access_control.project_operations import EDIT, require_project_operation
+from access_control.project_operations import EDIT, lock_project_actor, require_project_operation
 from core.permissions import all_permissions
+from django.db import transaction
 from data_manager.actions import DataManagerAction
 from data_manager.functions import filters_ordering_selected_items_exist
 from projects.functions.next_task import get_next_task
@@ -16,6 +17,7 @@ from tasks.serializers import NextTaskSerializer
 logger = logging.getLogger(__name__)
 
 
+@transaction.atomic
 def next_task(project, queryset, **kwargs):
     """Generate next task for labeling stream
 
@@ -27,7 +29,9 @@ def next_task(project, queryset, **kwargs):
     request = kwargs['request']
     from classification_disagreements.blind_participant_projection import sensitive_nonmanager
 
-    if sensitive_nonmanager(project, resolve_principal(request)):
+    principal = resolve_principal(request)
+    project, _ = lock_project_actor(project.pk, principal)
+    if not authorization.can_view_project(principal, project) or sensitive_nonmanager(project, principal):
         raise NotFound('Work is unavailable.')
     scope = PackageScope.from_request(request, project)
     if scope:

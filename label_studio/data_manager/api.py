@@ -515,8 +515,11 @@ class TaskListAPI(generics.ListCreateAPIView):
         # The legacy queue serializes raw task IDs and arbitrary task data.
         # Resolve the project from either input before applying the same rule.
         from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+        from access_control.project_operations import lock_project_actor
 
         principal = resolve_principal(request)
+        project, _ = lock_project_actor(project.pk, principal)
+        self.check_object_permissions(request, project)
         if sensitive_nonmanager(project, principal):
             from access_control.project_operations import READ_WORK, lock_project_operation
 

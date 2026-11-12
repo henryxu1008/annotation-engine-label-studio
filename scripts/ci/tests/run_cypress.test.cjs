@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { summarize } = require('../run_cypress.cjs');
+const { summarize, failureIndices } = require('../run_cypress.cjs');
 
 const call = { spec: 'apps/labelstudio-e2e/src/e2e/review-confidence.cy.ts',
   config_file: 'cypress.review-confidence.config.ts', env: {}, browser: 'electron',
@@ -23,6 +23,19 @@ test('Module API summary binds actual source, config, browser and language cases
   assert.deepEqual(summary.languages, ['en-US', 'zh-CN']);
   assert.ok(!JSON.stringify(summary).includes('never-in-public-report'));
   assert.ok(!JSON.stringify(summary).includes('private-diagnostic'));
+});
+test('failure diagnostics expose only bounded numeric test positions', () => {
+  const value = result();
+  value.totalFailed = 1;
+  value.runs[0].tests[1].state = 'failed';
+  const diagnostic = failureIndices(value, call);
+  assert.deepEqual(diagnostic, { schema: 'ui-cypress-failure-indices/v1', total: 2, failed: [2] });
+  assert.ok(!JSON.stringify(diagnostic).includes('private-diagnostic'));
+  assert.equal(failureIndices(result(), call), null);
+  const wrongSpec = result(); wrongSpec.runs[0].tests[0].state = 'failed'; wrongSpec.runs[0].spec.absolute = '/other/spec';
+  assert.equal(failureIndices(wrongSpec, call), null);
+  const tooMany = result(); tooMany.runs[0].tests = Array(501).fill({ state: 'failed' });
+  assert.equal(failureIndices(tooMany, call), null);
 });
 test('Module API launch failure or incomplete result cannot be a passing report', () => {
   for (const value of [undefined, {}, { failures: 1 }, { runs: [] }, { ...result(), totalTests: 0 }]) {

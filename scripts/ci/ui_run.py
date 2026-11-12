@@ -23,6 +23,22 @@ from ui_inventory import calls, inventory, normalize_commands, prepare_commands
 from ui_results import normalize_jest, normalize_node_xml, report_reference, validate_report
 
 
+def cypress_failure_indices(path):
+    """Accept only bounded numeric test positions, never Cypress diagnostics."""
+    try:
+        value = read_json(path)
+        if (not isinstance(value, dict) or set(value) != {'schema', 'total', 'failed'}
+                or value['schema'] != 'ui-cypress-failure-indices/v1'
+                or type(value['total']) is not int or not 1 <= value['total'] <= 500
+                or not isinstance(value['failed'], list) or not value['failed']
+                or any(type(n) is not int or not 1 <= n <= value['total'] for n in value['failed'])
+                or value['failed'] != sorted(set(value['failed']))):
+            return []
+        return value['failed']
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+
+
 def command_prefix(argv):
     if argv[0] == 'yarn' and os.environ.get('UI_YARN_JS'):
         require(os.environ.get('GITHUB_ACTIONS') != 'true', 'CI must use the configured yarn executable')
@@ -431,8 +447,9 @@ def browser(ctx, shard, out, build_identity, build_manifest):
                 input_path = private / f'call-{index}.json'
                 write_json(input_path, call)
                 relative = f"reports/{call['id']}.json"
+                diagnostic = private / f'cypress-failure-{index}.json'
                 code, elapsed = run(
-                    ['node', str(ROOT / 'scripts/ci/run_cypress.cjs'), str(input_path), str(out / relative)],
+                    ['node', str(ROOT / 'scripts/ci/run_cypress.cjs'), str(input_path), str(out / relative), str(diagnostic)],
                     private / f'browser-{index}.log',
                     cwd=ROOT / 'web',
                     timeout=call['timeout_seconds'],
@@ -452,6 +469,10 @@ def browser(ctx, shard, out, build_identity, build_manifest):
                     }
                 )
                 print('UI_BROWSER', call['id'], 'SUCCESS' if valid else 'FAILED', flush=True)
+                if not valid:
+                    indices = cypress_failure_indices(diagnostic)
+                    if indices:
+                        print('UI_BROWSER_FAILED_TEST_POSITIONS', call['id'], ','.join(map(str, indices)), flush=True)
                 if not valid:
                     success = False
                     break

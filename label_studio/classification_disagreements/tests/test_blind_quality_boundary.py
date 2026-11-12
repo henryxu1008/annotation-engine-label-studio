@@ -3193,6 +3193,155 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
 
+    def test_legacy_task_read_fences_project_becoming_sensitive(self):
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from tasks import legacy_blind_views
+        from users.models import User
+
+        organization = fixtures.OrganizationFactory()
+        project = ProjectFactory(organization=organization, created_by=organization.created_by)
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        ProjectMember.objects.create(project=project, user=member, role='annotator')
+        ordinary = TaskFactory(project=project)
+        TaskAssignment.objects.create(task=ordinary, project=project, assignee=member,
+                                      assigned_by=organization.created_by)
+        sample_member = UserFactory(active_organization=organization)
+        organization.add_user(sample_member)
+        ProjectMember.objects.create(project=project, user=sample_member, role='annotator')
+        sample = TaskFactory(project=project)
+        candidate = TaskAssignment.objects.create(task=sample, project=project, assignee=sample_member,
+                                                  assigned_by=organization.created_by)
+        reading_checked, release_read, marking_started = Event(), Event(), Event()
+        original = legacy_blind_views.sensitive_nonmanager
+
+        def pause_after_check(project_arg, principal):
+            result = original(project_arg, principal)
+            reading_checked.set()
+            if not release_read.wait(10):
+                raise AssertionError('legacy reader was not released')
+            return result
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=member.pk))
+                return client.get(f'/api/tasks/{ordinary.pk}/').status_code
+            finally:
+                close_old_connections()
+
+        def mark():
+            close_old_connections()
+            try:
+                marking_started.set()
+                return bind_marker(TaskAssignment.objects.get(pk=candidate.pk)).pk
+            finally:
+                close_old_connections()
+
+        with patch.object(legacy_blind_views, 'sensitive_nonmanager', side_effect=pause_after_check):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reading = pool.submit(read)
+                try:
+                    assert reading_checked.wait(10)
+                    marking = pool.submit(mark)
+                    assert marking_started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        marking.result(timeout=0.3)
+                finally:
+                    release_read.set()
+                assert reading.result(timeout=20) == 200
+                assert marking.result(timeout=20)
+        assert read() == 404
+
+    def test_legacy_task_read_rechecks_membership_after_project_lock(self):
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        organization = fixtures.OrganizationFactory()
+        project = ProjectFactory(organization=organization, created_by=organization.created_by)
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        membership = ProjectMember.objects.create(project=project, user=member, role='annotator')
+        task = TaskFactory(project=project)
+        TaskAssignment.objects.create(task=task, project=project, assignee=member,
+                                      assigned_by=organization.created_by)
+        started = Event()
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=member.pk))
+                started.set()
+                return client.get(f'/api/tasks/{task.pk}/').status_code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                Project.objects.select_for_update().get(pk=project.pk)
+                reading = pool.submit(read)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    reading.result(timeout=0.3)
+                ProjectMember.objects.filter(pk=membership.pk).update(enabled=False)
+            assert reading.result(timeout=20) in (403, 404)
+
+    def test_legacy_queues_wait_for_project_sensitivity_transition(self):
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        for route in ('project_next', 'dm_next', 'task_list', 'history', 'project_tasks'):
+            with self.subTest(route=route):
+                organization = fixtures.OrganizationFactory()
+                project = ProjectFactory(organization=organization, created_by=organization.created_by)
+                member = UserFactory(active_organization=organization)
+                organization.add_user(member)
+                ProjectMember.objects.create(project=project, user=member, role='annotator')
+                task = TaskFactory(project=project)
+                TaskAssignment.objects.create(task=task, project=project, assignee=member,
+                                              assigned_by=organization.created_by)
+                sample_member = UserFactory(active_organization=organization)
+                organization.add_user(sample_member)
+                ProjectMember.objects.create(project=project, user=sample_member, role='annotator')
+                sample = TaskFactory(project=project)
+                candidate = TaskAssignment.objects.create(task=sample, project=project, assignee=sample_member,
+                                                          assigned_by=organization.created_by)
+                started = Event()
+
+                def read():
+                    close_old_connections()
+                    try:
+                        client = APIClient()
+                        client.force_authenticate(User.objects.get(pk=member.pk))
+                        started.set()
+                        if route == 'project_next':
+                            return client.get(f'/api/projects/{project.pk}/next/').status_code
+                        if route == 'task_list':
+                            return client.get('/api/tasks/', {'project': project.pk}).status_code
+                        if route == 'history':
+                            return client.get(f'/api/projects/{project.pk}/label-stream-history/').status_code
+                        if route == 'project_tasks':
+                            return client.get(f'/api/projects/{project.pk}/tasks/').status_code
+                        return client.post(f'/api/dm/actions/?project={project.pk}&id=next_task',
+                                           {'selectedItems': {'all': True, 'excluded': []}}, format='json').status_code
+                    finally:
+                        close_old_connections()
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    with transaction.atomic():
+                        Project.objects.select_for_update().get(pk=project.pk)
+                        reading = pool.submit(read)
+                        assert started.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            reading.result(timeout=0.3)
+                        bind_marker(candidate)
+                    assert reading.result(timeout=20) in (403, 404)
+
     def test_multi_project_fixture_locks_all_projects_before_capture_epoch(self):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
         from classification_disagreements.models import BlindCaptureEpoch
