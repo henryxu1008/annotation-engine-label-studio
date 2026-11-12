@@ -1057,7 +1057,9 @@ class TaskWithAnnotationsAndPredictionsAndDraftsSerializer(TaskSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         request = self.context.get('request')
-        if request is not None and not authorization.can_manage_project(resolve_principal(request), instance.project):
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        if request is not None and sensitive_nonmanager(instance.project, resolve_principal(request)):
             assignment = self._get_assignment(instance)
             ret['is_labeled'] = bool(assignment and assignment.annotation_id and instance.annotations.filter(
                 pk=assignment.annotation_id, completed_by_id=assignment.assignee_id, was_cancelled=False,

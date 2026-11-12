@@ -179,18 +179,34 @@ class TestPrivateFilterScope(APITestCase):
                 assert response.data['id'] == self.shared_task.pk
                 assert response.data['assignment_id'] == self.assignment_a.pk
 
-    def test_peer_completion_and_editor_identity_are_not_returned_to_another_annotator(self):
+    def test_ordinary_shared_task_retains_completion_without_exposing_editor_identity(self):
         self.shared_task.is_labeled = True
         self.shared_task.updated_by = self.annotator_b
         self.shared_task.save(update_fields=['is_labeled', 'updated_by'])
         for url in (f'/api/tasks/{self.shared_task.pk}/', f'/api/projects/{self.project.pk}/next/'):
             response = self.client.get(url)
             assert response.status_code == 200, response.data
-            assert response.data['is_labeled'] is False
+            assert response.data['is_labeled'] is True
             assert response.data['updated_by'] == []
         self.client.force_authenticate(self.manager)
         response = self.client.get(f'/api/tasks/{self.shared_task.pk}/')
         assert response.status_code == 200 and response.data['is_labeled'] is True
+
+    def test_sensitive_project_serializer_hides_peer_completion(self):
+        from rest_framework.test import force_authenticate
+
+        self.shared_task.is_labeled = True
+        self.shared_task.save(update_fields=['is_labeled'])
+        request = RequestFactory().get('/')
+        force_authenticate(request, user=self.annotator_a)
+        request = Request(request)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS':
+                      {f'{self.project.organization_id}:{self.project.pk}': True}}
+        with self.settings(**config):
+            result = NextTaskSerializer(self.shared_task, context={'request': request}).data
+        assert result['is_labeled'] is False
+        assert not result['annotations']
 
     def test_mismatched_assignment_cannot_expose_or_edit_peer_annotation(self):
         self.assignment_b.annotation = None

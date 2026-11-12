@@ -498,7 +498,10 @@ class DataManagerTaskSerializer(TaskSerializer):
                 ret['total_annotations'] = visible_annotations.filter(was_cancelled=False).count()
                 # These task-wide fields otherwise reveal a peer's activity
                 # even when their annotation payload is correctly filtered.
-                ret['is_labeled'] = visible_annotations.filter(was_cancelled=False).exists()
+                from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+                if sensitive_nonmanager(obj.project, principal):
+                    ret['is_labeled'] = visible_annotations.filter(was_cancelled=False).exists()
                 if obj.updated_by_id != principal.local_user_id:
                     ret['updated_by'] = []
                 # Aggregate annotation metadata can reveal another annotator's work.
