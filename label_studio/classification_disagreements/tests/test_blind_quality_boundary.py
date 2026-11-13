@@ -403,6 +403,42 @@ class TestBlindQualityBoundary(APITestCase):
         assert self.client.patch(f'/api/dm/views/{view.pk}/', {'data': {}}, format='json').status_code == 404
         assert self.client.get('/api/tasks/', {'project': self.project.pk}).status_code == 404
 
+    def test_locked_handle_validation_rejects_unsupported_database(self):
+        from types import SimpleNamespace
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import HANDLE_BASE, validate_locked_handle
+        from rest_framework.exceptions import NotFound
+
+        record = SimpleNamespace(task_handle=HANDLE_BASE, assignment_handle=HANDLE_BASE + 1)
+        with patch.object(transaction.get_connection(), 'vendor', 'unsupported'), self.assertRaises(NotFound):
+            validate_locked_handle(principal=local_principal(self.annotator), record=record, assignment=self.assignment)
+
+    def test_blind_editor_rejects_retained_handle_outside_opaque_range(self):
+        from classification_disagreements.blind_task_handles import HANDLE_BASE
+        from classification_disagreements.models import BlindTaskHandle
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+
+        Project.objects.filter(pk=self.project.pk).update(label_config=CONFIG)
+        BlindTaskHandle.objects.create(
+            assignment_id_frozen=self.assignment.pk, task_id_frozen=self.task.pk,
+            project_id_frozen=self.project.pk, actor_id_frozen=self.annotator.pk,
+            task_handle=1, assignment_handle=2,
+        )
+        other_task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+        other = TaskAssignment.objects.create(task=other_task, project=self.project, assignee=self.annotator,
+                                              assigned_by=self.manager)
+        BlindTaskHandle.objects.create(
+            assignment_id_frozen=other.pk, task_id_frozen=other_task.pk,
+            project_id_frozen=self.project.pk, actor_id_frozen=self.annotator.pk,
+            task_handle=HANDLE_BASE + 1, assignment_handle=3,
+        )
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.annotator)
+        with self.settings(**config):
+            assert self.client.get('/api/tasks/blind/1/').status_code == 404
+            assert self.client.get(f'/api/tasks/blind/{HANDLE_BASE + 1}/').status_code == 404
+
     def test_blind_editor_read_revokes_quality_after_exposure(self):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_provenance import record_project_file_access

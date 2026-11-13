@@ -66,6 +66,18 @@ def _validate(principal, assignment, record=None):
     return assignment
 
 
+def validate_locked_handle(*, principal, record, assignment):
+    """Validate an immutable handle against the caller's already-locked work."""
+    db = transaction.get_connection()
+    if not db.in_atomic_block:
+        raise RuntimeError('Handle validation requires an open transaction.')
+    if (db.vendor not in ('postgresql', 'sqlite')
+            or not HANDLE_BASE <= record.task_handle < HANDLE_LIMIT
+            or not HANDLE_BASE <= record.assignment_handle < HANDLE_LIMIT):
+        _unavailable()
+    return _validate(principal, assignment, record)
+
+
 @transaction.atomic
 def issue_handle(*, principal, assignment_id):
     """Issue one stable, randomly distributed pair after checking live access."""

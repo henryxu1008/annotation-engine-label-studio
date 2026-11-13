@@ -487,6 +487,13 @@ paired run still measured 42.7 ms median (34.4–64.0 ms) for quality versus
 20.8 ms (17.8–30.4 ms, 20 queries) for ordinary work, with 14 samples each.
 This change shares the live fence predicates but does not unify the complete
 ordinary and quality evidence paths or establish timing privacy.
+Reusing the locked, byte-bounded task and validating its immutable handle
+without a second handle/task fetch removes one query from each read. On another
+isolated PostgreSQL fixture, 14 warm paired reads measured a median of 42.7 ms
+(38.9–70.3 ms; 31 queries) for quality and 21.7 ms (19.5–35.8 ms; 19 queries)
+for ordinary work. The difference remains observable in this diagnostic; the
+common persisted evidence and live-revocation path is still required before
+public mixed delivery. These measurements are not a production benchmark.
 For repeatable local diagnostics, `measure_classification_blind_e2e` accepts
 the two outputs of the isolated synthetic seed commands, alternates the two
 reads and reports aggregate latency and query counts without returning handles.

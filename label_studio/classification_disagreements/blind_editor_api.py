@@ -25,7 +25,7 @@ from tasks.my_work import visible_annotation_assignments
 from .blind_participant_projection import sensitive_nonmanager
 from .blind_provenance import lock_capture_epoch_for_read
 from .blind_resource_handles import _issue_for_locked_assignment
-from .blind_task_handles import _lock_bounded_task, issue_handle, resolve_handle
+from .blind_task_handles import _lock_bounded_task, issue_handle, validate_locked_handle
 from .gold_api import MAX_BYTES, bounded_query
 from .models import BlindTaskHandle
 
@@ -131,11 +131,12 @@ class BlindEditorReadAPI(APIView):
         ).first()
         if assignment_locked is None:
             raise NotFound('Work is unavailable.')
-        assignment = resolve_handle(principal=principal, task_handle=pk,
-                                    assignment_handle=record.assignment_handle)
-        if assignment.pk != assignment_locked.pk or assignment.project_id != project.pk:
-            raise NotFound('Work is unavailable.')
-        task = assignment.task
+        # Reuse the exact locked and byte-bounded task instead of re-fetching
+        # the immutable handle and its task through a separate queryset.
+        task_locked.project = project
+        assignment_locked.task, assignment_locked.project = task_locked, project
+        assignment = validate_locked_handle(principal=principal, record=record, assignment=assignment_locked)
+        task = task_locked
         annotation = None
         if assignment.annotation_id:
             annotation = bounded_query(Annotation.objects.select_for_update(), 'result').filter(
