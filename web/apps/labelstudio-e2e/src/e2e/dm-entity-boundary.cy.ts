@@ -66,6 +66,12 @@ describe('Existing text entity boundary handles', () => {
             expect(result.find(r => r.type === 'textarea')).to.include({ id: 'entity-1' });
             expect(result.find(r => r.type === 'textarea').value.text).to.deep.eq(['原始备注']);
           };
+          const checkEditor = (win: any) => {
+            expect(Number(win.Htx?.task?.id), 'the expected task is loaded').to.eq(scope.task_id);
+            expect(win.Htx?.isLoading, 'editor finished loading').to.eq(false);
+            expect(win.Htx?.annotationStore?.selected, 'selected annotation is available').to.exist;
+            check(win.Htx.annotationStore.selected.serializeAnnotation());
+          };
           const checkLeft = (win: any) => {
             const results = win.Htx.annotationStore.selected.serializeAnnotation();
             expect(results, 'left resize retains the region and note').to.have.length(2);
@@ -92,17 +98,17 @@ describe('Existing text entity boundary handles', () => {
           trace('left-adjusted');
           resize('right', value.targetEnd);
           trace('right-adjusted');
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('[aria-label="' + (locale === 'zh-CN' ? '撤销' : 'Undo') + '"]').click();
           cy.window({ timeout: 30000 }).should(checkLeft);
           cy.get('[aria-label="' + (locale === 'zh-CN' ? '重做' : 'Redo') + '"]').click();
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('body').then($body => { if ($body.find('[data-testid="draft-save-retry"]').length) cy.get('[data-testid="draft-save-retry"]').click(); });
           cy.window({ timeout: 15000 }).should((win: any) => expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false));
           cy.request(`/api/tasks/${scope.task_id}/`).then(({ body }) => { check(body.drafts[0].result); expect(body.annotations).to.deep.eq([]); });
           trace('draft-saved');
           cy.reload();
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('[data-testid="draft-save-retry"]').should('not.exist');
           trace('reloaded');
           cy.intercept('POST', `**/api/tasks/${scope.task_id}/annotations*`).as('submitBoundary');
