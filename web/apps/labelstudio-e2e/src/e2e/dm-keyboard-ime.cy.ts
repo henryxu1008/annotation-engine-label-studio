@@ -3,8 +3,11 @@
 describe("Keyboard annotation and composition input", () => {
   let fixture: any;
   const choice = (name: string) => cy.get(`#label-studio-dm input[name="${name}"]`);
-  const result = (name: string, values: string[]) => cy.window().should((win: any) => {
-    const results = win.Htx.annotationStore.selected.serializeAnnotation();
+  const result = (name: string, values: string[]) => cy.window({ timeout: 30000 }).should((win: any) => {
+    expect(win.Htx?.isLoading, "editor finished loading").to.eq(false);
+    const annotation = win.Htx?.annotationStore?.selected;
+    expect(annotation, "selected annotation is available").to.exist;
+    const results = annotation.serializeAnnotation();
     expect(results.filter((r: any) => r.from_name === name).flatMap((r: any) => r.value.text)).to.deep.eq(values);
   });
   const key = (element: JQuery<HTMLElement>, init: KeyboardEventInit) => {

@@ -39,7 +39,9 @@ for (const locale of ["en-US", "zh-CN"]) {
         expect(request.body.items.map((item) => item.submission_id)).deep.eq(fixture.approved.map((item) => item.submission_id));
         const releaseId = response?.body.release_id;
         cy.get('[data-testid="batch-download-JSONL"]', { timeout: 90000 }).should("be.visible").click();
-        cy.readFile(`${Cypress.config("downloadsFolder")}/records.jsonl`).then((text) => {
+        // The download can appear before its final bytes reach disk. Retry the
+        // complete parse and exact-content assertions, not just file existence.
+        cy.readFile(`${Cypress.config("downloadsFolder")}/records.jsonl`, { timeout: 30000 }).should((text) => {
           const rows = String(text).trim().split("\n").map((line) => JSON.parse(line));
           expect(rows.map((row) => row.result_hash)).deep.eq(fixture.approved.map((row) => row.result_hash));
           expect(rows.every((row) => row.review.decision === "approved")).eq(true);
