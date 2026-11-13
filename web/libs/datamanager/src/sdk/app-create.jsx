@@ -41,10 +41,17 @@ const createDynamicModels = (columns) => {
  */
 export const createApp = async (rootNode, datamanager, isCurrent = () => true) => {
   const isLabelStream = datamanager.mode === "labelstream";
+  const restricted = datamanager.settings?.blindProtocol === true;
+  const projectId = datamanager.projectId;
 
-  const response = await datamanager.api.columns();
+  const response = restricted
+    ? await datamanager.api.blindColumns({ project: projectId })
+    : await datamanager.api.columns();
   // The API request can outlive a destroyed or reloaded Data Manager instance.
   if (!isCurrent()) return null;
+  // Never apply columns fetched for a previous restricted project or mode.
+  if ((datamanager.settings?.blindProtocol === true) !== restricted
+      || (restricted && String(datamanager.projectId) !== String(projectId))) return null;
 
   if (response?.error) {
     datamanager.invoke("error", response);

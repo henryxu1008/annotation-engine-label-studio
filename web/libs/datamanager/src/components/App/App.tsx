@@ -10,6 +10,7 @@ import "./App.scss";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@humansignal/core/lib/utils/query-client";
 import { AuthProvider } from "@humansignal/core/providers/AuthProvider";
+import { useLocaleTranslation } from "@humansignal/i18n";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -37,6 +38,8 @@ interface AppComponentProps {
   app: {
     SDK: {
       mode: string;
+      settings?: { blindProtocol?: boolean };
+      blindWorkspace?: React.ComponentType<{ store: AppComponentProps["app"] }> | null;
     };
     crashed: boolean;
     loading: boolean;
@@ -50,6 +53,8 @@ interface AppComponentProps {
 const AppComponent: React.FC<AppComponentProps> = ({ app }) => {
   const rootCN = cn("root");
   const rootClassName = rootCN.mod({ mode: app.SDK.mode }).toClassName();
+  const { t } = useLocaleTranslation("collaboration");
+  const BlindWorkspace = app.SDK.blindWorkspace;
 
   return (
     <ErrorBoundary>
@@ -71,6 +76,8 @@ const AppComponent: React.FC<AppComponentProps> = ({ app }) => {
                   </div>
                 ) : app.isLabeling ? (
                   <Labeling />
+                ) : app.SDK.settings?.blindProtocol === true ? (
+                  BlindWorkspace ? <BlindWorkspace store={app} /> : <p role="alert">{t("myWorkLoadFailed")}</p>
                 ) : (
                   <DataManager />
                 )}

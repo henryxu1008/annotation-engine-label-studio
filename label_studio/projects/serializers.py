@@ -164,6 +164,36 @@ class ProjectSerializer(FlexFieldsModelSerializer):
     queue_done = serializers.SerializerMethodField()
     state = FSMStateField(read_only=True)  # FSM state - automatically uses annotation if present
 
+    def _participant_projection(self, instance):
+        from classification_disagreements.blind_participant_projection import participant_counts, participant_for_project
+
+        cache = getattr(self, '_blind_projection_cache', None)
+        if cache is None:
+            cache = self._blind_projection_cache = {}
+        if instance.pk not in cache:
+            actor = participant_for_project(self.context.get('request'), instance)
+            cache[instance.pk] = participant_counts(instance, actor) if actor is not None else None
+        return cache[instance.pk]
+
+    def to_representation(self, instance):
+        projected = self._participant_projection(instance)
+        result = super().to_representation(instance)
+        request = self.context.get('request')
+        if request is not None:
+            from access_control.authorization import authorization
+            from access_control.identity import resolve_principal
+
+            user = getattr(request, 'user', None)
+            if (not getattr(user, 'is_authenticated', False)
+                    or not authorization.can_manage_project(resolve_principal(request), instance)):
+                result.pop('task_data_login', None)
+                result.pop('task_data_password', None)
+        if projected is not None:
+            for field, value in projected.items():
+                if field in result:
+                    result[field] = value
+        return result
+
     @property
     def user_id(self):
         try:
@@ -354,13 +384,23 @@ class ProjectSerializer(FlexFieldsModelSerializer):
         return super().update(instance, validated_data)
 
     def get_queue_total(self, project) -> int:
+        projected = self._participant_projection(project)
+        if projected is not None:
+            return projected['queue_total']
+        from projects.functions import quality_task_ids
+
         remain = project.tasks.filter(
             Q(is_labeled=False) & ~Q(annotations__completed_by_id=self.user_id)
             | Q(annotations__completed_by_id=self.user_id)
-        ).distinct()
+        ).exclude(pk__in=quality_task_ids()).distinct()
         return remain.count()
 
     def get_queue_done(self, project) -> int:
+        projected = self._participant_projection(project)
+        if projected is not None:
+            return projected['queue_done']
+        from projects.functions import quality_task_ids
+
         tasks_filter = {
             'project': project,
             'annotations__completed_by_id': self.user_id,
@@ -369,7 +409,7 @@ class ProjectSerializer(FlexFieldsModelSerializer):
         if project.skip_queue == project.SkipQueue.REQUEUE_FOR_ME:
             tasks_filter['annotations__was_cancelled'] = False
 
-        already_done_tasks = Task.objects.filter(**tasks_filter)
+        already_done_tasks = Task.objects.filter(**tasks_filter).exclude(pk__in=quality_task_ids())
         result = already_done_tasks.distinct().count()
 
         return result
@@ -406,6 +446,14 @@ class ProjectLabelConfigSerializer(serializers.Serializer):
 
 
 class ProjectSummarySerializer(serializers.ModelSerializer):
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        from classification_disagreements.blind_participant_projection import participant_for_project, participant_summary
+
+        if participant_for_project(self.context.get('request'), instance.project) is not None:
+            result.update(participant_summary(instance.project))
+        return result
+
     class Meta:
         model = ProjectSummary
         fields = '__all__'

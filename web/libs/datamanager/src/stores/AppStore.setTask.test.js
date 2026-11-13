@@ -1,4 +1,4 @@
-import { destroy } from "mobx-state-tree";
+import { destroy, types } from "mobx-state-tree";
 import { LSFWrapper } from "../sdk/lsf-sdk";
 import { History } from "../utils/history";
 
@@ -6,7 +6,7 @@ jest.mock("../components/Common/Modal/Modal", () => ({ Modal: {} }));
 jest.mock("./DataStores", () => ({}));
 jest.mock("./Tabs", () => {
   const { types } = jest.requireActual("mobx-state-tree");
-  return { TabStore: types.model({ views: types.array(types.frozen()) }) };
+  return { TabStore: types.model({ views: types.array(types.frozen()) }).actions(() => ({ fetchColumns() {} })) };
 });
 jest.mock("./Users", () => {
   const { types } = jest.requireActual("mobx-state-tree");
@@ -50,6 +50,42 @@ const makeStore = () => {
   return { store, wrapper, editor, annotation };
 };
 
+it("waits for a blind write and its refresh before saving the draft and navigating", async () => {
+  const { store, wrapper } = makeStore();
+  const write = deferred();
+  const navigate = jest.fn();
+  store._sdk.settings = { blindProtocol: true };
+  wrapper.pendingBlindWrite = write.promise;
+  try {
+    const leaving = store.navigateWithSavedDraft(navigate);
+    await nextTick();
+    expect(wrapper.saveDraft).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    write.resolve({ $meta: { status: 201 } });
+    expect(await leaving).toBe(true);
+    expect(wrapper.saveDraft).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  } finally {
+    destroy(store);
+  }
+});
+
+it.each(["failed", "rejected"])("keeps the editor open when a pending blind write %s", async (failure) => {
+  const { store, wrapper } = makeStore();
+  const navigate = jest.fn();
+  store._sdk.settings = { blindProtocol: true };
+  wrapper.pendingBlindWrite = failure === "failed"
+    ? Promise.resolve({ $meta: { status: 409 } })
+    : Promise.reject(new Error("network failure"));
+  try {
+    expect(await store.navigateWithSavedDraft(navigate)).toBe(false);
+    expect(wrapper.saveDraft).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    destroy(store);
+  }
+});
+
 beforeEach(() => {
   jest.spyOn(History, "navigate").mockImplementation(() => {});
   jest.spyOn(History, "getParams").mockReturnValue({});
@@ -57,6 +93,165 @@ beforeEach(() => {
   jest.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(); return 0; });
 });
 afterEach(() => jest.restoreAllMocks());
+
+it("blocks legacy task calls in blind mode and supplies the active handle for draft writes", async () => {
+  const { store, wrapper } = makeStore();
+  const task = 2 ** 51 + 11;
+  const draft = 2 ** 51 + 12;
+  const assignment = 2 ** 51 + 13;
+  const rawTasks = jest.fn();
+  const update = jest.fn().mockResolvedValue({ id: draft, revision: 2 });
+  const project = jest.fn().mockResolvedValue({ id: 7 });
+  const work = jest.fn().mockResolvedValue({ results: [], page: 1, has_next: false });
+  wrapper.task = { id: task };
+  Object.assign(store._sdk, { settings: { blindProtocol: true }, projectId: 7,
+    api: { tasks: rawTasks, blindUpdateDraft: update, blindProject: project, blindWork: work } });
+  try {
+    store._sdk.settings.blindProtocol = "true";
+    expect((await store.apiCall("tasks", {})).status).toBe(403);
+    store._sdk.settings.blindProtocol = true;
+    expect(await store.apiCall("tasks", {})).toEqual({ error: "Work operation is unavailable", status: 403 });
+    expect(rawTasks).not.toHaveBeenCalled();
+    store._sdk.api.sharedParams = { taskID: 7 };
+    expect((await store.apiCall("updateDraft", { draftID: draft }, { body: {} })).status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+    store._sdk.api.sharedParams = {};
+    await store.apiCall("project", { project: 99 });
+    expect(project).toHaveBeenCalledWith({ project: 7 }, expect.anything());
+    await store.apiCall("workList", { page: 1 });
+    expect(work).toHaveBeenCalledWith({ projectID: 7, page: 1 }, expect.anything());
+    await store.apiCall("updateDraft", { draftID: draft }, {
+      body: { draft_revision: 1, assignment_id: assignment, assignment_version: 4 },
+    });
+    expect(update).toHaveBeenCalledWith({ taskID: task, draftID: draft }, expect.objectContaining({
+      body: { draft_revision: 1, assignment_id: assignment, assignment_version: 4 },
+    }));
+    await store.apiCall("updateDraft", { taskID: task + 1, draftID: draft }, { body: {} });
+    expect(update).toHaveBeenCalledTimes(1);
+    update.mockResolvedValueOnce({ error: "conflict", status: 409 });
+    const conflict = await store.apiCall("updateDraft", { draftID: draft }, {
+      body: { draft_revision: 1, assignment_id: assignment, assignment_version: 4 },
+    }, { errorHandler: () => true });
+    expect(conflict.status).toBe(409);
+    expect(update).toHaveBeenCalledTimes(2);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("loads and selects a restricted task exactly once before opening the editor", async () => {
+  const { store, wrapper } = makeStore();
+  const taskID = 2 ** 51 + 21;
+  const loaded = { id: taskID };
+  store._sdk.settings = { blindProtocol: true };
+  store.taskStore.loadTask.mockImplementation(async () => {
+    store.taskStore.selected = loaded;
+    return loaded;
+  });
+  try {
+    expect(await store.setTask({ taskID })).toBe(true);
+    expect(store.taskStore.setSelected).not.toHaveBeenCalled();
+    expect(store.taskStore.loadTask).toHaveBeenCalledTimes(1);
+    expect(store.taskStore.loadTask).toHaveBeenCalledWith(taskID, { select: true });
+    expect(wrapper.setLSFTask).toHaveBeenCalledWith(loaded, expect.anything(), undefined, false);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("opens the real restricted task store from an opaque API response", async () => {
+  const { create } = require("./DataStores/tasks");
+  const Combined = types.compose(AppStore, types.model({
+    taskStore: create([{ id: "data", type: "List", target: "tasks" }]),
+    annotationStore: types.frozen(),
+  }));
+  const store = Combined.create({ toolbar: "", taskStore: {}, annotationStore: {} });
+  const taskID = 2 ** 51 + 31;
+  const response = { id: taskID, project: 7, assignment_id: taskID + 1, assignment_version: 1,
+    can_label: true, data: { text: "synthetic" }, annotations: [], drafts: [], predictions: [],
+    default_selected_annotation: null };
+  const wrapper = { saveDraft: jest.fn().mockResolvedValue(true), setLoading: jest.fn(),
+    setLSFTask: jest.fn().mockResolvedValue(true), currentAnnotation: { id: "local" },
+    lsf: { annotationStore: { annotations: [], predictions: [] } } };
+  const read = jest.fn().mockResolvedValue(response);
+  store._sdk = { settings: { blindProtocol: true }, projectId: 7, lsf: wrapper,
+    setMode: jest.fn(), invoke: jest.fn(), api: { sharedParams: {}, blindTask: read } };
+  try {
+    expect(await store.setTask({ taskID })).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith({ taskID }, expect.anything());
+    expect(store.taskStore.selected.id).toBe(taskID);
+    expect(store.taskStore.selected.data).toEqual({ text: "synthetic" });
+    expect(wrapper.setLSFTask).toHaveBeenCalledWith(store.taskStore.selected, "local", undefined, false);
+  } finally {
+    destroy(store);
+  }
+});
+
+it("restores an opaque task on restricted workspace startup without using legacy routes", async () => {
+  const { create } = require("./DataStores/tasks");
+  const Combined = types.compose(AppStore, types.model({
+    taskStore: create([{ id: "data", type: "List", target: "tasks" }]), annotationStore: types.frozen(),
+  }));
+  const store = Combined.create({ toolbar: "", taskStore: {}, annotationStore: {} });
+  const taskID = 2 ** 51 + 41;
+  const read = jest.fn().mockResolvedValue({ id: taskID, project: 7, assignment_id: taskID + 1,
+    assignment_version: 1, can_label: true, data: { text: "synthetic" }, annotations: [], drafts: [],
+    predictions: [], default_selected_annotation: null });
+  const wrapper = { saveDraft: jest.fn().mockResolvedValue(true), setLoading: jest.fn(),
+    setLSFTask: jest.fn().mockResolvedValue(true), currentAnnotation: { id: "local" },
+    lsf: { annotationStore: { annotations: [], predictions: [] } } };
+  store._sdk = { settings: { blindProtocol: true }, projectId: 7, lsf: wrapper,
+    setMode: jest.fn(), invoke: jest.fn(), api: { sharedParams: {}, blindTask: read,
+      blindProject: jest.fn().mockResolvedValue({ id: 7 }),
+      blindWork: jest.fn().mockResolvedValue({ results: [], page: 1, total: 0, has_next: false }) } };
+  History.getParams.mockReturnValue({ task: String(taskID) });
+  try {
+    await store.fetchData();
+    expect(store.loading).toBe(false);
+    expect(store.taskStore.selected.id).toBe(taskID);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(wrapper.setLSFTask).toHaveBeenCalledTimes(1);
+  } finally { destroy(store); }
+});
+
+it("does not open a legacy task number from a restricted URL", async () => {
+  const { store, wrapper } = makeStore();
+  store._sdk.settings = { blindProtocol: true };
+  store._sdk.projectId = 7;
+  store._sdk.api = { sharedParams: {}, blindProject: jest.fn().mockResolvedValue({ id: 7 }),
+    blindWork: jest.fn().mockResolvedValue({ results: [], page: 1, total: 0, has_next: false }) };
+  History.getParams.mockReturnValue({ task: "42" });
+  try {
+    await store.fetchData();
+    expect(store.taskStore.loadTask).not.toHaveBeenCalled();
+    expect(wrapper.setLSFTask).not.toHaveBeenCalled();
+    expect(store.blindWorkError).toBe(true);
+    expect(History.navigate).toHaveBeenCalledWith({ task: null, annotation: null, region: null }, true);
+  } finally { destroy(store); }
+});
+
+it("clears the editor and refuses navigation when restricted work is unavailable", async () => {
+  const { store, wrapper } = makeStore();
+  store._sdk.settings = { blindProtocol: true };
+  store._sdk.destroyLSF = jest.fn();
+  store.taskStore.loadTask.mockResolvedValue(null);
+  store.taskStore.unset = jest.fn();
+  store.annotationStore.unset = jest.fn();
+  try {
+    expect(await store.setTask({ taskID: 2 ** 51 + 21 })).toBe(false);
+    expect(store.taskStore.unset).toHaveBeenCalled();
+    expect(store.annotationStore.unset).toHaveBeenCalled();
+    expect(store.blindWorkPage).toBeNull();
+    expect(store.blindWorkError).toBe(true);
+    expect(store._sdk.destroyLSF).toHaveBeenCalled();
+    expect(store._sdk.setMode).toHaveBeenLastCalledWith("explorer");
+    expect(wrapper.setLSFTask).not.toHaveBeenCalled();
+    expect(store.loadingData).toBe(false);
+  } finally {
+    destroy(store);
+  }
+});
 
 it.each(["all", "filtered"])("keeps a package queue independent of the last %s project view", async (mode) => {
   const { store } = makeStore();

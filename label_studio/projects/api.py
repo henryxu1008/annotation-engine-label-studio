@@ -714,22 +714,30 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
     serializer_class = TaskWithAnnotationsAndPredictionsAndDraftsSerializer
     queryset = Project.objects.all()
 
+    @transaction.atomic
     def get(self, request, *args, **kwargs):
-        from access_control.project_operations import EDIT, require_project_operation
+        from access_control.project_operations import EDIT, lock_project_actor, require_project_operation
         from task_packages.scope import PackageScope
 
         scope = PackageScope.from_project_id(request, self.kwargs['pk'])
         project = scope.project if scope else self.get_object()
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        principal = resolve_principal(request)
+        project, _ = lock_project_actor(project.pk, principal)
+        if not authorization.can_view_project(principal, project) or sensitive_nonmanager(project, principal):
+            raise NotFound('Work is unavailable.')
         dm_queue = filters_ordering_selected_items_exist(request.data)
         prepared_tasks = get_prepared_queryset(request, project)
-        queue_actor = scope.actor if scope else request.user
+        principal, actor = resolve_actor(request)
+        queue_actor = scope.actor if scope else actor
         allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
         prepared_tasks = prepared_tasks.filter(id__in=allowed_task_ids)
         if scope:
             require_project_operation(scope.project, EDIT)
             prepared_tasks = scope.tasks(prepared_tasks)
 
-        next_task, queue_info = get_next_task(scope.actor if scope else request.user, prepared_tasks, project, dm_queue)
+        next_task, queue_info = get_next_task(queue_actor, prepared_tasks, project, dm_queue)
 
         if scope:
             scope = PackageScope.from_request(request, project)
@@ -740,12 +748,19 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
                 error.display_context = {'reason': 'QUEUE_EXHAUSTED'}
             raise error
 
+        authorization.require(
+            next_task.project_id == project.pk and authorization.can_view_task(principal, next_task),
+            'The assigned task is no longer available.',
+        )
+
         # serialize task
         context = {'request': request, 'project': project, 'resolve_uri': True, 'annotations': False}
         serializer = NextTaskSerializer(next_task, context=context)
         response = serializer.data
 
-        response['queue'] = queue_info
+        from classification_disagreements.blind_participant_projection import participant_for_project
+
+        response['queue'] = '' if participant_for_project(request, project) is not None else queue_info
         if scope:
             scope = PackageScope.from_request(request, project)
             require_project_operation(scope.project, EDIT)
@@ -761,12 +776,20 @@ class LabelStreamHistoryAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.tasks_view
     queryset = Project.objects.all()
 
+    @transaction.atomic
     def get(self, request, *args, **kwargs):
+        from access_control.project_operations import lock_project_actor
         from task_packages.scope import PackageScope
 
         scope = PackageScope.from_project_id(request, self.kwargs['pk'])
         project = scope.project if scope else self.get_object()
-        history = get_label_stream_history(scope.actor if scope else request.user, project)
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        principal, actor = resolve_actor(request)
+        project, _ = lock_project_actor(project.pk, principal)
+        if not authorization.can_view_project(principal, project) or sensitive_nonmanager(project, principal):
+            raise NotFound('Work is unavailable.')
+        history = get_label_stream_history(scope.actor if scope else actor, project)
         if scope:
             allowed = set(scope.tasks(Task.objects.all()).values_list('pk', flat=True))
             history = [row for row in history if row['taskId'] in allowed]
@@ -873,8 +896,19 @@ class ProjectSummaryAPI(generics.RetrieveAPIView):
     queryset = ProjectSummary.objects.all()
 
     @extend_schema(exclude=True)
-    def get(self, *args, **kwargs):
-        return super(ProjectSummaryAPI, self).get(*args, **kwargs)
+    @transaction.atomic
+    def get(self, request, *args, **kwargs):
+        from access_control.project_operations import READ_WORK, lock_project_operation
+
+        principal, actor = resolve_actor(request)
+        candidate = generics.get_object_or_404(visible_projects_for_actor(actor), pk=self.kwargs['pk'])
+        project, _ = lock_project_operation(candidate.pk, principal, READ_WORK)
+        if not authorization.can_view_project(principal, project):
+            raise NotFound('Project is unavailable.')
+        summary = generics.get_object_or_404(ProjectSummary.objects.select_related('project'), project=project)
+        response = Response(self.get_serializer(summary).data)
+        response['Cache-Control'] = 'private, no-store'
+        return response
 
 
 class ProjectSummaryResetAPI(GetParentObjectMixin, generics.CreateAPIView):
@@ -1050,9 +1084,14 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
             return TaskSerializer
 
     def filter_queryset(self, queryset):
-        project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=self.kwargs.get('pk', 0))
+        _, actor = resolve_actor(self.request)
+        project = generics.get_object_or_404(Project.objects.for_user(actor), pk=self.kwargs.get('pk', 0))
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        if sensitive_nonmanager(project, resolve_principal(self.request)):
+            raise Http404
         # ordering is deprecated here
-        tasks = Task.objects.for_user(self.request.user).filter(project=project).order_by('-updated_at')
+        tasks = Task.objects.for_user(actor).filter(project=project).order_by('-updated_at')
         page = paginator(tasks, self.request)
         if page:
             return page
@@ -1073,8 +1112,15 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
         emit_webhooks_for_instance(request.user.active_organization, None, WebhookAction.TASKS_DELETED, task_ids)
         return Response(status=204)
 
-    def get(self, *args, **kwargs):
-        return super(ProjectTaskListAPI, self).get(*args, **kwargs)
+    @transaction.atomic
+    def get(self, request, *args, **kwargs):
+        from access_control.project_operations import lock_project_actor
+
+        principal = resolve_principal(request)
+        project, _ = lock_project_actor(kwargs['pk'], principal)
+        if not authorization.can_view_project(principal, project):
+            raise Http404
+        return super(ProjectTaskListAPI, self).get(request, *args, **kwargs)
 
     @extend_schema(exclude=True)
     def post(self, *args, **kwargs):
@@ -1184,6 +1230,10 @@ class ProjectModelVersions(generics.RetrieveAPIView):
         serializer = ProjectModelVersionParamsSerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         extended = serializer.validated_data.get('extended', False)
+        from classification_disagreements.blind_participant_projection import participant_for_project
+
+        if participant_for_project(request, project) is not None:
+            return Response({'static': [], 'live': None} if extended else {})
         include_live_models = serializer.validated_data.get('include_live_models', False)
         limit = serializer.validated_data.get('limit', None)
         data = project.get_model_versions(with_counters=True, extended=extended, limit=limit)
@@ -1236,13 +1286,32 @@ class ProjectAnnotatorsAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.projects_view
     queryset = Project.objects.all()
 
+    @transaction.atomic
     def get(self, request, *args, **kwargs):
-        project = self.get_object()
+        from access_control.project_operations import READ_WORK, lock_project_operation
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+        from projects.functions import quality_task_ids
+
+        principal, actor = resolve_actor(request)
+        candidate = generics.get_object_or_404(visible_projects_for_actor(actor), pk=self.kwargs['pk'])
+        project, _ = lock_project_operation(candidate.pk, principal, READ_WORK)
+        if not authorization.can_view_project(principal, project):
+            raise NotFound('Project is unavailable.')
+        # Omitting quality annotations alone leaks whether an annotator's first
+        # submission was sampled. Keep the participant response constant for
+        # both outcomes; managers retain the ordinary annotator projection.
+        if sensitive_nonmanager(project, principal):
+            response = Response([])
+            response['Cache-Control'] = 'private, no-store'
+            return response
         annotator_ids = list(
             Annotation.objects.filter(project=project, completed_by_id__isnull=False)
+            .exclude(task_id__in=quality_task_ids())
             .values_list('completed_by_id', flat=True)
             .distinct()
         )
         users = User.objects.filter(id__in=annotator_ids).prefetch_related('om_through').order_by('id')
         data = UserSimpleSerializer(users, many=True, context={'request': request}).data
-        return Response(data)
+        response = Response(data)
+        response['Cache-Control'] = 'private, no-store'
+        return response

@@ -3,9 +3,10 @@
 import logging
 
 from access_control.authorization import authorization
-from access_control.identity import resolve_principal
-from access_control.project_operations import EDIT, require_project_operation
+from access_control.identity import resolve_actor, resolve_principal
+from access_control.project_operations import EDIT, lock_project_actor, require_project_operation
 from core.permissions import all_permissions
+from django.db import transaction
 from data_manager.actions import DataManagerAction
 from data_manager.functions import filters_ordering_selected_items_exist
 from projects.functions.next_task import get_next_task
@@ -16,6 +17,7 @@ from tasks.serializers import NextTaskSerializer
 logger = logging.getLogger(__name__)
 
 
+@transaction.atomic
 def next_task(project, queryset, **kwargs):
     """Generate next task for labeling stream
 
@@ -25,12 +27,18 @@ def next_task(project, queryset, **kwargs):
     """
 
     request = kwargs['request']
+    from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+    principal = resolve_principal(request)
+    project, _ = lock_project_actor(project.pk, principal)
+    if not authorization.can_view_project(principal, project) or sensitive_nonmanager(project, principal):
+        raise NotFound('Work is unavailable.')
     scope = PackageScope.from_request(request, project)
     if scope:
         require_project_operation(scope.project, EDIT)
         queryset = scope.tasks(queryset)
     dm_queue = filters_ordering_selected_items_exist(request.data)
-    next_task, queue_info = get_next_task(scope.actor if scope else request.user, queryset, project, dm_queue)
+    next_task, queue_info = get_next_task(scope.actor if scope else resolve_actor(request)[1], queryset, project, dm_queue)
 
     if scope:
         scope = PackageScope.from_request(request, project)
@@ -54,7 +62,9 @@ def next_task(project, queryset, **kwargs):
         scope = PackageScope.from_request(request, project)
         require_project_operation(scope.project, EDIT)
         scope.require_task(next_task, response)
-    response['queue'] = queue_info
+    from classification_disagreements.blind_participant_projection import participant_for_project
+
+    response['queue'] = '' if participant_for_project(request, project) is not None else queue_info
     return response
 
 

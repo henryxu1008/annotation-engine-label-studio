@@ -20,6 +20,7 @@ from django.urls import include, path
 from review_batches.confidence_api import InputAPI as ConfidenceInputAPI
 from review_batches.confidence_api import ObservationAPI as ConfidenceObservationAPI
 from tasks.my_work import MyWorkAPI
+from classification_disagreements.blind_editor_api import BlindWorkListAPI
 
 from . import api, views
 
@@ -38,6 +39,7 @@ _api_urlpatterns = [
     path('', api.ProjectListAPI.as_view(), name='project-list'),
     path('<int:pk>/', api.ProjectAPI.as_view(), name='project-detail'),
     path('<int:pk>/my-work/', MyWorkAPI.as_view(), name='project-my-work'),
+    path('<int:pk>/blind-work/', BlindWorkListAPI.as_view(), name='project-blind-work'),
     path('<int:pk>/bbox-media/tasks/<int:task_id>/prepare/', BboxPrepareAPI.as_view(), name='bbox-prepare'),
     path('<int:pk>/bbox-media/<uuid:token>/', BboxMediaAPI.as_view(), name='bbox-media'),
     path('<int:pk>/bbox-quality/preview/', BboxBatchPreviewAPI.as_view(), name='bbox-quality-preview'),

@@ -1,9 +1,17 @@
 """This file and its contents are licensed under the Apache License 2.0. Please see the included NOTICE for copyright information and LICENSE for a copy of the license.
 """
+from classification_disagreements.blind_editor_api import BlindEditorReadAPI
+from classification_disagreements.blind_editor_writes import (
+    BlindAnnotationCreateAPI,
+    BlindAnnotationUpdateAPI,
+    BlindDraftCreateAPI,
+    BlindDraftUpdateAPI,
+)
 from django.urls import include, path
 from rest_framework import routers
 
 from . import api
+from . import legacy_blind_views as legacy
 
 app_name = 'tasks'
 
@@ -13,16 +21,25 @@ router.register(r'predictions', api.PredictionAPI, basename='prediction')
 _api_urlpatterns = [
     # CRUD
     path('', api.TaskListAPI.as_view(), name='task-list'),
-    path('<int:pk>/', api.TaskAPI.as_view(), name='task-detail'),
-    path('<int:pk>/annotations/', api.AnnotationsListAPI.as_view(), name='task-annotations'),
-    path('<int:pk>/drafts', api.AnnotationDraftListAPI.as_view(), name='task-drafts'),
+    path('blind/<int:pk>/', BlindEditorReadAPI.as_view(), name='blind-editor-read'),
+    path('blind/<int:task_handle>/annotations/', BlindAnnotationCreateAPI.as_view(), name='blind-annotation-create'),
+    path('blind/<int:task_handle>/annotations/<int:resource_handle>/', BlindAnnotationUpdateAPI.as_view(),
+         name='blind-annotation-update'),
+    path('blind/<int:task_handle>/drafts', BlindDraftCreateAPI.as_view(), name='blind-draft-create'),
+    path('blind/<int:task_handle>/annotations/<int:annotation_handle>/drafts', BlindDraftCreateAPI.as_view(),
+         name='blind-annotation-draft-create'),
+    path('blind/<int:task_handle>/drafts/<int:resource_handle>/', BlindDraftUpdateAPI.as_view(),
+         name='blind-draft-update'),
+    path('<int:pk>/', legacy.LegacyTaskAPI.as_view(), name='task-detail'),
+    path('<int:pk>/annotations/', legacy.LegacyAnnotationsListAPI.as_view(), name='task-annotations'),
+    path('<int:pk>/drafts', legacy.LegacyDraftListAPI.as_view(), name='task-drafts'),
     path(
         '<int:pk>/annotations/<int:annotation_id>/drafts',
-        api.AnnotationDraftListAPI.as_view(),
+        legacy.LegacyDraftListAPI.as_view(),
         name='task-annotations-drafts',
     ),
     # Agreement endpoint for Summary view
-    path('<int:pk>/agreement/', api.TaskAgreementAPI.as_view(), name='task-agreement'),
+    path('<int:pk>/agreement/', legacy.LegacyTaskAgreementAPI.as_view(), name='task-agreement'),
 ]
 
 _api_assignments_urlpatterns = [
@@ -39,12 +56,12 @@ _api_submissions_urlpatterns = [
 ]
 
 _api_annotations_urlpatterns = [
-    path('<int:pk>/', api.AnnotationAPI.as_view(), name='annotation-detail'),
-    path('<int:pk>/convert-to-draft', api.AnnotationConvertAPI.as_view(), name='annotation-convert-to-draft'),
+    path('<int:pk>/', legacy.LegacyAnnotationAPI.as_view(), name='annotation-detail'),
+    path('<int:pk>/convert-to-draft', legacy.LegacyAnnotationConvertAPI.as_view(), name='annotation-convert-to-draft'),
 ]
 
 _api_drafts_urlpatterns = [
-    path('<int:pk>/', api.AnnotationDraftAPI.as_view(), name='draft-detail'),
+    path('<int:pk>/', legacy.LegacyDraftAPI.as_view(), name='draft-detail'),
 ]
 
 _api_predictions_urlpatterns = router.urls

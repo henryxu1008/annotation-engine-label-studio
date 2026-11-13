@@ -249,7 +249,8 @@ export default class Form extends Component {
 
     this.setState({ lastResponse: response });
 
-    if (response === null) {
+    const status = response?.$meta?.status ?? response?.status ?? response?.response?.status;
+    if (!response || response.error || (typeof status === "number" && status >= 400)) {
       this.props.onError?.();
       return false;
     }
@@ -258,6 +259,12 @@ export default class Form extends Component {
   }
 
   async submitWithFetch(body) {
+    // Raw form submission bypasses APIProxy; a restricted participant mode
+    // must refuse it before any request is sent.
+    if (this.api?.operationGuard && !this.api.operationGuard("__form_fetch", {}, this.api.sharedParams)) {
+      this.props.onError?.();
+      return false;
+    }
     const action = this.formElement.current.action;
     const method = (this.props.method ?? "POST").toUpperCase();
     const response = await fetch(action, { method, body });

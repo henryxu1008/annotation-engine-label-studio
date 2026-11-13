@@ -16,6 +16,65 @@ function createDraftWrapper() {
   }
 }
 
+it.each(["submit", "update"])("tracks the entire blind %s operation and suppresses duplicate writes", async (kind) => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  let complete;
+  const operation = jest.fn(() => new Promise((resolve) => { complete = resolve; }));
+  if (kind === "submit") wrapper.performSubmitAnnotation = operation;
+  else wrapper.performUpdateAnnotation = operation;
+  const execute = () => kind === "submit" ? wrapper.onSubmitAnnotation() : wrapper.onUpdateAnnotation({}, {});
+  const first = execute();
+  const pending = wrapper.pendingBlindWrite;
+  const second = execute();
+  await Promise.resolve();
+  expect(operation).toHaveBeenCalledTimes(1);
+  expect(wrapper.pendingBlindWrite).toBe(pending);
+  expect(await second).toEqual({ $meta: { status: 409 } });
+  complete({ $meta: { status: 200 } });
+  expect(await first).toEqual({ $meta: { status: 200 } });
+  expect(wrapper.pendingBlindWrite).toBeNull();
+});
+
+it.each([401, 403, 404, 409, 503])("closes a blind editor on authorization failure only: %s", async (status) => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.datamanager.store.failBlindTaskOpen = jest.fn();
+  wrapper.performUpdateAnnotation = jest.fn().mockResolvedValue({ $meta: { status } });
+  expect(await wrapper.onUpdateAnnotation({}, {})).toEqual({ $meta: { status } });
+  expect(wrapper.datamanager.store.failBlindTaskOpen).toHaveBeenCalledTimes([401, 403, 404].includes(status) ? 1 : 0);
+});
+
+it.each([
+  [404, 404, true], [404, 200, false], [404, 503, false],
+  [401, null, true], [403, null, true], [409, null, false],
+])("checks task access before closing on draft status %s and task status %s", async (draftStatus, taskStatus, closes) => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.datamanager.store.failBlindTaskOpen = jest.fn();
+  wrapper.datamanager.apiCall = jest.fn().mockResolvedValue({ $meta: { status: taskStatus } });
+  wrapper.task = { id: 42 };
+  wrapper.lsf = {};
+  await wrapper.closeBlindEditorAfterDraftDenial({ $meta: { status: draftStatus } }, 42, wrapper.lsf);
+  expect(wrapper.datamanager.apiCall).toHaveBeenCalledTimes(draftStatus === 404 ? 1 : 0);
+  expect(wrapper.datamanager.store.failBlindTaskOpen).toHaveBeenCalledTimes(closes ? 1 : 0);
+});
+
+it("does not close a replacement editor when a draft authorization check completes late", async () => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.datamanager.store.failBlindTaskOpen = jest.fn();
+  let complete;
+  wrapper.datamanager.apiCall = jest.fn(() => new Promise(resolve => { complete = resolve; }));
+  wrapper.task = { id: 42 };
+  wrapper.lsf = {};
+  const check = wrapper.closeBlindEditorAfterDraftDenial({ $meta: { status: 404 } }, 42, wrapper.lsf);
+  wrapper.lsf = {};
+  complete({ $meta: { status: 404 } });
+  await check;
+  expect(wrapper.datamanager.store.failBlindTaskOpen).not.toHaveBeenCalled();
+});
+
 it.each(['en-US', 'zh-CN'])("does not leave or claim a save for unconfirmed text in %s", async (locale) => {
   const wrapper = createDraftWrapper();
   const save = jest.fn();
@@ -105,6 +164,48 @@ it.each(['submit', 'update'])("waits for this page's pending draft acknowledgeme
   expect(wrapper.prepareData).toHaveBeenCalled();
   if (kind === 'submit') expect(request).toHaveBeenCalledWith(expect.anything(), { draft_revision: 2 });
   else expect(request.mock.calls[0][2].body).toEqual({ draft_revision: 2 });
+});
+
+it("reloads the same restricted task after updating an existing annotation", async () => {
+  const wrapper = createDraftWrapper();
+  const taskID = 2 ** 51 + 11;
+  const annotation = { pk: String(taskID + 1) };
+  wrapper.task = { id: taskID, default_selected_annotation: taskID + 1 };
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.prepareData = jest.fn(() => ({}));
+  wrapper.withinLoadingState = fn => fn();
+  wrapper.saveUserLabels = jest.fn();
+  wrapper.showOperationToast = jest.fn();
+  wrapper.datamanager.invoke = jest.fn();
+  wrapper.datamanager.apiCall = jest.fn().mockResolvedValue({ $meta: { status: 200 } });
+  wrapper.loadTask = jest.fn();
+  await wrapper.onUpdateAnnotation({}, annotation);
+  expect(wrapper.loadTask).toHaveBeenCalledWith(taskID, annotation.pk, true);
+});
+
+it("does not call legacy label or next-task operations in restricted mode", async () => {
+  const wrapper = createDraftWrapper();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.datamanager.apiCall = jest.fn();
+  wrapper.lsf = { userLabels: { controls: { label: [{ path: ['test'] }] } } };
+  await wrapper.saveUserLabels();
+  await wrapper.loadUserLabels();
+  expect(await wrapper.loadTask()).toBe(false);
+  expect(wrapper.shouldLoadNext()).toBe(false);
+  expect(wrapper.shouldExitStream()).toBe(false);
+  expect(wrapper.datamanager.apiCall).not.toHaveBeenCalled();
+});
+
+it("closes restricted editor state when a task reload loses access", async () => {
+  const wrapper = createDraftWrapper();
+  const fail = jest.fn();
+  wrapper.datamanager.settings = { blindProtocol: true };
+  wrapper.datamanager.store.taskStore = { loadTask: jest.fn().mockResolvedValue(null) };
+  wrapper.datamanager.store.failBlindTaskOpen = fail;
+  wrapper.lsf = { setFlags: jest.fn() };
+  wrapper.withinLoadingState = fn => fn();
+  await wrapper.loadTask(2 ** 51 + 11);
+  expect(fail).toHaveBeenCalledTimes(1);
 });
 
 it("reloads fresh server results without merging obsolete local annotations", async () => {

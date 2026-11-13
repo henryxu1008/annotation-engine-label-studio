@@ -276,7 +276,7 @@ class S3ExportStorage(S3StorageMixin, ExportStorage):
     @catch_and_reraise_from_none
     @transaction.atomic
     def save_annotation(self, annotation):
-        self.require_mutable_delivery_allowed(lock_project=True)
+        self.require_mutable_delivery_allowed(lock_project=True, annotation=annotation)
         client, s3 = self.get_client_and_resource()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)

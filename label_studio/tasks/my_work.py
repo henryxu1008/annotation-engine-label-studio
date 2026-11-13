@@ -75,15 +75,23 @@ class JSONContentEqual(Func):
         return f'({left} = {right})', [*left_params, *right_params]
 
 
+def visible_annotation_assignments(project, actor):
+    """Return only the actor's currently visible assignments, without result annotations."""
+    from classification_disagreements.blind_mix import deferred_source_ids
+    from classification_disagreements.blind_provenance import current_quality_assignment_ids
+    from classification_disagreements.models import BlindQualityAssignment
+
+    return (TaskAssignment.objects.filter(
+        project=project,
+        project_id__in=work_projects(actor, ['annotator', 'manager']),
+        assignee=actor,
+        status__in=TaskAssignment.ACTIVE_STATUSES,
+    ).filter(~Q(task_id__in=BlindQualityAssignment.objects.values('task_id'))
+             | Q(pk__in=current_quality_assignment_ids(actor.pk))).exclude(pk__in=deferred_source_ids(actor.pk)))
+
+
 def annotation_work(project, actor):
-    return annotate_assignment_work(
-        TaskAssignment.objects.filter(
-            project=project,
-            project_id__in=work_projects(actor, ['annotator', 'manager']),
-            assignee=actor,
-            status__in=TaskAssignment.ACTIVE_STATUSES,
-        )
-    )
+    return annotate_assignment_work(visible_annotation_assignments(project, actor))
 
 
 def annotate_assignment_work(scoped_assignments):
@@ -208,6 +216,12 @@ class MyWorkAPI(generics.GenericAPIView):
             raise ValidationError({'kind': 'Expected annotation or review.'})
         if kind not in available_kinds:
             raise PermissionDenied('This project role cannot access this work queue.')
+        if kind == 'annotation':
+            from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+            from rest_framework.exceptions import NotFound
+
+            if sensitive_nonmanager(project, principal):
+                raise NotFound('Work is unavailable.')
         from task_packages.access import current_read_policy, fail
         from task_packages.scope import PackageScope
 
@@ -269,6 +283,8 @@ class MyWorkAPI(generics.GenericAPIView):
                     }
                 )
         else:
+            from classification_disagreements.models import BlindQualityAssignment
+
             if request.query_params.get('state'):
                 raise ValidationError({'state': 'Review work contains pending submissions only.'})
             queryset = (
@@ -278,6 +294,7 @@ class MyWorkAPI(generics.GenericAPIView):
                     status=Submission.Status.PENDING,
                 )
                 .exclude(submitted_by=actor)
+                .exclude(assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
                 .order_by('-submitted_at', '-pk')
             )
             if scope:

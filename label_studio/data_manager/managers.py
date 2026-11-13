@@ -2,6 +2,8 @@
 """
 import logging
 import re
+import hashlib
+import hmac
 from datetime import datetime
 from functools import reduce
 from typing import ClassVar
@@ -29,11 +31,11 @@ from django.db.models import (
     When,
 )
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Cast, Coalesce, Concat
+from django.db.models.functions import Cast, Coalesce, Concat, MD5
 from fsm.queryset_mixins import FSMStateQuerySetMixin
 from fsm.registry import get_state_choices
 from pydantic import BaseModel
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from label_studio.core.utils.common import load_func
 from label_studio.core.utils.params import cast_bool_from_str
@@ -41,6 +43,82 @@ from label_studio.core.utils.params import cast_bool_from_str
 logger = logging.getLogger(__name__)
 
 DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%fZ'
+
+
+def require_safe_scoped_filters(prepare_params, *, trusted_principal=None):
+    """Never filter a participant's tasks using other participants' private facts.
+
+    These expressions execute before the final user task scope. Hiding fields
+    during serialization is therefore not sufficient. Managers retain the
+    existing behavior; non-managers may only query task identifiers and data
+    already visible on their assigned tasks. Unknown or custom expressions fail
+    closed until their authorizer can establish the same scope.
+    """
+    filters = prepare_params.filters
+    ordering = prepare_params.ordering or []
+    if not filters and not ordering:
+        return
+    request = prepare_params.request
+    from access_control.authorization import authorization
+    from access_control.identity import resolve_actor
+    from projects.models import Project
+    from tasks.my_work import work_projects
+    from users.models import User
+
+    projects = list(Project.objects.filter(pk__in=prepare_params.projects))
+    if not projects or len(projects) != len(set(prepare_params.projects)):
+        raise PermissionDenied('A current project scope is required for task filtering.')
+    if request is None and trusted_principal is None:
+        raise PermissionDenied('A current project scope is required for task filtering.')
+    if request is not None:
+        principal, actor = resolve_actor(request)
+    else:
+        principal = trusted_principal
+        actor = User.objects.filter(pk=principal.local_user_id, is_active=True).first()
+        if actor is None:
+            raise PermissionDenied('A current project scope is required for task filtering.')
+    if any(project.organization_id != actor.active_organization_id for project in projects):
+        raise PermissionDenied('A current organization scope is required for task filtering.')
+    if all(authorization.can_manage_project(principal, project) for project in projects):
+        # Repeat manager membership in the executed SQL: a demotion between
+        # preflight and evaluation must not leave a private-filter oracle.
+        return work_projects(actor, ['manager'])
+    if (settings.PREPROCESS_FIELD_NAME != 'data_manager.functions.preprocess_field_name'
+            or settings.DATA_MANAGER_CUSTOM_FILTER_EXPRESSIONS != 'data_manager.functions.custom_filter_expressions'):
+        raise PermissionDenied('Custom task filters are unavailable in this scope.')
+
+    from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+    private_quality = any(sensitive_nonmanager(project, principal) for project in projects)
+
+    preprocess = load_func(settings.PREPROCESS_FIELD_NAME)
+
+    def safe(raw, *, is_filter):
+        if not isinstance(raw, str):
+            return False
+        value = raw.lstrip('-')
+        prefix = 'filter:tasks:' if is_filter else 'tasks:'
+        if not value.startswith(prefix):
+            return False
+        value = value[len(prefix):].lstrip('-')
+        if value in ('id', 'inner_id', 'created_at'):
+            return not private_quality
+        if not value.startswith('data.') or '__' in value:
+            return False
+        # Verify the same built-in parser produces a simple task-data key for
+        # each project; no joins or custom ORM traversal are permitted.
+        return all(preprocess(raw, project)[0].startswith('data__')
+                   and '__' not in preprocess(raw, project)[0][len('data__'):]
+                   for project in projects)
+
+    if any(not safe(item, is_filter=False) for item in ordering):
+        raise PermissionDenied('This task ordering is unavailable in the current role.')
+    if filters:
+        for item in filters.items:
+            while item is not None:
+                if not safe(item.filter, is_filter=True):
+                    raise PermissionDenied('This task filter is unavailable in the current role.')
+                item = item.child_filter
 
 
 class _Operator(BaseModel):
@@ -185,7 +263,17 @@ def apply_ordering(queryset, ordering, project, request, view_data=None):
 
         queryset = queryset.order_by(f)
     else:
-        queryset = queryset.order_by('id')
+        from classification_disagreements.blind_participant_projection import participant_for_project
+
+        actor = participant_for_project(request, project) if project is not None else None
+        if actor is None:
+            queryset = queryset.order_by('id')
+        else:
+            # Do not expose creation order through the default list order. The
+            # derived per-actor value avoids placing the application secret in SQL.
+            seed = hmac.new(str(settings.SECRET_KEY).encode(),
+                            f'blind-order-v1:{project.pk}:{actor.pk}'.encode(), hashlib.sha256).hexdigest()
+            queryset = queryset.order_by(MD5(Concat(Value(seed), Cast('id', TextField()), output_field=TextField())))
 
     return queryset
 
@@ -879,13 +967,16 @@ class PreparedTaskManager(models.Manager):
             request=prepare_params.request,
         )
 
-    def only_filtered(self, prepare_params=None):
+    def only_filtered(self, prepare_params=None, *, trusted_principal=None):
+        manager_scope = require_safe_scoped_filters(prepare_params, trusted_principal=trusted_principal)
         request = prepare_params.request
         # Support both single and multiple projects
         if prepare_params.is_multi_project:
             queryset = TaskQuerySet(self.model).filter(project__in=prepare_params.projects)
         else:
             queryset = TaskQuerySet(self.model).filter(project=prepare_params.project)
+        if manager_scope is not None:
+            queryset = queryset.filter(project_id__in=manager_scope)
         fields_for_filter_ordering = get_fields_for_filter_ordering(prepare_params)
         queryset = self.annotate_queryset(queryset, fields_for_evaluation=fields_for_filter_ordering, request=request)
         return queryset.prepared(prepare_params=prepare_params)
@@ -911,18 +1002,29 @@ class TaskManager(models.Manager):
         if user is None or not getattr(user, 'is_authenticated', False) or user.active_organization_id is None:
             return self.get_queryset().none()
 
+        from classification_disagreements.blind_provenance import current_quality_assignment_ids
+        from classification_disagreements.blind_mix import deferred_source_ids
+        from classification_disagreements.models import BlindQualityAssignment
+
+        quality_tasks = BlindQualityAssignment.objects.values('task_id')
+        current_quality = current_quality_assignment_ids(user.pk, using=self._db or 'default')
+
         return (
             self.get_queryset()
             .filter(project__organization=user.active_organization)
             .filter(
                 Q(project__created_by=user)
                 | Q(project__members__user=user, project__members__enabled=True, project__members__role='manager')
-                | Q(
-                    project__members__user=user,
-                    project__members__enabled=True,
-                    project__members__role='annotator',
-                    assignments__assignee=user,
-                    assignments__status__in=['assigned', 'in_progress'],
+                | (
+                    Q(
+                        project__members__user=user,
+                        project__members__enabled=True,
+                        project__members__role='annotator',
+                        assignments__assignee=user,
+                        assignments__status__in=['assigned', 'in_progress'],
+                    )
+                    & (~Q(pk__in=quality_tasks) | Q(assignments__pk__in=current_quality))
+                    & ~Q(assignments__pk__in=deferred_source_ids(user.pk))
                 )
             )
             .distinct()

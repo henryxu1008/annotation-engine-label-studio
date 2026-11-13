@@ -846,19 +846,27 @@ class FileUploadListAPI(generics.mixins.ListModelMixin, generics.mixins.DestroyM
     queryset = FileUpload.objects.all()
 
     def get_queryset(self):
-        project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=self.kwargs.get('pk', 0))
+        _, actor = resolve_actor(self.request)
+        project = generics.get_object_or_404(Project.objects.for_user(actor), pk=self.kwargs.get('pk', 0))
         if project.is_draft or bool_from_request(self.request.query_params, 'all', False):
             # If project is in draft state, we return all uploaded files, ignoring queried ids
             logger.debug(f'Return all uploaded files for draft project {project}')
-            return FileUpload.objects.filter(project_id=project.id, user=self.request.user)
+            return FileUpload.objects.filter(project_id=project.id, user=actor)
 
         # If requested in regular import, only queried IDs are returned to avoid showing previously imported
         ids = json.loads(self.request.query_params.get('ids', '[]'))
         logger.debug(f'File Upload IDs found: {ids}')
-        return FileUpload.objects.filter(project_id=project.id, id__in=ids, user=self.request.user)
+        return FileUpload.objects.filter(project_id=project.id, id__in=ids, user=actor)
 
     def get(self, request, *args, **kwargs):
-        return self.list(request, *args, **kwargs)
+        response = self.list(request, *args, **kwargs)
+        rows = response.data.get('results', []) if isinstance(response.data, dict) else response.data
+        if rows:
+            from classification_disagreements.blind_provenance import record_project_file_access
+
+            _, actor = resolve_actor(request)
+            record_project_file_access(account_id=actor.pk, project_id=int(kwargs['pk']))
+        return response
 
     def delete(self, request, *args, **kwargs):
         project = get_managed_project_or_404(self.request, self.kwargs['pk'])
@@ -918,11 +926,19 @@ class FileUploadAPI(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = FileUploadSerializer
 
     def get_queryset(self):
-        visible_projects = Project.objects.for_user(self.request.user)
+        _, actor = resolve_actor(self.request)
+        visible_projects = Project.objects.for_user(actor)
         return FileUpload.objects.filter(project__in=visible_projects)
 
-    def get(self, *args, **kwargs):
-        return super(FileUploadAPI, self).get(*args, **kwargs)
+    def get(self, request, *args, **kwargs):
+        principal, actor = resolve_actor(request)
+        upload = self.get_object()
+        if not authorization.can_view_project(principal, upload.project):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        from classification_disagreements.blind_provenance import record_uploaded_file_access
+
+        record_uploaded_file_access(account_id=actor.pk, upload=upload)
+        return self.retrieve(request, *args, **kwargs)
 
     def _require_manager(self):
         file_upload = self.get_object()
@@ -987,6 +1003,9 @@ class UploadedFileResponse(generics.RetrieveAPIView):
 
         file = file_upload.file
         if file.storage.exists(file.name):
+            from classification_disagreements.blind_provenance import record_uploaded_file_access
+
+            record_uploaded_file_access(account_id=actor.pk, upload=file_upload)
             content_type, encoding = mimetypes.guess_type(str(file.name))
             content_type = content_type or 'application/octet-stream'
             response = RangedFileResponse(request, file.open(mode='rb'), content_type=content_type)
@@ -1055,6 +1074,9 @@ class DownloadStorageData(APIView):
 
                 if pinned_upload(file_upload):
                     return Response(status=status.HTTP_404_NOT_FOUND)
+                from classification_disagreements.blind_provenance import record_uploaded_file_access
+
+                record_uploaded_file_access(account_id=actor.pk, upload=file_upload)
                 file_obj = file_upload.file
         elif filepath.startswith(settings.AVATAR_PATH):
             user = User.objects.filter(avatar=filepath).first()

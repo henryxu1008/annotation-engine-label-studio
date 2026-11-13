@@ -77,20 +77,37 @@ class AuthorizationService:
 
         from projects.models import ProjectMember
         from tasks.models import TaskAssignment
+        from classification_disagreements.blind_mix import deferred_source_ids
 
         role = cls.project_role(principal, task.project)
         if role not in (ProjectMember.Role.ANNOTATOR, ProjectMember.Role.MANAGER):
             return None
 
-        return (
+        assignment = (
             TaskAssignment.objects.filter(
                 task=task,
                 assignee_id=principal.local_user_id,
                 status__in=TaskAssignment.ACTIVE_STATUSES,
             )
+            .exclude(pk__in=deferred_source_ids(principal.local_user_id))
             .order_by('-assigned_at', '-id')
             .first()
         )
+        if assignment is None:
+            return None
+        from classification_disagreements.blind_provenance import checked_quality_proof
+        from classification_disagreements.models import BlindQualityAssignment
+        from rest_framework.exceptions import ValidationError
+
+        if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+            marker = BlindQualityAssignment.objects.filter(assignment_id=assignment.pk, task_id=task.pk).first()
+            if marker is None:
+                return None
+            try:
+                checked_quality_proof(assignment=assignment, marker=marker, lock_epoch=False)
+            except ValidationError:
+                return None
+        return assignment
 
     @classmethod
     def can_view_task(cls, principal: Principal, task) -> bool:
@@ -117,30 +134,36 @@ class AuthorizationService:
 
     @classmethod
     def can_view_annotation(cls, principal: Principal, annotation) -> bool:
-        if annotation.task_id is None:
+        if annotation.task_id is None or annotation.project_id is None or annotation.project_id != annotation.task.project_id:
             return False
         if cls.can_manage_project(principal, annotation.project):
             return True
         assignment = cls.active_task_assignment(principal, annotation.task)
-        return assignment is not None and assignment.annotation_id == annotation.id
+        return (assignment is not None and assignment.annotation_id == annotation.id
+                and assignment.project_id == annotation.project_id
+                and annotation.completed_by_id == principal.local_user_id)
 
     @classmethod
     def can_update_annotation(cls, principal: Principal, annotation) -> bool:
         from .project_operations import EDIT, project_operation_policy
 
-        if annotation.task_id is None:
+        if annotation.task_id is None or annotation.project_id is None or annotation.project_id != annotation.task.project_id:
             return False
         if not project_operation_policy(annotation.project).allows(EDIT):
             return False
         assignment = cls.active_task_assignment(principal, annotation.task)
-        return assignment is not None and assignment.annotation_id == annotation.id
+        return (assignment is not None and assignment.annotation_id == annotation.id
+                and assignment.project_id == annotation.project_id
+                and annotation.completed_by_id == principal.local_user_id)
 
     @classmethod
     def can_review_submission(cls, principal: Principal, submission) -> bool:
+        from classification_disagreements.blind_quality_boundary import is_quality_only_submission
         from projects.models import ProjectMember
 
         project = submission.assignment.project
-        return cls.project_role(principal, project) == ProjectMember.Role.REVIEWER
+        return (not is_quality_only_submission(submission)
+                and cls.project_role(principal, project) == ProjectMember.Role.REVIEWER)
 
     @classmethod
     def can_release_submission(cls, principal: Principal, submission) -> bool:

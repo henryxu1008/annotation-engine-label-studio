@@ -119,7 +119,8 @@ def local_principal(actor):
     return Principal(f'label_studio_local:{actor.pk}', 'label_studio_local', actor.email, actor.pk)
 
 
-def lock_project_operation(project_id, principal, operation, *, related_user_ids=()):
+def lock_project_actor(project_id, principal, *, related_user_ids=()):
+    """Fence project and actor membership without changing lifecycle policy."""
     if not connection.in_atomic_block:
         raise RuntimeError('Project write fencing requires an atomic transaction')
     project = get_object_or_404(Project.objects.select_for_update(), pk=project_id)
@@ -151,6 +152,11 @@ def lock_project_operation(project_id, principal, operation, *, related_user_ids
         or not any(member.user_id == actor.pk and member.deleted_at is None for member in memberships)
     ):
         raise PermissionDenied('Current organization membership is required.')
+    return project, actor
+
+
+def lock_project_operation(project_id, principal, operation, *, related_user_ids=()):
+    project, actor = lock_project_actor(project_id, principal, related_user_ids=related_user_ids)
     # Security revocation remains possible while a lifecycle policy blocks work.
     if operation != SECURITY_CANCEL:
         require_project_operation(project, operation)

@@ -27,6 +27,7 @@ from data_manager.serializers import (
     ViewSerializer,
 )
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils.decorators import method_decorator
@@ -36,6 +37,7 @@ from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiRespo
 from projects.models import Project
 from projects.serializers import ProjectSerializer
 from rest_framework import generics, viewsets
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -169,17 +171,86 @@ class ViewAPI(viewsets.ModelViewSet):
         DELETE=all_permissions.views_delete,
     )
 
+    @transaction.atomic
+    def list(self, request, *args, **kwargs):
+        project_id = request.query_params.get('project')
+        if project_id:
+            from access_control.project_operations import READ_WORK, lock_project_operation
+            from classification_disagreements.blind_participant_projection import sensitive_project
+
+            principal, actor = resolve_actor(request)
+            try:
+                project = visible_projects_for_actor(actor).filter(pk=project_id).first()
+            except (TypeError, ValueError, OverflowError):
+                raise NotFound('Project is unavailable.')
+            if project is None:
+                return Response([])
+            if sensitive_project(project):
+                lock_project_operation(project.pk, principal, READ_WORK)
+        return super().list(request, *args, **kwargs)
+
+    @transaction.atomic
+    def retrieve(self, request, *args, **kwargs):
+        from access_control.project_operations import READ_WORK, lock_project_operation
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        view = self.get_object()
+        if sensitive_project(view.project):
+            lock_project_operation(view.project_id, resolve_principal(request), READ_WORK)
+        return super().retrieve(request, *args, **kwargs)
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        from access_control.project_operations import READ_WORK, lock_project_operation
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        view = self.get_object()
+        raw_target = request.data.get('project', view.project_id)
+        if (isinstance(raw_target, bool) or not isinstance(raw_target, (int, str))
+                or not str(raw_target).isascii() or not str(raw_target).isdecimal()
+                or len(str(raw_target)) > 18 or int(raw_target) <= 0):
+            raise ValidationError({'project': 'Invalid project.'})
+        principal, actor = resolve_actor(request)
+        target = generics.get_object_or_404(visible_projects_for_actor(actor), pk=int(raw_target))
+        if sensitive_project(view.project) or sensitive_project(target):
+            # A view can move between projects. Lock both in a stable order,
+            # then let get_object and perform_update recheck the live role.
+            for project_id in sorted({view.project_id, target.pk}):
+                lock_project_operation(project_id, principal, READ_WORK)
+            current = View.objects.select_for_update().filter(pk=view.pk).values_list('project_id', flat=True).first()
+            if current != view.project_id:
+                raise NotFound('Work is unavailable.')
+        return super().update(request, *args, **kwargs)
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         _, actor = resolve_actor(self.request)
         project = generics.get_object_or_404(
             visible_projects_for_actor(actor), pk=serializer.validated_data['project'].pk
         )
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        principal = resolve_principal(self.request)
+        if sensitive_nonmanager(project, principal):
+            from access_control.project_operations import READ_WORK, lock_project_operation
+
+            project, _ = lock_project_operation(project.pk, principal, READ_WORK)
+        if sensitive_nonmanager(project, principal) and not authorization.can_review_project(principal, project):
+            raise NotFound('Work is unavailable.')
         serializer.save(user=actor, project=project)
 
     def perform_update(self, serializer):
         _, actor = resolve_actor(self.request)
         project = serializer.validated_data.get('project', serializer.instance.project)
         project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=project.pk)
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        principal = resolve_principal(self.request)
+        if sensitive_nonmanager(project, principal) and not authorization.can_review_project(principal, project):
+            raise NotFound('Work is unavailable.')
         serializer.save(project=project, user=serializer.instance.user)
 
     @extend_schema(
@@ -254,8 +325,18 @@ class ViewAPI(viewsets.ModelViewSet):
         return Response(status=200)
 
     def get_queryset(self):
+        from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
         _, actor = resolve_actor(self.request)
-        return View.objects.filter(project_id__in=visible_projects_for_actor(actor).values('pk')).order_by('order', 'id')
+        roles = ['manager', 'reviewer']
+        if self.action == 'list' and not self.request.query_params.get('project'):
+            roles = ['manager']
+        privileged = Project.objects.filter(
+            Q(created_by=actor) | Q(members__user=actor, members__enabled=True, members__role__in=roles)
+        ).values('pk')
+        return (View.objects.filter(project_id__in=visible_projects_for_actor(actor).values('pk'))
+                .exclude(sensitive_project_filter('project') & ~Q(project_id__in=privileged))
+                .order_by('order', 'id'))
 
 
 class TaskPagination(PageNumberPagination):
@@ -286,8 +367,12 @@ class TaskPagination(PageNumberPagination):
 
     @async_to_sync
     async def async_paginate_queryset(self, queryset, request, view=None):
-        predictions_count_qs = Prediction.objects.filter(task_id__in=queryset)
-        self.total_predictions = await sync_to_async(predictions_count_qs.count, thread_sensitive=True)()
+        from classification_disagreements.blind_participant_projection import restrict_prediction_queryset
+
+        self.total_predictions = await sync_to_async(
+            lambda: restrict_prediction_queryset(Prediction.objects.filter(task_id__in=queryset), request).count(),
+            thread_sensitive=True,
+        )()
 
         annotations_count_qs = self._annotations_count_queryset(queryset, request)
         self.total_annotations = await sync_to_async(annotations_count_qs.count, thread_sensitive=True)()
@@ -297,7 +382,9 @@ class TaskPagination(PageNumberPagination):
         return await sync_to_async(super().paginate_queryset, thread_sensitive=True)(id_only_queryset, request, view)
 
     def sync_paginate_queryset(self, queryset, request, view=None):
-        self.total_predictions = Prediction.objects.filter(task_id__in=queryset).count()
+        from classification_disagreements.blind_participant_projection import restrict_prediction_queryset
+
+        self.total_predictions = restrict_prediction_queryset(Prediction.objects.filter(task_id__in=queryset), request).count()
         self.total_annotations = self._annotations_count_queryset(queryset, request).count()
         # Use .only('id') to avoid loading heavy task.data fields during pagination
         # Full task objects are loaded later with proper annotations
@@ -411,6 +498,7 @@ class TaskListAPI(generics.ListCreateAPIView):
             'file_upload',
         )
 
+    @transaction.atomic
     def get(self, request):
         # get project
         view_pk = int_from_request(request.GET, 'view', 0) or int_from_request(request.data, 'view', 0)
@@ -424,6 +512,31 @@ class TaskListAPI(generics.ListCreateAPIView):
             self.check_object_permissions(request, project)
         else:
             return Response({'detail': 'Neither project nor view id specified'}, status=404)
+        # The legacy queue serializes raw task IDs and arbitrary task data.
+        # Resolve the project from either input before applying the same rule.
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+        from access_control.project_operations import lock_project_actor
+        from rest_framework.exceptions import PermissionDenied
+
+        principal = resolve_principal(request)
+        try:
+            project, _ = lock_project_actor(project.pk, principal)
+        except PermissionDenied:
+            # Keep the legacy empty-list contract after organization access is
+            # revoked, without reading project task data or its counts.
+            page = self.paginate_queryset(Task.objects.none())
+            return self.get_paginated_response([]) if page is not None else Response([])
+        self.check_object_permissions(request, project)
+        if sensitive_nonmanager(project, principal):
+            from access_control.project_operations import READ_WORK, lock_project_operation
+
+            # Reviewers need the legacy shell to open the ordinary review
+            # workspace. Their task queryset is empty; hold membership locks
+            # until serialization so a concurrent role change cannot turn
+            # this request into an annotator's raw-ID task listing.
+            project, _ = lock_project_operation(project.pk, principal, READ_WORK)
+            if not authorization.can_review_project(principal, project):
+                raise NotFound('Work is unavailable.')
         # get prepare params (from view or from payload directly)
         prepare_params = get_prepare_params(request, project)
         queryset = self.get_task_queryset(request, prepare_params)
@@ -548,6 +661,21 @@ class ProjectColumnsAPI(APIView):
         self.check_object_permissions(request, project)
         GET_ALL_COLUMNS = load_func(settings.DATA_MANAGER_GET_ALL_COLUMNS)
         data = GET_ALL_COLUMNS(project, actor)
+        from classification_disagreements.blind_participant_projection import participant_for_project
+
+        if participant_for_project(request, project) is not None:
+            if not isinstance(data, dict) or not isinstance(data.get('columns'), list):
+                raise NotFound('Work is unavailable.')
+            configured = {key for key in (project.data_types or {}) if '[' not in key}
+            columns = [column for column in data['columns']
+                       if isinstance(column, dict) and (column.get('parent') != 'data'
+                                                        or column.get('id') in configured)]
+            for column in columns:
+                if column.get('id') == 'data' and column.get('target') == 'tasks':
+                    column['children'] = [child for child in column.get('children', []) if child in configured]
+                if column.get('id') == 'predictions_model_versions':
+                    column['schema'] = {'items': [], 'multiple': True}
+            data = {**data, 'columns': columns}
         return Response(data)
 
 
@@ -571,21 +699,63 @@ class ProjectStateAPI(APIView):
         _, actor = resolve_actor(request)
         project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=pk)
         self.check_object_permissions(request, project)
-        data = ProjectSerializer(project).data
+        data = ProjectSerializer(project, context={'request': request}).data
+
+        from classification_disagreements.blind_participant_projection import participant_counts, participant_for_project
+
+        participant = participant_for_project(request, project)
+        counts = None
+        if participant is not None:
+            counts = data if {'task_number', 'total_annotations_number'} <= data.keys() else participant_counts(
+                project, participant,
+            )
 
         data.update(
             {
-                'can_delete_tasks': True,
-                'can_manage_annotations': True,
-                'can_manage_tasks': True,
+                'can_delete_tasks': participant is None,
+                'can_manage_annotations': participant is None,
+                'can_manage_tasks': participant is None,
                 'source_syncing': False,
                 'target_syncing': False,
-                'task_count': project.tasks.count(),
-                'annotation_count': Annotation.objects.filter(project=project).count(),
+                'task_count': counts['task_number'] if counts is not None else project.tasks.count(),
+                'annotation_count': counts['total_annotations_number'] if counts is not None
+                else Annotation.objects.filter(project=project).count(),
                 'config_has_control_tags': len(project.get_parsed_config()) > 0,
             }
         )
         return Response(data)
+
+
+class BlindBootstrapMixin:
+    """Expose only the already-projected bootstrap for a live participant."""
+
+    @transaction.atomic
+    def get(self, request):
+        from access_control.project_operations import READ_WORK, lock_project_operation
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        values = request.query_params.getlist('project')
+        if (set(request.query_params) != {'project'} or len(values) != 1 or not values[0].isascii()
+                or not values[0].isdecimal() or len(values[0]) > 18 or int(values[0]) <= 0):
+            raise NotFound('Work is unavailable.')
+        principal, actor = resolve_actor(request)
+        candidate = generics.get_object_or_404(visible_projects_for_actor(actor), pk=int(values[0]))
+        project, _ = lock_project_operation(candidate.pk, principal, READ_WORK)
+        if not sensitive_nonmanager(project, principal):
+            raise NotFound('Work is unavailable.')
+        response = super().get(request)
+        if not sensitive_nonmanager(project, principal):
+            raise NotFound('Work is unavailable.')
+        response['Cache-Control'] = 'private, no-store'
+        return response
+
+
+class BlindProjectStateAPI(BlindBootstrapMixin, ProjectStateAPI):
+    pass
+
+
+class BlindProjectColumnsAPI(BlindBootstrapMixin, ProjectColumnsAPI):
+    pass
 
 
 @method_decorator(
@@ -774,7 +944,7 @@ class ProjectActionsAPI(APIView):
             queryset = queryset.order_by()
 
         if action_id == 'next_task':
-            queue_actor = scope.actor if scope else request.user
+            queue_actor = scope.actor if scope else resolve_actor(request)[1]
             allowed_task_ids = Task.objects.for_user(queue_actor).filter(project=project).values_list('id', flat=True)
             queryset = queryset.filter(id__in=allowed_task_ids)
 
@@ -785,7 +955,7 @@ class ProjectActionsAPI(APIView):
 
         # perform action and return the result dict
         kwargs = {'request': request}  # pass advanced params to actions
-        result = perform_action(action_id, project, queryset, request.user, **kwargs)
+        result = perform_action(action_id, project, queryset, resolve_actor(request)[1], **kwargs)
         code = result.pop('response_code', 200)
 
         return Response(result, status=code)

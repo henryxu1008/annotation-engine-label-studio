@@ -1,8 +1,279 @@
 """Frozen classification analyses and local arbitration receipts, never review approvals."""
 
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+
+class BlindProvenanceFence(models.Model):
+    """One transactional ordering point for prospective provenance events."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    sequence = models.PositiveBigIntegerField(default=0)
+
+
+class BlindProvenanceEvent(models.Model):
+    """Internal database-captured ordering evidence, not proof of no exposure."""
+
+    kind = models.CharField(max_length=12)
+    subject_id = models.PositiveBigIntegerField()
+    sequence = models.PositiveBigIntegerField(unique=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['kind', 'subject_id'], name='blind_provenance_subject_unique'),
+            models.CheckConstraint(condition=models.Q(kind__in=['account', 'reference']),
+                                   name='blind_provenance_kind_valid'),
+        ]
+
+
+class BlindCaptureEpoch(models.Model):
+    """Fail-closed capture generation, not an authorization switch."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    generation = models.PositiveBigIntegerField(default=1)
+    enabled = models.BooleanField(default=False)
+
+
+class BlindPrivilegeHistory(models.Model):
+    """Forward-only conservative privilege history; absence denies admission."""
+
+    account_id = models.PositiveBigIntegerField(primary_key=True)
+    elevated = models.BooleanField(default=False)
+    had_assignment = models.BooleanField(default=False)
+    first_assignment_id = models.PositiveBigIntegerField(null=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(had_assignment=False, first_assignment_id__isnull=True)
+                       | models.Q(had_assignment=True, first_assignment_id__isnull=False)),
+            name='blind_first_assignment_consistent',
+        )]
+
+
+class BlindCaptureCertificate(models.Model):
+    """Account birth observed while capture was enabled for this generation."""
+
+    account_id = models.PositiveBigIntegerField(primary_key=True)
+    generation = models.PositiveBigIntegerField()
+
+
+class BlindAssignmentExposure(models.Model):
+    """Forward-only task assignments observed during a certified generation."""
+
+    account_id = models.PositiveBigIntegerField()
+    task_id = models.PositiveBigIntegerField()
+    project_id = models.PositiveBigIntegerField()
+    generation = models.PositiveBigIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['account_id', 'task_id', 'generation'], name='blind_assignment_exposure_unique',
+        )]
+
+
+class BlindProjectFileExposure(models.Model):
+    """Prospective record that an account accessed project-controlled file bytes."""
+
+    account_id = models.PositiveBigIntegerField()
+    project_id = models.PositiveBigIntegerField()
+    generation = models.PositiveBigIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['account_id', 'project_id', 'generation'], name='blind_project_file_exposure_unique',
+        )]
+
+
+class BlindLabelExposure(models.Model):
+    """Prospective record of organization-wide label metadata access."""
+
+    account_id = models.PositiveBigIntegerField()
+    generation = models.PositiveBigIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['account_id', 'generation'], name='blind_label_exposure_unique',
+        )]
+
+
+class BlindTextLengthExposure(models.Model):
+    """Conservative, non-content evidence of assigned top-level text lengths."""
+
+    account_id = models.PositiveBigIntegerField()
+    assignment_id = models.PositiveBigIntegerField()
+    generation = models.PositiveBigIntegerField()
+    byte_length = models.IntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['account_id', 'assignment_id', 'generation', 'byte_length'], name='blind_text_length_unique',
+        )]
+
+
+class BlindReferenceTextLength(models.Model):
+    reference_id = models.PositiveBigIntegerField()
+    byte_length = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['reference_id', 'byte_length'], name='blind_reference_length_unique',
+        )]
+
+
+class BlindEligibilityProof(models.Model):
+    """Immutable assignment-time admission evidence; contains no answers."""
+
+    assignment_id = models.PositiveBigIntegerField(unique=True)
+    manifest = models.JSONField()
+    manifest_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class BlindQualityAssignment(models.Model):
+    """Private retained purpose evidence, including after project deletion."""
+
+    assignment_id = models.PositiveBigIntegerField(unique=True)
+    task_id = models.PositiveBigIntegerField(db_index=True)
+    project_id = models.PositiveBigIntegerField(db_index=True)
+    assignee_id = models.PositiveBigIntegerField()
+    reference_id = models.PositiveBigIntegerField(null=True)
+    reference_hash = models.CharField(max_length=64, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(reference_id__isnull=True, reference_hash__isnull=True)
+                           | models.Q(reference_id__isnull=False, reference_hash__isnull=False)),
+                name='blind_quality_reference_pair',
+            ),
+        ]
+
+
+class BlindGoldScore(models.Model):
+    """Internal frozen score for one quality revision; no public endpoint."""
+
+    submission = models.OneToOneField('tasks.Submission', on_delete=models.CASCADE, related_name='blind_gold_score')
+    manifest = models.JSONField()
+    manifest_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class BlindScoreOutbox(models.Model):
+    """Private uniform queue record for submissions in a quality project."""
+
+    submission = models.OneToOneField('tasks.Submission', on_delete=models.CASCADE, related_name='blind_score_outbox')
+    token = models.UUIDField(default=uuid.uuid4)
+    state = models.CharField(max_length=16, default='pending')
+    queued_at = models.DateTimeField(null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    error_code = models.CharField(max_length=64, default='', blank=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=models.Q(state__in=['pending', 'queued', 'scored', 'ignored', 'invalid']),
+            name='blind_score_outbox_state_valid',
+        )]
+
+
+class BlindDispatchReceipt(models.Model):
+    """Private idempotency record for an initial quality assignment."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    assignment = models.OneToOneField('tasks.TaskAssignment', null=True, on_delete=models.SET_NULL)
+    assignment_id_frozen = models.PositiveBigIntegerField()
+    key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    actor_id = models.PositiveBigIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['project', 'key'], name='blind_dispatch_project_key_unique')]
+
+
+class BlindMixDecision(models.Model):
+    """Private persisted sampling decision for one ordinary assignment command."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    source_assignment = models.ForeignKey('tasks.TaskAssignment', null=True, on_delete=models.SET_NULL,
+                                          related_name='+')
+    chosen_assignment = models.ForeignKey('tasks.TaskAssignment', null=True, on_delete=models.SET_NULL,
+                                          related_name='+')
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_task_id_frozen = models.PositiveBigIntegerField()
+    source_assignee_id_frozen = models.PositiveBigIntegerField()
+    chosen_id_frozen = models.PositiveBigIntegerField()
+    reference_id_frozen = models.PositiveBigIntegerField(null=True)
+    predecessor_id_frozen = models.PositiveBigIntegerField(null=True, unique=True)
+    key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    actor_id = models.PositiveBigIntegerField()
+    ratio_basis_points = models.PositiveSmallIntegerField()
+    selected = models.BooleanField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'key'], name='blind_mix_project_key_unique'),
+            models.UniqueConstraint(fields=['project', 'source_id_frozen'], name='blind_mix_source_unique'),
+            models.UniqueConstraint(fields=['chosen_id_frozen'], name='blind_mix_chosen_unique'),
+            models.CheckConstraint(condition=models.Q(ratio_basis_points__lte=10000), name='blind_mix_ratio_valid'),
+            models.CheckConstraint(condition=(models.Q(selected=False, reference_id_frozen__isnull=True)
+                                             | models.Q(selected=True, reference_id_frozen__isnull=False)),
+                                   name='blind_mix_reference_valid'),
+        ]
+
+
+class BlindMixEvidence(models.Model):
+    """Retained proof that a sampled assignment came from a mix decision."""
+
+    decision_id_frozen = models.PositiveBigIntegerField(unique=True)
+    project_id_frozen = models.PositiveBigIntegerField()
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_task_id_frozen = models.PositiveBigIntegerField()
+    source_assignee_id_frozen = models.PositiveBigIntegerField()
+    chosen_id_frozen = models.PositiveBigIntegerField(unique=True)
+
+
+class BlindMixCompletion(models.Model):
+    """Retained evidence that a sample submitted before its source was released."""
+
+    decision_id_frozen = models.PositiveBigIntegerField(unique=True)
+    project_id_frozen = models.PositiveBigIntegerField()
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_version_after = models.PositiveBigIntegerField()
+    chosen_id_frozen = models.PositiveBigIntegerField(unique=True)
+    submission_id_frozen = models.PositiveBigIntegerField(unique=True)
+
+
+class BlindTaskHandle(models.Model):
+    """Retained opaque participant identifiers for one assignment, not a public API."""
+
+    assignment_id_frozen = models.PositiveBigIntegerField(unique=True)
+    task_id_frozen = models.PositiveBigIntegerField()
+    project_id_frozen = models.PositiveBigIntegerField()
+    actor_id_frozen = models.PositiveBigIntegerField()
+    task_handle = models.PositiveBigIntegerField(unique=True)
+    assignment_handle = models.PositiveBigIntegerField(unique=True)
+
+
+class BlindResourceHandle(models.Model):
+    """Immutable participant token bound to one concrete draft or annotation."""
+
+    assignment_id_frozen = models.PositiveBigIntegerField()
+    task_id_frozen = models.PositiveBigIntegerField()
+    project_id_frozen = models.PositiveBigIntegerField()
+    actor_id_frozen = models.PositiveBigIntegerField()
+    kind = models.CharField(max_length=16)
+    object_id_frozen = models.PositiveBigIntegerField()
+    handle = models.PositiveBigIntegerField(unique=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['kind', 'object_id_frozen'], name='blind_resource_object_unique'),
+            models.CheckConstraint(condition=models.Q(kind__in=['annotation', 'draft']), name='blind_resource_kind_valid'),
+        ]
 
 
 class ClassificationGoldEvidence(models.Model):

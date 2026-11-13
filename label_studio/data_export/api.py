@@ -247,7 +247,9 @@ class ExportAPI(generics.RetrieveAPIView):
         tasks_ids = request.GET.getlist('ids[]')
 
         logger.debug('Get tasks')
-        query = Task.objects.filter(project=project)
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
+
+        query = Task.objects.filter(project=project).exclude(id__in=quality_task_ids(project.pk))
         if tasks_ids and len(tasks_ids) > 0:
             logger.debug(f'Select only subset of {len(tasks_ids)} tasks')
             query = query.filter(id__in=tasks_ids)

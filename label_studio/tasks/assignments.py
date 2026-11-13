@@ -51,6 +51,12 @@ def create_assignment(*, task, assignee, principal):
     authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
     task = get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
     task.project = project
+    from classification_disagreements.models import BlindMixEvidence, BlindQualityAssignment
+
+    if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+        raise ValidationError({'task': 'This task cannot be reassigned.'})
+    if BlindMixEvidence.objects.filter(source_task_id_frozen=task.pk, source_assignee_id_frozen=assignee.pk).exists():
+        raise ValidationError({'task': 'This task cannot be assigned to this user.'})
     # The serializer's preflight is not authoritative: revalidate the locked
     # current target after concurrent membership/account changes commit.
     assignee.refresh_from_db()

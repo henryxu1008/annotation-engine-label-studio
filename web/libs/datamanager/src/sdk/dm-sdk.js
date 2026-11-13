@@ -50,6 +50,7 @@ import { objectToMap } from "../utils/helpers";
 import { serializeJsonForUrl, deserializeJsonFromUrl } from "@humansignal/core";
 import { isDefined } from "../utils/utils";
 import { APIConfig } from "./api-config";
+import { blindEndpointAllowed } from "./blind-protocol";
 import { createApp } from "./app-create";
 import { LSFWrapper } from "./lsf-sdk";
 import { taskToLSFormat } from "./lsf-utils";
@@ -158,6 +159,7 @@ export class DataManager {
     this.dataset = config.dataset;
     this.datasetId = config.datasetId;
     this.settings = config.settings;
+    this.blindWorkspace = typeof config.blindWorkspace === "function" ? config.blindWorkspace : null;
     this.labelStudioOptions = config.labelStudio;
     this.env = config.env ?? process.env.NODE_ENV ?? this.env;
     this.mode = config.mode ?? this.mode;
@@ -233,6 +235,14 @@ export class DataManager {
     config.gateway = apiGateway ?? config.gateway;
     config.mockDisabled = apiMockDisabled;
     config.commonHeaders = apiHeaders;
+    let blindProtocolBound = this.settings?.blindProtocol === true;
+    config.operationGuard = (method, params, shared, endpoint, parentPath) => {
+      const mode = this.settings?.blindProtocol;
+      if (mode === true) blindProtocolBound = true;
+      if (blindProtocolBound && mode !== true) return false;
+      if (mode === undefined || mode === false) return true;
+      return mode === true && blindEndpointAllowed(method, params, shared, endpoint, parentPath);
+    };
 
     Object.assign(config.endpoints, apiEndpoints ?? {});
     const sharedParams = {};
@@ -244,7 +254,9 @@ export class DataManager {
       sharedParams.dataset = this.datasetId;
     }
     Object.assign(config, {
-      sharedParams: {
+      // APIProxy appends shared params to URLs and write bodies, and gives
+      // them precedence over route params. Blind work uses only its handles.
+      sharedParams: this.settings?.blindProtocol === true ? {} : {
         ...sharedParams,
         ...(apiSharedParams ?? {}),
       },

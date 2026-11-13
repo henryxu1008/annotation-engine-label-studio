@@ -234,6 +234,10 @@ class MLBackend(models.Model):
 
     def _predict(self, task):
         """This is low level prediction method that is used for debugging"""
+        from classification_disagreements.models import BlindQualityAssignment
+
+        if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+            return
         ml_api = self.api
         task_ser = TaskSimpleSerializer(task).data
 
@@ -340,15 +344,21 @@ class MLBackend(models.Model):
         return predictions
 
     def predict_tasks(self, tasks):
-        model_version = self.update_state()
-        if self.not_ready:
-            logger.debug(f'ML backend {self} is not ready')
-            return
+        from classification_disagreements.blind_quality_boundary import quality_task_ids
 
         if isinstance(tasks, list):
             from tasks.models import Task
 
             tasks = Task.objects.filter(id__in=[task.id for task in tasks])
+        # Do this before health checks or serialization: quality data must not
+        # be sent to an external backend by an ordinary prediction workflow.
+        tasks = tasks.exclude(pk__in=quality_task_ids())
+        if not tasks.exists():
+            return
+        model_version = self.update_state()
+        if self.not_ready:
+            logger.debug(f'ML backend {self} is not ready')
+            return
 
         # Filter tasks that already contain the current model version in predictions
         tasks = tasks.annotate(predictions_count=Count('predictions')).exclude(
@@ -366,6 +376,10 @@ class MLBackend(models.Model):
         return instances
 
     def interactive_annotating(self, task, context=None, user=None):
+        from classification_disagreements.models import BlindQualityAssignment
+
+        if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+            return {'errors': ['Interactive preannotation is unavailable.']}
         result = {}
         options = {}
         if user:

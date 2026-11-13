@@ -105,6 +105,10 @@ def recalculate_created_annotations_and_labels_from_scratch(
     summary.created_labels_drafts = {}
     drafts = AnnotationDraft.objects.filter(task__project=project)
     summary.update_created_labels_drafts(drafts)
+    # When the ordinary scope is empty the update helpers intentionally do
+    # nothing, so persist the cleared values explicitly as well.
+    summary.save(update_fields=['all_data_columns', 'common_data_columns', 'created_labels',
+                                'created_annotations', 'created_labels_drafts'])
 
     logger.info(
         f'Reset cache finished for project {project.id} and organization {organization_id}:\n'

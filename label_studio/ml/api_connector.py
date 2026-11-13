@@ -182,6 +182,14 @@ class MLApi(BaseHTTPAPI):
         return f'{project.id}.{time_id}'
 
     def train(self, project, use_ground_truth=False):
+        from classification_disagreements.models import BlindQualityAssignment
+        from rest_framework.exceptions import ValidationError
+
+        # Training may transmit all annotated tasks or give the backend a
+        # project-scoped callback. Neither route currently enforces the private
+        # quality boundary, so deny the whole operation until it does.
+        if BlindQualityAssignment.objects.filter(project_id=project.pk).exists():
+            raise ValidationError({'detail': 'Training is unavailable for projects with private quality tasks.'})
         # TODO Replace AnonymousUser with real user from request
         user = AnonymousUser()
         # Identify if feature flag is turned on
@@ -230,6 +238,16 @@ class MLApi(BaseHTTPAPI):
         return self._request(VALIDATE_URL, request={'config': config}, timeout=self._validate_request_timeout)
 
     def setup(self, project, extra_params=None, **kwargs):
+        from classification_disagreements.models import BlindQualityAssignment
+        from projects.models import Project
+        from rest_framework.exceptions import ValidationError
+
+        # The upstream setup payload contains an owner's reusable API token.
+        # It cannot be safely combined with private quality work until a
+        # scoped backend identity exists, including across projects.
+        live_quality = BlindQualityAssignment.objects.filter(project_id__in=Project.all_objects.values('pk')).exists()
+        if settings.ANNOTATION_CLASSIFICATION_BLIND_ENABLED or live_quality:
+            raise ValidationError({'detail': 'ML backend setup is unavailable while private quality is enabled.'})
         return self._request(
             SETUP_URL,
             request={

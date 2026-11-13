@@ -20,6 +20,25 @@ const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => jest.clearAllMocks());
 
+it("does not append or override blind route handles with shared parameters", async () => {
+  createApp.mockResolvedValue({});
+  const manager = makeManager();
+  await nextTick();
+  try {
+    const legacy = manager.apiConfig({ apiSharedParams: { taskID: 7 } });
+    expect(legacy.sharedParams).toEqual({ project: 7, taskID: 7 });
+    expect(legacy.operationGuard("columns", {}, legacy.sharedParams)).toBe(true);
+    manager.settings = { blindProtocol: true };
+    const blind = manager.apiConfig({ apiSharedParams: { taskID: 7, assignment_id: 9 } });
+    expect(blind.sharedParams).toEqual({});
+    expect(blind.operationGuard("blindTask", { taskID: 2 ** 51 + 1 }, {}, blind.endpoints.blindTask)).toBe(true);
+    manager.settings.blindProtocol = false;
+    expect(blind.operationGuard("task", { taskID: 7 }, {})).toBe(false);
+  } finally {
+    manager.destroy();
+  }
+});
+
 it("updates Data Manager and nested editor locale without recreating either store", async () => {
   const store = { submitAnnotation: jest.fn(), saveDraft: jest.fn() };
   createApp.mockResolvedValue(store);
