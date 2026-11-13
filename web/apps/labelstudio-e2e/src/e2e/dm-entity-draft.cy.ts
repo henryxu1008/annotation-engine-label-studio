@@ -3,7 +3,13 @@
 describe("Restored text entity drafts", () => {
   let fixture: any;
   let releaseDraftResponse: (() => void) | undefined;
-  afterEach(() => { releaseDraftResponse?.(); releaseDraftResponse = undefined; });
+  const recoveryReleases = new Set<() => void>();
+  afterEach(() => {
+    releaseDraftResponse?.();
+    releaseDraftResponse = undefined;
+    recoveryReleases.forEach(release => release());
+    recoveryReleases.clear();
+  });
   const draftRoute = { method: /POST|PATCH/, url: /\/api\/(?:tasks\/\d+\/drafts|drafts\/\d+)/ };
   const state = (dirty: boolean, note = "原始备注") => cy.window().should((win: any) => {
     const annotation = win.Htx?.annotationStore?.selected;
@@ -117,32 +123,41 @@ describe("Restored text entity drafts", () => {
         state(true, "My latest local edit 中文");
         cy.contains(locale === "zh-CN" ? "未能载入最新草稿。本页修改仍然保留，请检查网络后重试。"
           : "Could not load the latest draft. Your edits remain here; check the connection and try again.").should("be.visible");
-        let recoveryHeld = false;
         const holdRecovery = (alias: string) => {
-          recoveryHeld = false;
+          // Each intercepted response owns its resolver. Sharing one mutable
+          // resolver across two recovery requests lets a late callback replace
+          // the one that the test intends to release.
+          const gate: { release?: () => void } = {};
           cy.intercept({ method: "GET", url: new RegExp(`/api/tasks/${scope.task_id}/?(?:\\?.*)?$`), times: 1 },
             req => req.continue(() => new Promise<void>(resolve => {
-              recoveryHeld = true;
-              releaseDraftResponse = resolve;
+              gate.release = resolve;
+              recoveryReleases.add(resolve);
             }))).as(alias);
           cy.get('[data-testid="draft-reload-latest"]').click();
-          cy.wrap(null).should(() => expect(recoveryHeld, "recovery response held").to.eq(true));
+          cy.wrap(null).should(() => expect(gate.release, "recovery response held").to.be.a("function"));
+          return gate;
         };
-        const releaseRecovery = (alias: string) => {
-          cy.then(() => { releaseDraftResponse!(); releaseDraftResponse = undefined; });
+        const releaseRecovery = (alias: string, gate: { release?: () => void }) => {
+          cy.then(() => {
+            expect(gate.release, "the matching recovery response is held").to.be.a("function");
+            const release = gate.release!;
+            gate.release = undefined;
+            recoveryReleases.delete(release);
+            release();
+          });
           cy.wait(`@${alias}`).its("response.statusCode").should("eq", 200);
         };
-        holdRecovery("changedDuringRecovery");
+        const changedRecovery = holdRecovery("changedDuringRecovery");
         edit("New edit during recovery 中文");
-        releaseRecovery("changedDuringRecovery");
+        releaseRecovery("changedDuringRecovery", changedRecovery);
         state(true, "New edit during recovery 中文");
         cy.contains(locale === "zh-CN" ? "载入期间本页又有修改，内容仍然保留" : "Your edits changed while loading and remain here").should("be.visible");
         cy.get('[data-testid="draft-reload-latest"]').should("be.disabled");
         cy.get('[data-testid="draft-backup"]').click();
-        holdRecovery("rawTextDuringRecovery");
+        const rawTextRecovery = holdRecovery("rawTextDuringRecovery");
         cy.get('[data-testid="htx-textbox-edit-button"]').click();
         cy.get('[data-testid="htx-textbox-input"]').clear().type("Unconfirmed during recovery 中文");
-        releaseRecovery("rawTextDuringRecovery");
+        releaseRecovery("rawTextDuringRecovery", rawTextRecovery);
         cy.get('[data-testid="htx-textbox-input"]').should("have.value", "Unconfirmed during recovery 中文");
         state(true, "New edit during recovery 中文");
         cy.get('[data-testid="draft-backup"]').should("be.disabled");
