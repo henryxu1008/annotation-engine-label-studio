@@ -3229,6 +3229,68 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
 
+    def test_blind_editor_rechecks_membership_after_project_lock_for_both_work_types(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        memberships = []
+        for member in members:
+            self.organization.add_user(member)
+            memberships.append(ProjectMember.objects.create(project=self.project, user=member, role='annotator'))
+        ordinary_task = TaskFactory(project=self.project, data={'text': 'independent ordinary work'})
+        ordinary = TaskAssignment.objects.create(task=ordinary_task, project=self.project, assignee=members[0],
+                                                 assigned_by=self.manager)
+        carrier = TaskFactory(project=self.project, data={'text': 'independent quality carrier 12345'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            quality = create_mixed_assignment(task=carrier, assignee=members[1],
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(self.manager), key=uuid4())
+            for member, membership, assignment in zip(members, memberships, (ordinary, quality)):
+                with self.subTest(work_type='quality' if assignment.pk == quality.pk else 'ordinary'):
+                    handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk).task_handle
+                    started = Event()
+
+                    def read():
+                        close_old_connections()
+                        try:
+                            client = APIClient()
+                            client.force_authenticate(User.objects.get(pk=member.pk))
+                            started.set()
+                            return client.get(f'/api/tasks/blind/{handle}/').status_code
+                        finally:
+                            close_old_connections()
+
+                    assert read() == 200
+                    started.clear()
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        with transaction.atomic():
+                            Project.objects.select_for_update().get(pk=self.project.pk)
+                            reading = pool.submit(read)
+                            assert started.wait(10)
+                            with self.assertRaises(TimeoutError):
+                                reading.result(timeout=0.3)
+                            ProjectMember.objects.filter(pk=membership.pk).update(enabled=False)
+                        assert reading.result(timeout=20) in (403, 404)
+
     def test_legacy_task_read_fences_project_becoming_sensitive(self):
         from projects.models import ProjectMember
         from rest_framework.test import APIClient
