@@ -1,4 +1,4 @@
-name: Project lifecycle UI
+name: Project lifecycle
 
 on:
   push:
@@ -16,6 +16,11 @@ on:
       - 'label_studio/tasks/**'
       - 'label_studio/webhooks/**'
       - 'label_studio/data_import/**'
+      - 'label_studio/data_export/**'
+      - 'label_studio/data_manager/**'
+      - 'label_studio/labels_manager/**'
+      - 'label_studio/ml/**'
+      - 'label_studio/core/settings/**'
       - 'scripts/issue86_ui_fixture.py'
       - '.github/workflows/project-lifecycle-ui.yml'
   pull_request:
@@ -33,6 +38,11 @@ on:
       - 'label_studio/tasks/**'
       - 'label_studio/webhooks/**'
       - 'label_studio/data_import/**'
+      - 'label_studio/data_export/**'
+      - 'label_studio/data_manager/**'
+      - 'label_studio/labels_manager/**'
+      - 'label_studio/ml/**'
+      - 'label_studio/core/settings/**'
       - 'scripts/issue86_ui_fixture.py'
       - '.github/workflows/project-lifecycle-ui.yml'
   workflow_dispatch:
@@ -64,6 +74,77 @@ jobs:
             apps/labelstudio/src/pages/Settings/lifecycleState.test.js \
             apps/labelstudio/src/pages/Settings/routeTitleKeys.test.js
           yarn i18n:catalogs
+          yarn i18n:literals
+
+  lifecycle-backend:
+    name: Lifecycle backend regressions / ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgresql]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-issue86-password
+          POSTGRES_DB: issue86_backend_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DJANGO_SETTINGS_MODULE: core.settings.label_studio
+      DJANGO_DB: ${{ matrix.database }}
+      POSTGRE_HOST: 127.0.0.1
+      POSTGRE_NAME: issue86_backend_test
+      POSTGRE_USER: postgres
+      POSTGRE_PASSWORD: synthetic-issue86-password
+      SECRET_KEY: synthetic-issue86-secret
+      LOG_DIR: /tmp/issue86-backend-logs
+      COLLECT_ANALYTICS: 'false'
+      LATEST_VERSION_CHECK: 'false'
+      SENTRY_RATE: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install 'poetry==2.3.2'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          poetry install --with test
+          poetry run python label_studio/core/version.py
+      - name: Run lifecycle and storage regressions
+        working-directory: label_studio
+        run: |
+          poetry run pytest -q \
+            projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_migration.py \
+            projects/tests/test_lifecycle_background_import.py io_storages/tests/test_project_operation_fence.py \
+            io_storages/tests/test_storage_admission.py io_storages/tests/test_webhook_outbox.py \
+            io_storages/tests/test_s3_version_provenance.py io_storages/tests/test_s3_delete_key_fence.py \
+            io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_legacy_iam_inventory.py \
+            io_storages/tests/test_s3_write_retry_policy.py io_storages/tests/test_upgrade_queue_inventory.py \
+            data_export/tests/test_api.py data_export/tests/test_lifecycle_worker_fence.py \
+            data_export/tests/test_approved_exports.py::TestApprovedExports::test_lifecycle_admission_blocks_release_creation_and_retry \
+            data_export/tests/test_release_snapshots.py::TestReleaseSnapshots::test_lifecycle_admission_blocks_snapshot_creation_and_retry \
+            tests/webhooks/test_webhooks.py tests/data_import/test_streaming_import.py \
+            tasks/tests/test_project_operation_policy.py
 
   lifecycle-browser:
     name: Lifecycle browser journeys / PostgreSQL
