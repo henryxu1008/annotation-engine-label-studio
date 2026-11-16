@@ -141,10 +141,15 @@ jobs:
             io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_legacy_iam_inventory.py \
             io_storages/tests/test_s3_write_retry_policy.py io_storages/tests/test_upgrade_queue_inventory.py \
             data_export/tests/test_api.py data_export/tests/test_lifecycle_worker_fence.py \
-            data_export/tests/test_approved_exports.py::TestApprovedExports::test_lifecycle_admission_blocks_release_creation_and_retry \
-            data_export/tests/test_release_snapshots.py::TestReleaseSnapshots::test_lifecycle_admission_blocks_snapshot_creation_and_retry \
             tests/webhooks/test_webhooks.py tests/data_import/test_streaming_import.py \
             tasks/tests/test_project_operation_policy.py
+      - name: Run PostgreSQL release and snapshot fences
+        if: matrix.database == 'postgresql'
+        working-directory: label_studio
+        run: |
+          poetry run pytest -q \
+            data_export/tests/test_approved_exports.py::TestApprovedExports::test_lifecycle_admission_blocks_release_creation_and_retry \
+            data_export/tests/test_release_snapshots.py::TestReleaseSnapshots::test_lifecycle_admission_blocks_snapshot_creation_and_retry
 
   lifecycle-browser:
     name: Lifecycle browser journeys / PostgreSQL

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestEngineering)
+param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestEngineering, [switch]$TestExportFence)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -34,7 +34,7 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
-    if ($TestS3Fence -and $TestEngineering) { throw 'Select only one test group.' }
+    if (@($TestS3Fence, $TestEngineering, $TestExportFence).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
     if ($TestEngineering) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_background_import.py `
@@ -43,6 +43,10 @@ try {
             io_storages/tests/test_s3_delete_key_fence.py io_storages/tests/test_rq_sync_attempt_isolated.py `
             io_storages/tests/test_upgrade_isolation_postgres.py tasks/tests/test_project_operation_policy.py `
             data_export/tests/test_lifecycle_worker_fence.py
+    } elseif ($TestExportFence) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            'data_export/tests/test_approved_exports.py::TestApprovedExports::test_lifecycle_admission_blocks_release_creation_and_retry' `
+            'data_export/tests/test_release_snapshots.py::TestReleaseSnapshots::test_lifecycle_admission_blocks_snapshot_creation_and_retry'
     } elseif ($TestS3Fence) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
             io_storages/tests/test_s3_delete_key_fence.py `
