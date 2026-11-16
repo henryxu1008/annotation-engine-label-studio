@@ -17,10 +17,10 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from io_storages.admission import admitted_annotation_effect
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
-    serialize_mutable_delivery,
     ImportStorage,
     ImportStorageLink,
     ProjectStorageMixin,
@@ -265,6 +265,7 @@ class AzureBlobImportStorage(ProjectStorageMixin, AzureBlobImportStorageBase):
 
 
 class AzureBlobExportStorage(AzureBlobStorageMixin, ExportStorage):  # note: order is important!
+    @admitted_annotation_effect('annotation_export')
     @transaction.atomic
     def save_annotation(self, annotation):
         self.require_mutable_delivery_allowed(lock_project=True)
@@ -312,6 +313,11 @@ def _dispatch_azure_annotation_export(annotation_id):
 
 @receiver(post_save, sender=Annotation)
 def export_annotation_to_azure_storages(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        from io_storages.annotation_outbox import queue_annotation_exports
+
+        queue_annotation_exports(instance, AzureBlobExportStorage)
+        return
     storages = getattr(instance.project, 'io_storages_azureblobexportstorages', None)
     if storages and storages.exists():  # avoid excess jobs in rq
         annotation_id = instance.pk

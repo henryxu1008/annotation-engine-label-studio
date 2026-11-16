@@ -17,17 +17,19 @@ logger = logging.getLogger(__name__)
 
 
 def get_client_and_resource(
-    aws_access_key_id=None, aws_secret_access_key=None, aws_session_token=None, region_name=None, s3_endpoint=None
+    aws_access_key_id=None,
+    aws_secret_access_key=None,
+    aws_session_token=None,
+    region_name=None,
+    s3_endpoint=None,
+    *,
+    single_attempt=False,
 ):
     aws_access_key_id = aws_access_key_id or get_env('AWS_ACCESS_KEY_ID')
     aws_secret_access_key = aws_secret_access_key or get_env('AWS_SECRET_ACCESS_KEY')
     aws_session_token = aws_session_token or get_env('AWS_SESSION_TOKEN')
-    logger.debug(
-        f'Create boto3 session with '
-        f'access key id={aws_access_key_id}, '
-        f'secret key={aws_secret_access_key[:4] + "..." if aws_secret_access_key else None}, '
-        f'session token={aws_session_token}'
-    )
+    # Access keys and especially STS session tokens must never enter logs.
+    logger.debug('Create boto3 S3 session')
     session = boto3.Session(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
@@ -37,8 +39,12 @@ def get_client_and_resource(
     s3_endpoint = s3_endpoint or get_env('S3_ENDPOINT')
     if s3_endpoint:
         settings['endpoint_url'] = s3_endpoint
-    client = session.client('s3', config=boto3.session.Config(signature_version='s3v4'), **settings)
-    resource = session.resource('s3', config=boto3.session.Config(signature_version='s3v4'), **settings)
+    config = boto3.session.Config(
+        signature_version='s3v4',
+        **({'retries': {'total_max_attempts': 1}} if single_attempt else {}),
+    )
+    client = session.client('s3', config=config, **settings)
+    resource = session.resource('s3', config=config, **settings)
     return client, resource
 
 

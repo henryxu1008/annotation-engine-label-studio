@@ -10,19 +10,21 @@ import sys
 import traceback as tb
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from functools import wraps
 from dataclasses import asdict
 from datetime import datetime
+from functools import wraps
 from typing import Any, Iterator, Union
 from urllib.parse import urljoin
 
 import django_rq
 import rq
 import rq.exceptions
+from access_control.project_operations import SYNC_STORAGE, require_project_operation
 from core.feature_flags import flag_set
 from core.redis import redis_connected, start_job_async_or_sync
 from core.utils.common import load_func
 from core.utils.iterators import iterate_queryset
+from data_export.boundary import has_immutable_release_boundary
 from data_export.serializers import ExportDataSerializer
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
@@ -32,12 +34,18 @@ from django.shortcuts import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from fsm.functions import backfill_fsm_states_for_tasks
+from io_storages.admission import (
+    claim_storage_dispatch,
+    finish_storage_operation,
+    prepare_storage_dispatch,
+    record_storage_dispatch_job,
+    storage_effect,
+)
 from io_storages.utils import StorageObject, get_uri_via_regex, parse_bucket_uri
 from projects.models import Project
 from rest_framework.exceptions import ValidationError
 from rq.job import Job
 from tasks.models import Annotation, Task
-from data_export.boundary import has_immutable_release_boundary
 from tasks.serializers import AnnotationSerializer, PredictionSerializer
 from webhooks.models import WebhookAction
 from webhooks.utils import emit_webhooks_for_instance
@@ -261,6 +269,11 @@ class StorageInfo(models.Model):
         Status = self.Status
         if self.status not in [Status.IN_PROGRESS, Status.QUEUED]:
             return
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) and not self.last_sync_job:
+            # The durable queue record can exist before the broker returns a
+            # job ID, or the operation may be executing via synchronous
+            # fallback. Missing ID is not proof of failure or quiescence.
+            return
 
         queue = django_rq.get_queue('low')
         try:
@@ -459,6 +472,14 @@ class ImportStorage(Storage):
                 data.pop('data')
 
         with transaction.atomic():
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                project = Project.objects.select_for_update().get(pk=project.pk)
+                require_project_operation(project, SYNC_STORAGE)
+                expected_revision = getattr(storage, '_storage_lifecycle_revision', None)
+                if project.lifecycle_state != 'legacy' and expected_revision is None:
+                    raise ValidationError({'reason': 'LIFECYCLE_GENERATION_REQUIRED'})
+                if expected_revision is not None and expected_revision != project.lifecycle_revision:
+                    raise ValidationError({'reason': 'STALE_LIFECYCLE_GENERATION'})
             # Create task without skip_fsm (it's not a model field)
             task = Task(
                 data=data,
@@ -511,6 +532,10 @@ class ImportStorage(Storage):
                 logger.error(f'Invalid annotations for task {task.id}: {annotation_ser.errors}')
                 if raise_exception:
                     raise ValidationError(annotation_ser.errors)
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_task_created_webhooks
+
+                queue_task_created_webhooks(project, [task])
         return task
         # FIXME: add_annotation_history / post_process_annotations should be here
 
@@ -602,7 +627,8 @@ class ImportStorage(Storage):
                         tasks_created += 1
 
                         # add task to webhook list
-                        tasks_for_webhook.append(task.id)
+                        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                            tasks_for_webhook.append(task.id)
                     except ValidationError as e:
                         # Log validation errors but continue processing other tasks
                         error_message = f'Validation error for task from {link_object.key}: {e}'
@@ -649,6 +675,9 @@ class ImportStorage(Storage):
         self._scan_and_create_links(ImportStorageLink)
 
     def sync(self):
+        require_project_operation(Project.objects.get(pk=self.project_id), SYNC_STORAGE)
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return _enqueue_storage_sync_v2(self, 'import_sync')
         if redis_connected():
             if not self.info_set_queued():
                 return
@@ -700,27 +729,164 @@ class ProjectStorageMixin(models.Model):
 
 def import_sync_background(storage_class, storage_id, timeout=settings.RQ_LONG_JOB_TIMEOUT, **kwargs):
     storage = storage_class.objects.get(id=storage_id)
-    try:
-        storage.scan_and_create_links()
-    except UnsupportedFileFormatError:
-        # This is an expected error when user tries to import non-JSON files without enabling blob URLs
-        # We don't want to fail the job in this case, just mark the storage as failed with a clear message
-        storage.info_set_failed()
-        # Exit gracefully without raising exception to avoid job failure
-        return
+    require_project_operation(Project.objects.get(pk=storage.project_id), SYNC_STORAGE)
+    with storage_effect(storage, 'import_sync'):
+        try:
+            storage.scan_and_create_links()
+        except UnsupportedFileFormatError:
+            # A failed scan may have already created tasks. Mark the admission
+            # uncertain instead of treating the partial operation as complete.
+            storage.info_set_failed()
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                raise
+            return
 
 
 def export_sync_background(storage_class, storage_id, **kwargs):
     storage = storage_class.objects.get(id=storage_id)
-    storage.save_all_annotations()
+    with storage_effect(storage, 'export_sync'):
+        storage.save_all_annotations()
 
 
 def export_sync_only_new_background(storage_class, storage_id, **kwargs):
     storage = storage_class.objects.get(id=storage_id)
-    storage.save_only_new_annotations()
+    with storage_effect(storage, 'export_sync_new'):
+        storage.save_only_new_annotations()
+
+
+def _enqueue_storage_sync_v2(storage, operation):
+    """Persist a generation-bound request before dispatch to a versioned worker."""
+    # Status and ledger commit together under the project-first lock. Otherwise
+    # a crash between the two leaves an untracked permanently queued storage.
+    record = prepare_storage_dispatch(storage, operation, mark_queued=True)
+    if record is None:
+        return
+    if redis_connected():
+        job = start_job_async_or_sync(
+            storage_sync_v2,
+            storage.__class__,
+            storage.pk,
+            str(record.pk),
+            operation,
+            record.dispatch_attempts,
+            queue_name='low',
+            project_id=storage.project_id,
+            organization_id=storage.project.organization_id,
+            on_failure=storage_sync_v2_failure,
+            job_timeout=settings.RQ_LONG_JOB_TIMEOUT,
+        )
+        record_storage_dispatch_job(storage, record.pk, job.id, dispatch_attempt=record.dispatch_attempts)
+    else:
+        storage_sync_v2(storage.__class__, storage.pk, str(record.pk), operation)
+
+
+def storage_sync_v2(storage_class, storage_id, operation_id, operation, dispatch_attempt=0, **kwargs):
+    """New queue name: an old worker cannot run this through the legacy entry."""
+    if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        raise ValidationError('Storage admission is disabled.')
+    storage = storage_class.objects.get(pk=storage_id)
+    record = claim_storage_dispatch(storage, operation_id, operation, dispatch_attempt=dispatch_attempt)
+    storage._storage_lifecycle_revision = record.lifecycle_revision
+    try:
+        if operation == 'import_sync':
+            storage.scan_and_create_links()
+        elif operation == 'export_sync':
+            storage.save_all_annotations()
+        elif operation == 'export_sync_new':
+            storage.save_only_new_annotations()
+        else:
+            raise ValidationError('Unknown storage operation.')
+    except BaseException:
+        finish_storage_operation(record.pk, succeeded=False)
+        raise
+    else:
+        finish_storage_operation(record.pk, succeeded=True)
+
+
+def storage_sync_v2_failure(*args, **kwargs):
+    """Record failure only for the same claimed sync, never a stale job."""
+    from uuid import UUID
+
+    from django.apps import apps
+    from io_storages.admission import QUEUE_OWNER_META_KEY, VERSIONED_EXPORT_MODELS, VERSIONED_IMPORT_MODELS
+    from io_storages.admission_models import StorageOperation
+
+    if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) or not args:
+        return
+    job = args[0]
+    if not isinstance(job, rq.job.Job) or job.func_name != f'{__name__}.storage_sync_v2':
+        return
+    values = job.args
+    if len(values) not in (4, 5):
+        return
+    storage_class, storage_id, operation_id, operation = values[:4]
+    attempt = values[4] if len(values) == 5 else 0
+    label = getattr(getattr(storage_class, '_meta', None), 'label_lower', None)
+    valid_type = (operation == 'import_sync' and label in VERSIONED_IMPORT_MODELS) or (
+        operation in ('export_sync', 'export_sync_new') and label in VERSIONED_EXPORT_MODELS
+    )
+    if (
+        not valid_type
+        or apps.get_model(label) is not storage_class
+        or type(storage_id) is not int
+        or storage_id < 1
+        or type(attempt) is not int
+        or attempt < 0
+        or not isinstance(job.id, str)
+    ):
+        return
+    try:
+        operation_id = UUID(str(operation_id))
+    except (TypeError, ValueError, AttributeError):
+        return
+    project_id = StorageOperation.objects.filter(pk=operation_id).values_list('project_id', flat=True).first()
+    if project_id is None:
+        return
+    with transaction.atomic():
+        project = Project.objects.select_for_update().filter(pk=project_id).first()
+        if project is None:
+            return
+        record = (
+            StorageOperation.objects.select_for_update()
+            .filter(
+                pk=operation_id,
+                project=project,
+                storage_model=label,
+                storage_id=storage_id,
+                operation=operation,
+                state=StorageOperation.State.UNCERTAIN,
+                dispatch_attempts=attempt,
+            )
+            .first()
+        )
+        if record is None:
+            return
+        storage = storage_class.objects.select_for_update().filter(pk=storage_id, project=project).first()
+        if (
+            storage is None
+            or storage.status != storage.Status.IN_PROGRESS
+            or not isinstance(storage.meta, dict)
+            or storage.meta.get(QUEUE_OWNER_META_KEY) != str(record.pk)
+            or (storage.last_sync_job and storage.last_sync_job != job.id)
+        ):
+            return
+        try:
+            # StorageInfo.info_set_failed writes time_failure before reading
+            # its timing property, so it does not itself detect a missing
+            # original progress timestamp.
+            datetime.fromisoformat(storage.meta['time_in_progress'])
+            storage.info_set_failed()
+        except (KeyError, TypeError, ValueError):
+            # Missing or malformed progress metadata must not be replaced by
+            # an invented terminal state. The uncertain ledger stays blocked.
+            logger.warning('Storage sync failure metadata is unavailable for operation %s', record.pk)
 
 
 def storage_background_failure(*args, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        # Older jobs may still refer to this legacy callback name. Never let
+        # an unbound old callback overwrite a newer storage status.
+        return storage_sync_v2_failure(*args, **kwargs)
     # job is used in rqworker failure, extract storage id from job arguments
     if isinstance(args[0], rq.job.Job):
         sync_job = args[0]
@@ -776,7 +942,10 @@ class ExportStorage(Storage, ProjectStorageMixin):
 
     def require_mutable_delivery_allowed(self, *, lock_project=False):
         if lock_project:
-            Project.objects.select_for_update().get(pk=self.project_id)
+            project = Project.objects.select_for_update().get(pk=self.project_id)
+        else:
+            project = Project.objects.get(pk=self.project_id)
+        require_project_operation(project, SYNC_STORAGE)
         if self.has_formal_submissions():
             raise ValidationError(
                 'Export storage delivery is disabled after formal submissions exist. '
@@ -863,6 +1032,8 @@ class ExportStorage(Storage, ProjectStorageMixin):
 
     def sync(self, save_only_new_annotations: bool = False):
         self.require_mutable_delivery_allowed()
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return _enqueue_storage_sync_v2(self, 'export_sync_new' if save_only_new_annotations else 'export_sync')
         if save_only_new_annotations:
             export_sync_fn = export_sync_only_new_background
         else:

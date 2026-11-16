@@ -9,7 +9,7 @@ from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
-from tasks.models import Annotation, AnnotationDraft, ReviewDecision, Submission, TaskAssignment
+from tasks.models import Annotation, AnnotationDraft, ReviewDecision, Submission, Task, TaskAssignment
 from tasks.submissions import create_submission
 from tasks.tests.factories import AnnotationFactory, TaskFactory
 from users.tests.factories import UserFactory
@@ -112,6 +112,32 @@ class TestProjectOperationPolicy(APITestCase):
         assert Annotation.objects.filter(pk=self.annotation.pk).exists()
         assert not ReviewDecision.objects.exists()
         assert TaskAssignment.objects.count() == 1
+
+    @override_settings(
+        ANNOTATION_PROJECT_OPERATION_PROVIDER='tasks.tests.test_project_operation_policy.PausedProvider'
+    )
+    def test_manager_task_api_writes_obey_paused_policy(self):
+        self.client.force_authenticate(user=self.manager)
+        before = self.task.data
+        for method, url, data in (
+            ('post', '/api/tasks/', {'project': self.project.pk, 'data': {'text': 'new'}}),
+            ('patch', f'/api/tasks/{self.task.pk}/', {'data': {'text': 'changed'}}),
+            ('delete', f'/api/tasks/{self.task.pk}/', None),
+        ):
+            with self.subTest(method=method):
+                response = getattr(self.client, method)(url, data, format='json')
+                assert response.status_code == 403, response.content
+        self.task.refresh_from_db()
+        assert self.task.data == before
+        assert Task.objects.filter(project=self.project).count() == 1
+
+    def test_task_cannot_move_between_projects(self):
+        self.client.force_authenticate(user=self.manager)
+        other = ProjectFactory(organization=self.organization)
+        response = self.client.patch(f'/api/tasks/{self.task.pk}/', {'project': other.pk}, format='json')
+        assert response.status_code in (400, 403, 404), response.content
+        self.task.refresh_from_db()
+        assert self.task.project_id == self.project.pk
 
     @override_settings(
         ANNOTATION_PROJECT_OPERATION_PROVIDER='tasks.tests.test_project_operation_policy.PausedProvider'

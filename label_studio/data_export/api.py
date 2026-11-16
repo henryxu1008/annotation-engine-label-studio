@@ -30,6 +30,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from tasks.models import Task
 from .boundary import has_immutable_release_boundary
+from .lifecycle_fence import require_enrolled_export_effect
 
 from .models import ConvertedFormat, DataExport, Export
 from .serializers import (
@@ -231,6 +232,7 @@ class ExportAPI(generics.RetrieveAPIView):
 
     @transaction.atomic
     def get(self, request, *args, **kwargs):
+        require_enrolled_export_effect()
         visible_project = self.get_object()
         project = Project.objects.select_for_update().get(pk=visible_project.pk)
         require_immutable_release_boundary(project)
@@ -380,6 +382,10 @@ class ExportListAPI(generics.ListCreateAPIView):
     serializer_class = ExportSerializer
     permission_required = all_permissions.projects_change
 
+    def post(self, request, *args, **kwargs):
+        require_enrolled_export_effect()
+        return super().post(request, *args, **kwargs)
+
     def get_serializer_class(self):
         if self.request.method == 'GET':
             return ExportSerializer
@@ -488,6 +494,7 @@ class ExportDetailAPI(generics.RetrieveDestroyAPIView):
     permission_required = all_permissions.projects_change
 
     def delete(self, *args, **kwargs):
+        require_enrolled_export_effect()
         if flag_set('ff_back_dev_4664_remove_storage_file_on_export_delete_29032023_short'):
             try:
                 export = self.get_object()
@@ -595,7 +602,10 @@ class ExportDownloadAPI(generics.RetrieveAPIView):
         if snapshot.status != Export.Status.COMPLETED:
             return HttpResponse('Export is not completed', status=404)
 
-        if flag_set('fflag_fix_all_lsdv_4813_async_export_conversion_22032023_short', request.user):
+        async_conversion = flag_set('fflag_fix_all_lsdv_4813_async_export_conversion_22032023_short', request.user)
+        if export_type is not None and not async_conversion:
+            require_enrolled_export_effect()
+        if async_conversion:
             file = snapshot.file
             if export_type is not None and export_type != 'JSON':
                 converted_file = snapshot.converted_formats.filter(export_type=export_type).first()
@@ -645,6 +655,7 @@ class ExportDownloadAPI(generics.RetrieveAPIView):
 
 
 def async_convert(converted_format_id, export_type, project, hostname, download_resources=False, **kwargs):
+    require_enrolled_export_effect()
     with transaction.atomic():
         try:
             converted_format = ConvertedFormat.objects.get(id=converted_format_id)
@@ -746,6 +757,7 @@ class ExportConvertAPI(generics.CreateAPIView):
         return super().get_queryset().filter(project=self._get_project())
 
     def post(self, request, *args, **kwargs):
+        require_enrolled_export_effect()
         snapshot = self.get_object()
         serializer = ExportConvertSerializer(data=request.data, context={'project': snapshot.project})
         serializer.is_valid(raise_exception=True)

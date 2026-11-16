@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from . import approved as base
 from . import snapshots as service
 from .approved_api import ApprovedExportAPI, BoundedRangeReader, PrivateRangeResponse
+from .lifecycle_fence import require_enrolled_export_effect
 from .snapshot_models import ReleaseSnapshot as Snapshot
 
 
@@ -184,6 +185,7 @@ class ReleaseSnapshotAPI(ApprovedExportAPI):
         return response
 
     def post(self, request, *args, **kwargs):
+        require_enrolled_export_effect()
         action = kwargs.get("action", "list")
         if action == "list":
             snapshot = service.create(

@@ -11,14 +11,15 @@ import boto3
 from core.feature_flags import flag_set
 from core.redis import start_job_async_or_sync
 from django.conf import settings
+from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+from io_storages.admission import admitted_annotation_effect
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
-    serialize_mutable_delivery,
     ImportStorage,
     ImportStorageLink,
     ProjectStorageMixin,
@@ -69,9 +70,9 @@ class S3StorageMixin(models.Model):
     s3_endpoint = models.TextField(_('s3_endpoint'), null=True, blank=True, help_text='S3 Endpoint')
 
     @catch_and_reraise_from_none
-    def get_client_and_resource(self):
+    def get_client_and_resource(self, *, single_attempt=False):
         # s3 client initialization ~ 100 ms, for 30 tasks it's a 3 seconds, so we need to cache it
-        cache_key = f'{self.aws_access_key_id}:{self.aws_secret_access_key}:{self.aws_session_token}:{self.region_name}:{self.s3_endpoint}'
+        cache_key = f'{self.aws_access_key_id}:{self.aws_secret_access_key}:{self.aws_session_token}:{self.region_name}:{self.s3_endpoint}:{single_attempt}'
         if cache_key in clients_cache:
             return clients_cache[cache_key]
 
@@ -81,6 +82,7 @@ class S3StorageMixin(models.Model):
             self.aws_session_token,
             self.region_name,
             self.s3_endpoint,
+            single_attempt=single_attempt,
         )
         clients_cache[cache_key] = result
         return result
@@ -273,20 +275,54 @@ class S3ImportStorage(ProjectStorageMixin, S3ImportStorageBase):
 
 
 class S3ExportStorage(S3StorageMixin, ExportStorage):
+    expected_bucket_owner = models.CharField(
+        max_length=12, null=True, blank=True,
+        validators=[RegexValidator(r'^[0-9]{12}$', 'Enter a 12-digit AWS account ID.')],
+        help_text='Expected AWS bucket owner account ID for owner-bound exports.',
+    )
+
+    @admitted_annotation_effect('annotation_export')
     @catch_and_reraise_from_none
     @transaction.atomic
-    def save_annotation(self, annotation):
+    def save_annotation(self, annotation, *, _issue86_export_identity=None):
         self.require_mutable_delivery_allowed(lock_project=True)
-        client, s3 = self.get_client_and_resource()
-        logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
-        ser_annotation = self._get_serialized_data(annotation)
-
+        durable_export = _issue86_export_identity is not None or getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False)
+        if durable_export:
+            # The outbox worker can load this object before another committed
+            # edit. Refresh under the project lock before deriving the key or
+            # serializing, so an older in-memory instance cannot overwrite it.
+            annotation.refresh_from_db()
+            if annotation.project_id != self.project_id:
+                raise ValueError('The annotation project changed before the S3 request.')
         # get key that identifies this object in storage
         key = S3ExportStorageLink.get_key(annotation)
         key = str(self.prefix) + '/' + key if self.prefix else key
+        if durable_export:
+            identity = _issue86_export_identity
+            if (not isinstance(identity, dict) or identity.get('key') != key
+                    or identity.get('annotation_id') != annotation.pk or identity.get('storage_id') != self.pk
+                    or identity.get('project_id') != self.project_id):
+                raise ValueError('A durable S3 export request identity is required.')
+            from django.utils.crypto import constant_time_compare
+            from io_storages.s3.version_provenance import storage_binding
+
+            if identity['binding'] and not constant_time_compare(storage_binding(self) or '', identity['binding']):
+                raise ValueError('The S3 storage binding changed before the request.')
+        client, s3 = (self.get_client_and_resource(single_attempt=True) if durable_export
+                      else self.get_client_and_resource())
+        logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
+        ser_annotation = self._get_serialized_data(annotation)
 
         # put object into storage
         additional_params = {}
+        object_token = None
+        if durable_export:
+            object_token = identity['token']
+            additional_params['Metadata'] = {'ls-export-token': object_token}
+            if self.expected_bucket_owner:
+                if not re.fullmatch(r'[0-9]{12}', self.expected_bucket_owner):
+                    raise ValueError('Invalid expected AWS bucket owner.')
+                additional_params['ExpectedBucketOwner'] = self.expected_bucket_owner
 
         self.cached_user = getattr(self, 'cached_user', self.project.organization.created_by)
         if flag_set(
@@ -299,11 +335,28 @@ class S3ExportStorage(S3StorageMixin, ExportStorage):
             else:
                 additional_params['ServerSideEncryption'] = 'AES256'
 
-        s3.Object(self.bucket, key).put(Body=json.dumps(ser_annotation), **additional_params)
+        response = s3.Object(self.bucket, key).put(Body=json.dumps(ser_annotation), **additional_params)
 
         # create link if everything ok
-        S3ExportStorageLink.create(annotation, self)
+        link = S3ExportStorageLink.create(annotation, self)
+        if durable_export:
+            from io_storages.s3.version_provenance import put_version
 
+            version = put_version(response)
+            identity['observed_version'] = version
+            binding = identity['binding'] if version else None
+            # A missing/unsafe response must invalidate an older pin.
+            link.pinned_version_id = version if binding else None
+            link.pinned_key = key if binding else None
+            link.pinned_storage_binding = binding
+            link.pinned_object_token = object_token if binding else None
+            link.save(update_fields=['pinned_version_id', 'pinned_key', 'pinned_storage_binding', 'pinned_object_token'])
+        elif link.pinned_version_id or link.pinned_key or link.pinned_storage_binding or link.pinned_object_token:
+            # A legacy-mode overwrite must not leave an earlier version pin live.
+            link.pinned_version_id = link.pinned_key = link.pinned_storage_binding = link.pinned_object_token = None
+            link.save(update_fields=['pinned_version_id', 'pinned_key', 'pinned_storage_binding', 'pinned_object_token'])
+
+    @admitted_annotation_effect('annotation_delete')
     @catch_and_reraise_from_none
     def delete_annotation(self, annotation):
         client, s3 = self.get_client_and_resource()
@@ -349,6 +402,11 @@ def _dispatch_s3_annotation_export(annotation_id):
 
 @receiver(post_save, sender=Annotation)
 def export_annotation_to_s3_storages(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        from io_storages.annotation_outbox import queue_annotation_exports
+
+        queue_annotation_exports(instance, S3ExportStorage)
+        return
     storages = getattr(instance.project, 'io_storages_s3exportstorages', None)
     if storages and storages.exists():  # avoid excess jobs in rq
         annotation_id = instance.pk
@@ -357,10 +415,42 @@ def export_annotation_to_s3_storages(sender, instance, **kwargs):
 
 @receiver(pre_delete, sender=Annotation)
 def delete_annotation_from_s3_storages(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        # The version pin, storage configuration and derived key must be read
+        # after acquiring the same project lock held by admitted exports. A
+        # queryset evaluated before the lock can retain an obsolete pin even
+        # when the concurrent PUT has completed by the time admission runs.
+        if not transaction.get_connection().in_atomic_block:
+            raise RuntimeError('Annotation deletion requires a database transaction')
+        from projects.models import Project
+
+        Project.objects.select_for_update(nowait=True).get(pk=instance.project_id)
+        current = Annotation.objects.filter(pk=instance.pk, project_id=instance.project_id).values('task_id').first()
+        if current is None or current['task_id'] != instance.task_id:
+            raise ValueError('Annotation identity changed before S3 deletion admission.')
     links = S3ExportStorageLink.objects.filter(annotation=instance)
     for link in links:
         storage = link.storage
         if storage.can_delete_objects:
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from io_storages.annotation_outbox import queue_annotation_deletion
+
+                key = S3ExportStorageLink.get_key(instance)
+                key = str(storage.prefix) + '/' + key if storage.prefix else key
+                from io_storages.s3.version_provenance import put_version, storage_binding
+
+                binding = storage_binding(storage)
+                token = link.pinned_object_token
+                if not binding or binding != link.pinned_storage_binding or key != link.pinned_key or not token:
+                    version = binding = token = None
+                else:
+                    version = put_version({'VersionId': link.pinned_version_id})
+                    if version is None:
+                        binding = token = None
+                queue_annotation_deletion(
+                    instance, storage, key, target_version=version, target_binding=binding, target_token=token,
+                )
+                continue
             logger.debug(f'Delete {instance} from S3 storage {storage}')  # nosec
             storage.delete_annotation(instance)
 
@@ -385,3 +475,7 @@ class S3ImportStorageLink(ImportStorageLink):
 
 class S3ExportStorageLink(ExportStorageLink):
     storage = models.ForeignKey(S3ExportStorage, on_delete=models.CASCADE, related_name='links')
+    pinned_version_id = models.TextField(null=True, blank=True)
+    pinned_key = models.TextField(null=True, blank=True)
+    pinned_storage_binding = models.CharField(max_length=64, null=True, blank=True)
+    pinned_object_token = models.CharField(max_length=32, null=True, blank=True)

@@ -4,6 +4,7 @@ export const settingsSectionTitleKeys = Object.freeze({
   "/labeling": "labelingInterface",
   "/annotation": "annotation",
   "/members": "members",
+  "/lifecycle": "lifecycleTitle",
   "/ml": "model",
   "/predictions": "predictions",
   "/storage": "cloudStorage",

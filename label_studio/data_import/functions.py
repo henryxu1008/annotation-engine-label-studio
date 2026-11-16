@@ -1,11 +1,16 @@
+import json
 import logging
+import tempfile
 import time
 import traceback
 from typing import Callable, Optional
 
+from access_control.authorization import authorization
+from access_control.project_operations import MANAGE_TASKS, local_principal, lock_project_operation
 from core.feature_flags import flag_set
 from core.utils.common import load_func
 from data_import.uploader import load_tasks_for_async_import_streaming
+from django.apps import apps
 from django.conf import settings
 from django.db import transaction
 from label_studio_sdk.label_interface import LabelInterface
@@ -29,7 +34,7 @@ def async_import_background(
 ):
     with transaction.atomic():
         try:
-            project_import = ProjectImport.objects.get(id=import_id)
+            project_import = ProjectImport.objects.select_for_update().get(id=import_id)
         except ProjectImport.DoesNotExist:
             logger.error(f'ProjectImport with id {import_id} not found, import processing failed')
             return
@@ -99,17 +104,21 @@ def async_import_background(
                 )
 
     if project_import.commit_to_project:
-        with transaction.atomic():
-            # Lock summary for update to avoid race conditions
-            summary = ProjectSummary.objects.select_for_update().get(project=project)
+        try:
+            with transaction.atomic():
+                principal = local_principal(actor)
+                project, actor = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+                authorization.require(
+                    authorization.can_manage_project(principal, project),
+                    'Project manager role is required to import tasks.',
+                )
+                # Lock summary for update to avoid race conditions
+                summary = ProjectSummary.objects.select_for_update().get(project=project)
 
-            # Immediately create project tasks and update project states and counters
-            serializer = ImportApiSerializer(data=tasks, many=True, context={'project': project, 'user': actor})
-            serializer.is_valid(raise_exception=True)
-
-            try:
+                # Immediately create project tasks and update project states and counters
+                serializer = ImportApiSerializer(data=tasks, many=True, context={'project': project, 'user': actor})
+                serializer.is_valid(raise_exception=True)
                 tasks = serializer.save(project_id=project.id)
-                emit_webhooks_for_instance(project.organization, project, WebhookAction.TASKS_CREATED, tasks)
 
                 task_count = len(tasks)
                 annotation_count = len(serializer.db_annotations)
@@ -134,13 +143,37 @@ def async_import_background(
 
                 summary.update_data_columns(tasks)
                 # TODO: summary.update_created_annotations_and_labels
-            except Exception as e:
-                # Handle any other unexpected errors during task creation
-                error_message = f'Error creating tasks: {str(e)}'
-                project_import.error = error_message
-                project_import.status = ProjectImport.Status.FAILED
-                project_import.save(update_fields=['error', 'status'])
-                return
+                created_task_ids = [task.pk for task in tasks]
+                project_import.task_count = task_count
+                project_import.annotation_count = annotation_count
+                project_import.prediction_count = prediction_count
+                project_import.duration = time.time() - start
+                project_import.file_upload_ids = file_upload_ids
+                project_import.found_formats = found_formats
+                project_import.data_columns = list(data_columns)
+                if project_import.return_task_ids:
+                    project_import.task_ids = created_task_ids
+                project_import.status = ProjectImport.Status.COMPLETED
+                project_import.save()
+                if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                    from webhooks.durable import queue_task_created_webhooks
+
+                    queue_task_created_webhooks(project, tasks)
+                else:
+                    transaction.on_commit(
+                        lambda: emit_webhooks_for_instance(
+                            project.organization, project, WebhookAction.TASKS_CREATED, created_task_ids
+                        ),
+                        robust=True,
+                    )
+            return
+        except Exception as e:
+            # Catch outside the atomic block: task writes and counters must roll back
+            # before the failure receipt is persisted.
+            project_import.error = f'Error creating tasks: {str(e)}'
+            project_import.status = ProjectImport.Status.FAILED
+            project_import.save(update_fields=['error', 'status'])
+            return
     else:
         # Do nothing - just output file upload ids for further use
         task_count = len(tasks)
@@ -282,12 +315,99 @@ def reformat_predictions(tasks, preannotated_from_fields, project=None, raise_er
 post_process_reimport = load_func(settings.POST_PROCESS_REIMPORT)
 
 
-def _async_reimport_background_streaming(reimport, project, organization_id, user):
+def _require_no_external_export_links(project, file_upload_ids):
+    """Don't let task deletion synchronously remove external annotation exports.
+
+    Check even disabled deletion settings: those settings can change while a
+    reimport is staging. Built-in export writers also lock the project row.
+    """
+    from io_storages.base_models import ExportStorageLink
+
+    for model in apps.get_models():
+        if issubclass(model, ExportStorageLink) and not model._meta.abstract:
+            if model.objects.filter(
+                annotation__task__project=project,
+                annotation__task__file_upload_id__in=file_upload_ids,
+            ).exists():
+                raise ValidationError('Reimport cannot remove tasks with external export links.')
+
+
+def _async_reimport_background_streaming(reimport, project, organization_id, user, *, streaming=True):
+    """Stage input before the project lock, then commit the entire replacement."""
+    try:
+        with transaction.atomic():
+            principal = local_principal(user)
+            project, user = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to reimport tasks.',
+            )
+        if not reimport.file_upload_ids:
+            # Legacy queued jobs may contain an empty list. Treat it as a no-op;
+            # the loader interprets an empty list as every file in the project.
+            with transaction.atomic():
+                principal = local_principal(user)
+                project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+                authorization.require(
+                    authorization.can_manage_project(principal, project),
+                    'Project manager role is required to reimport tasks.',
+                )
+                reimport.status = ProjectReimport.Status.COMPLETED
+                reimport.save(update_fields=['status'])
+            return
+        requested_ids = set(reimport.file_upload_ids)
+        source_files = dict(
+            FileUpload.objects.filter(project=project, pk__in=requested_ids).values_list('pk', 'file')
+        )
+        source_config = project.label_config
+        if set(source_files) != requested_ids:
+            raise ValidationError('Reimport files are missing or outside the project.')
+        with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as staged:
+            if streaming:
+                source_batches = FileUpload.load_tasks_from_uploaded_files_streaming(
+                    project, reimport.file_upload_ids,
+                    files_as_tasks_list=reimport.files_as_tasks_list, batch_size=settings.REIMPORT_BATCH_SIZE,
+                )
+            else:
+                source_batches = [FileUpload.load_tasks_from_uploaded_files(
+                    project, reimport.file_upload_ids, files_as_tasks_list=reimport.files_as_tasks_list,
+                )]
+            for tasks, formats, columns in source_batches:
+                staged.write(json.dumps([tasks, formats, list(columns)], allow_nan=False) + '\n')
+            staged.seek(0)
+
+            def batches():
+                for line in staged:
+                    tasks, formats, columns = json.loads(line)
+                    yield tasks, formats, set(columns)
+
+            with transaction.atomic():
+                principal = local_principal(user)
+                project, user = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+                authorization.require(
+                    authorization.can_manage_project(principal, project),
+                    'Project manager role is required to reimport tasks.',
+                )
+                current_files = dict(
+                    FileUpload.objects.select_for_update()
+                    .filter(project=project, pk__in=requested_ids)
+                    .values_list('pk', 'file')
+                )
+                if current_files != source_files or project.label_config != source_config:
+                    raise ValidationError('Reimport files or project configuration changed during staging.')
+                _require_no_external_export_links(project, requested_ids)
+                _commit_streaming_reimport(reimport, project, organization_id, user, batches())
+    except Exception as exc:
+        # Any source changes and the completed receipt have rolled back here.
+        ProjectReimport.objects.filter(pk=reimport.pk).update(
+            status=ProjectReimport.Status.FAILED, traceback=traceback.format_exc(), error=str(exc)
+        )
+        raise
+
+
+def _commit_streaming_reimport(reimport, project, organization_id, user, staged_batches):
     """Streaming version of reimport that processes tasks in batches to reduce memory usage"""
     try:
-        # Get batch size from settings or use default
-        batch_size = settings.REIMPORT_BATCH_SIZE
-
         # Initialize counters
         total_task_count = 0
         total_annotation_count = 0
@@ -302,9 +422,7 @@ def _async_reimport_background_streaming(reimport, project, organization_id, use
 
         # Process tasks in batches
         batch_number = 0
-        for batch_tasks, batch_formats, batch_columns in FileUpload.load_tasks_from_uploaded_files_streaming(
-            project, reimport.file_upload_ids, files_as_tasks_list=reimport.files_as_tasks_list, batch_size=batch_size
-        ):
+        for batch_tasks, batch_formats, batch_columns in staged_batches:
             if not batch_tasks:
                 logger.info(f'Empty batch received for reimport {reimport.id}')
                 continue
@@ -359,7 +477,17 @@ def _async_reimport_background_streaming(reimport, project, organization_id, use
             )
 
             # Emit webhooks for all tasks at once (passing list of IDs)
-            emit_webhooks_for_instance(organization_id, project, WebhookAction.TASKS_CREATED, all_created_task_ids)
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_task_created_webhooks
+
+                queue_task_created_webhooks(project, Task.objects.filter(id__in=all_created_task_ids).order_by('pk'))
+            else:
+                transaction.on_commit(
+                    lambda: emit_webhooks_for_instance(
+                        organization_id, project, WebhookAction.TASKS_CREATED, all_created_task_ids
+                    ),
+                    robust=True,
+                )
 
             # Update task states for all tasks at once
             all_tasks_queryset = Task.objects.filter(id__in=all_created_task_ids)
@@ -390,22 +518,57 @@ def _async_reimport_background_streaming(reimport, project, organization_id, use
         logger.info(f'Streaming reimport {reimport.id} completed: {total_task_count} tasks imported')
 
         # Run post-processing
-        post_process_reimport(reimport)
+        transaction.on_commit(lambda: post_process_reimport(reimport), robust=True)
 
     except Exception as e:
         logger.error(f'Error in streaming reimport {reimport.id}: {str(e)}', exc_info=True)
-        reimport.status = ProjectReimport.Status.FAILED
-        reimport.traceback = traceback.format_exc()
-        reimport.error = str(e)
-        reimport.save()
         raise
 
 
 def _async_import_background_streaming(project_import, user, actor=None):
+    actor = actor or user
     try:
-        actor = actor or user
-        batch_size = settings.IMPORT_BATCH_SIZE
+        if project_import.commit_to_project:
+            with transaction.atomic():
+                principal = local_principal(actor)
+                project, actor = lock_project_operation(project_import.project_id, principal, MANAGE_TASKS)
+                authorization.require(
+                    authorization.can_manage_project(principal, project),
+                    'Project manager role is required to import tasks.',
+                )
+                project_import.project = project
+        # Input parsing may access remote storage; finish it before taking the
+        # project row lock. TemporaryFile is private and removed on close.
+        with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as staged:
+            for tasks, ids, formats, columns in load_tasks_for_async_import_streaming(
+                project_import, user, settings.IMPORT_BATCH_SIZE
+            ):
+                staged.write(json.dumps([tasks, ids, formats, list(columns)], allow_nan=False) + '\n')
+            staged.seek(0)
 
+            def batches():
+                for line in staged:
+                    yield json.loads(line)
+
+            with transaction.atomic():
+                if project_import.commit_to_project:
+                    principal = local_principal(actor)
+                    project, actor = lock_project_operation(project_import.project_id, principal, MANAGE_TASKS)
+                    authorization.require(
+                        authorization.can_manage_project(principal, project),
+                        'Project manager role is required to import tasks.',
+                    )
+                    project_import.project = project
+                _commit_streaming_import(project_import, user, actor, batches())
+    except Exception as exc:
+        ProjectImport.objects.filter(pk=project_import.pk).update(
+            status=ProjectImport.Status.FAILED, traceback=traceback.format_exc(), error=str(exc)
+        )
+        raise
+
+
+def _commit_streaming_import(project_import, user, actor, staged_batches):
+    try:
         total_task_count = 0
         total_annotation_count = 0
         total_prediction_count = 0
@@ -415,13 +578,11 @@ def _async_import_background_streaming(project_import, user, actor=None):
         start = time.time()
 
         batch_number = 0
-        streaming_generator = load_tasks_for_async_import_streaming(project_import, user, batch_size)
-
         final_file_upload_ids = []
         final_found_formats = {}
         final_data_columns = set()
 
-        for batch_tasks, file_upload_ids, found_formats, data_columns in streaming_generator:
+        for batch_tasks, file_upload_ids, found_formats, data_columns in staged_batches:
             if not batch_tasks:
                 logger.info(f'Empty batch received for import {project_import.id}')
                 continue
@@ -475,10 +636,7 @@ def _async_import_background_streaming(project_import, user, actor=None):
                     if flag_set(
                         'fflag_feat_utc_210_prediction_validation_15082025', user=project.organization.created_by
                     ):
-                        project_import.error = error_message
-                        project_import.status = ProjectImport.Status.FAILED
-                        project_import.save(update_fields=['error', 'status'])
-                        return
+                        raise ValidationError(error_message)
                     else:
                         logger.error(
                             f'Prediction validation failed, not raising error - ({len(validation_errors)} errors):\n{error_message}'
@@ -516,9 +674,17 @@ def _async_import_background_streaming(project_import, user, actor=None):
                 f'Finalizing import: emitting webhooks and updating task states for {len(all_created_task_ids)} tasks'
             )
 
-            emit_webhooks_for_instance(
-                project.organization, project, WebhookAction.TASKS_CREATED, all_created_task_ids
-            )
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_task_created_webhooks
+
+                queue_task_created_webhooks(project, Task.objects.filter(id__in=all_created_task_ids).order_by('pk'))
+            else:
+                transaction.on_commit(
+                    lambda: emit_webhooks_for_instance(
+                        project.organization, project, WebhookAction.TASKS_CREATED, all_created_task_ids
+                    ),
+                    robust=True,
+                )
 
             recalculate_stats_counts = {
                 'task_count': total_task_count,
@@ -555,10 +721,6 @@ def _async_import_background_streaming(project_import, user, actor=None):
 
     except Exception as e:
         logger.error(f'Error in streaming import {project_import.id}: {str(e)}', exc_info=True)
-        project_import.status = ProjectImport.Status.FAILED
-        project_import.traceback = traceback.format_exc()
-        project_import.error = str(e)
-        project_import.save()
         raise
 
 
@@ -566,7 +728,7 @@ def async_reimport_background(reimport_id, organization_id, user_id, actor_id=No
 
     with transaction.atomic():
         try:
-            reimport = ProjectReimport.objects.get(id=reimport_id)
+            reimport = ProjectReimport.objects.select_for_update().get(id=reimport_id)
         except ProjectReimport.DoesNotExist:
             logger.error(f'ProjectReimport with id {reimport_id} not found, import processing failed')
             return
@@ -582,56 +744,6 @@ def async_reimport_background(reimport_id, organization_id, user_id, actor_id=No
     user = user_id if isinstance(user_id, User) else User.objects.get(id=user_id)
     actor = User.objects.get(id=actor_id) if actor_id is not None else user
 
-    # Check feature flag for memory improvement
-    if flag_set('fflag_fix_back_plt_838_reimport_memory_improvement_05082025_short', user='auto'):
-        logger.info(f'Using streaming reimport for project {project.id}')
-        _async_reimport_background_streaming(reimport, project, organization_id, actor)
-    else:
-        # Original implementation
-        tasks, found_formats, data_columns = FileUpload.load_tasks_from_uploaded_files(
-            reimport.project, reimport.file_upload_ids, files_as_tasks_list=reimport.files_as_tasks_list
-        )
-
-        with transaction.atomic():
-            # Lock summary for update to avoid race conditions
-            summary = ProjectSummary.objects.select_for_update().get(project=project)
-
-            project.remove_tasks_by_file_uploads(reimport.file_upload_ids)
-            serializer = ImportApiSerializer(data=tasks, many=True, context={'project': project, 'user': actor})
-            serializer.is_valid(raise_exception=True)
-            tasks = serializer.save(project_id=project.id)
-            emit_webhooks_for_instance(organization_id, project, WebhookAction.TASKS_CREATED, tasks)
-
-            task_count = len(tasks)
-            annotation_count = len(serializer.db_annotations)
-            prediction_count = len(serializer.db_predictions)
-
-            recalculate_stats_counts = {
-                'task_count': task_count,
-                'annotation_count': annotation_count,
-                'prediction_count': prediction_count,
-            }
-
-            # Update counters (like total_annotations) for new tasks and after bulk update tasks stats. It should be a
-            # single operation as counters affect bulk is_labeled update
-            project.update_tasks_counters_and_task_states(
-                tasks_queryset=tasks,
-                maximum_annotations_changed=False,
-                overlap_cohort_percentage_changed=False,
-                tasks_number_changed=True,
-                recalculate_stats_counts=recalculate_stats_counts,
-            )
-            logger.info('Tasks bulk_update finished (async reimport)')
-
-            summary.update_data_columns(tasks)
-            # TODO: summary.update_created_annotations_and_labels
-
-        reimport.task_count = task_count
-        reimport.annotation_count = annotation_count
-        reimport.prediction_count = prediction_count
-        reimport.found_formats = found_formats
-        reimport.data_columns = list(data_columns)
-        reimport.status = ProjectReimport.Status.COMPLETED
-        reimport.save()
-
-        post_process_reimport(reimport)
+    # Both parsing modes share the project-first atomic replacement and receipt.
+    streaming = flag_set('fflag_fix_back_plt_838_reimport_memory_improvement_05082025_short', user='auto')
+    _async_reimport_background_streaming(reimport, project, organization_id, actor, streaming=streaming)

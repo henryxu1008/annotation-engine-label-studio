@@ -7,6 +7,7 @@ import pathlib
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
 from access_control.project_access import require_project_manager, visible_projects_for_actor
+from access_control.project_operations import MANAGE_TASKS, lifecycle_background_fence_enabled, lock_project_operation
 from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.filters import ListFilter
@@ -240,12 +241,17 @@ class ProjectListAPI(generics.ListCreateAPIView):
 
     def perform_create(self, ser):
         try:
-            project = ser.save(organization=self.request.user.active_organization)
-            ProjectMember.objects.update_or_create(
-                user=self.request.user,
-                project=project,
-                defaults={'role': ProjectMember.Role.MANAGER, 'enabled': True},
-            )
+            with transaction.atomic():
+                project = ser.save(organization=self.request.user.active_organization)
+                ProjectMember.objects.update_or_create(
+                    user=self.request.user,
+                    project=project,
+                    defaults={'role': ProjectMember.Role.MANAGER, 'enabled': True},
+                )
+                if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                    from webhooks.durable import queue_project_event
+
+                    queue_project_event(project, WebhookAction.PROJECT_CREATED, project)
         except IntegrityError as e:
             if str(e) == 'UNIQUE constraint failed: project.title, project.created_by_id':
                 raise ProjectExistException(
@@ -682,9 +688,31 @@ class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
         return super(ProjectAPI, self).patch(request, *args, **kwargs)
 
     def perform_destroy(self, instance):
-        # we don't need to relaculate counters if we delete whole project
-        with temporary_disconnect_all_signals():
-            instance.delete()
+        with transaction.atomic():
+            project, _ = lock_project_operation(instance.pk, resolve_principal(self.request), MANAGE_TASKS)
+            self._require_manager(self.request, project)
+            if lifecycle_background_fence_enabled():
+                raise RestValidationError('Project deletion is unavailable while lifecycle admission is enabled.')
+            # The storage ledger's protected foreign key prevents deletion while
+            # operation history exists. Signals retain their legacy behavior.
+            with temporary_disconnect_all_signals():
+                project.delete()
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            project, _ = lock_project_operation(serializer.instance.pk, resolve_principal(self.request), MANAGE_TASKS)
+            self._require_manager(self.request, project)
+            # Keep the annotated serializer instance but refresh stored fields
+            # after acquiring the fence, so a stale request cannot overwrite a
+            # state change committed while it was waiting.
+            if serializer.instance.label_config != project.label_config:
+                raise RestValidationError('Project label configuration changed during validation; retry.')
+            serializer.instance.refresh_from_db()
+            instance = serializer.save()
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_project_event
+
+                queue_project_event(instance, WebhookAction.PROJECT_UPDATED, instance)
 
     @extend_schema(exclude=True)
     @api_webhook(WebhookAction.PROJECT_UPDATED)
@@ -894,6 +922,8 @@ class ProjectSummaryResetAPI(GetParentObjectMixin, generics.CreateAPIView):
     def post(self, *args, **kwargs):
         project = self.parent_object
         require_project_manager(self.request, project)
+        if lifecycle_background_fence_enabled():
+            raise RestValidationError('Summary recalculation is unavailable while lifecycle admission is enabled.')
         summary = project.summary
         start_job_async_or_sync(
             recalculate_created_annotations_and_labels_from_scratch,
@@ -1062,15 +1092,23 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
     def delete(self, request, *args, **kwargs):
         project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=self.kwargs['pk'])
         principal = resolve_principal(request)
-        authorization.require(
-            authorization.can_manage_project(principal, project),
-            'Project manager role is required to delete project tasks.',
-        )
-        task_ids = list(Task.objects.filter(project=project).values('id'))
-        Task.delete_tasks_without_signals(Task.objects.filter(project=project))
-        logger.info(f'calling reset project_id={project.id} ProjectTaskListAPI.delete()')
-        project.summary.reset()
-        emit_webhooks_for_instance(request.user.active_organization, None, WebhookAction.TASKS_DELETED, task_ids)
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to delete project tasks.',
+            )
+            if lifecycle_background_fence_enabled():
+                raise RestValidationError('Bulk task deletion is unavailable while lifecycle admission is enabled.')
+            task_ids = list(Task.objects.filter(project=project).values('id'))
+            Task.delete_tasks_without_signals(Task.objects.filter(project=project))
+            logger.info(f'calling reset project_id={project.id} ProjectTaskListAPI.delete()')
+            project.summary.reset()
+            organization = request.user.active_organization
+            transaction.on_commit(
+                lambda: emit_webhooks_for_instance(organization, None, WebhookAction.TASKS_DELETED, task_ids),
+                robust=True,
+            )
         return Response(status=204)
 
     def get(self, *args, **kwargs):
@@ -1088,14 +1126,23 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
     def perform_create(self, serializer):
         project = self.parent_object
         principal = resolve_principal(self.request)
-        authorization.require(
-            authorization.can_manage_project(principal, project),
-            'Project manager role is required to create project tasks.',
-        )
-        instance = serializer.save(project=project)
-        emit_webhooks_for_instance(
-            self.request.user.active_organization, project, WebhookAction.TASKS_CREATED, [instance]
-        )
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to create project tasks.',
+            )
+            instance = serializer.save(project=project)
+            organization = self.request.user.active_organization
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_task_created_webhooks
+
+                queue_task_created_webhooks(project, [instance])
+            else:
+                transaction.on_commit(
+                    lambda: emit_webhooks_for_instance(organization, project, WebhookAction.TASKS_CREATED, [instance]),
+                    robust=True,
+                )
         return instance
 
 
@@ -1208,7 +1255,10 @@ class ProjectModelVersions(generics.RetrieveAPIView):
         if not model_version:
             raise RestValidationError('model_version param is required')
 
-        count = project.delete_predictions(model_version=model_version)
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, resolve_principal(request), MANAGE_TASKS)
+            require_project_manager(request, project)
+            count = project.delete_predictions(model_version=model_version)
 
         return Response(data=count)
 

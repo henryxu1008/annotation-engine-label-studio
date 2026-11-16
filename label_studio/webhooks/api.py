@@ -1,7 +1,10 @@
 import django_filters
 from access_control.authorization import authorization
 from access_control.identity import resolve_principal
+from access_control.project_operations import MANAGE_TASKS, lock_project_operation
 from core.permissions import ViewClassPermission, all_permissions
+from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
@@ -97,7 +100,15 @@ class WebhookListAPI(generics.ListCreateAPIView):
             authorization.can_manage_project(principal, project),
             'Project manager role is required to manage webhooks.',
         )
-        serializer.save(organization=self.request.user.active_organization)
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return serializer.save(organization=self.request.user.active_organization)
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to manage webhooks.',
+            )
+            serializer.save(organization=self.request.user.active_organization, project=project)
 
 
 @method_decorator(
@@ -166,6 +177,29 @@ class WebhookAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return _manageable_webhooks(self.request)
+
+    def _locked_webhook(self, instance):
+        if instance.project_id is not None:
+            principal = resolve_principal(self.request)
+            project, _ = lock_project_operation(instance.project_id, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to manage webhooks.',
+            )
+        return generics.get_object_or_404(_manageable_webhooks(self.request).select_for_update(), pk=instance.pk)
+
+    def perform_update(self, serializer):
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return super().perform_update(serializer)
+        with transaction.atomic():
+            serializer.instance = self._locked_webhook(serializer.instance)
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return super().perform_destroy(instance)
+        with transaction.atomic():
+            self._locked_webhook(instance).delete()
 
 
 @method_decorator(

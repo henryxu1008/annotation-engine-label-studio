@@ -5,14 +5,15 @@ import json
 import logging
 
 import redis
+from django.conf import settings
 from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+from io_storages.admission import admitted_annotation_effect
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
-    serialize_mutable_delivery,
     ImportStorage,
     ImportStorageLink,
     ProjectStorageMixin,
@@ -132,6 +133,7 @@ class RedisImportStorage(ProjectStorageMixin, RedisImportStorageBase):
 class RedisExportStorage(RedisStorageMixin, ExportStorage):
     db = models.PositiveSmallIntegerField(_('db'), default=2, help_text='Server Database')
 
+    @admitted_annotation_effect('annotation_export')
     @transaction.atomic
     def save_annotation(self, annotation):
         self.require_mutable_delivery_allowed(lock_project=True)
@@ -175,6 +177,11 @@ def _export_annotation_to_redis_storages(annotation_id):
 
 @receiver(post_save, sender=Annotation)
 def export_annotation_to_redis_storages(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        from io_storages.annotation_outbox import queue_annotation_exports
+
+        queue_annotation_exports(instance, RedisExportStorage)
+        return
     annotation_id = instance.pk
     transaction.on_commit(lambda annotation_id=annotation_id: _export_annotation_to_redis_storages(annotation_id))
 

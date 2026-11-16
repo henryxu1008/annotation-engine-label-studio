@@ -23,9 +23,12 @@ class LabelListSerializer(serializers.ListSerializer):
         with transaction.atomic():
             # loading already existing labels
             titles = [item['title'] for item in validated_data]
-            existing_labels = Label.objects.filter(
-                organization=self.context['request'].user.active_organization, title__in=titles
-            ).all()
+            organization = (
+                validated_data[0]['project'].organization
+                if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False)
+                else self.context['request'].user.active_organization
+            )
+            existing_labels = Label.objects.filter(organization=organization, title__in=titles).all()
             existing_labels_map = {label.title: label for label in existing_labels}
 
             # create objects for labels, that we need to create
@@ -78,9 +81,15 @@ class LabelListSerializer(serializers.ListSerializer):
             label_ids = [label.id for label in result]
             links = LabelLink.objects.filter(label_id__in=label_ids, project=project).all()
             if links:
-                emit_webhooks_for_instance(
-                    self.context['request'].user.active_organization, links[0].project, 'LABEL_LINK_CREATED', links
-                )
+                if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                    from webhooks.durable import queue_project_event
+                    from webhooks.models import WebhookAction
+
+                    queue_project_event(project, WebhookAction.LABEL_LINK_CREATED, links)
+                else:
+                    emit_webhooks_for_instance(
+                        self.context['request'].user.active_organization, links[0].project, 'LABEL_LINK_CREATED', links
+                    )
 
         return result
 
