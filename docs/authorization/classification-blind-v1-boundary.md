@@ -195,6 +195,11 @@ under a different key. Only eligible references enter the random pool; a member
 who already received a reference from the same source is excluded. This is not
 yet a public route, a configured Host dispatch policy, or proof that ordinary
 and quality work are indistinguishable to participants.
+On an internal mixed-decision retry, the saved decision is only an idempotency
+record: both ordinary and quality results must still pass live participant
+authorization under the capture read fence. A cancelled assignment, revoked
+member or invalid quality manifest therefore fails closed. The SQL quality
+prefilter is not used as a substitute for object-level hash verification.
 Deleting an individual task retains its receipt and makes replay fail closed;
 deleting the project removes the receipt while retaining the minimal quality
 purpose tombstone.

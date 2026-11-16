@@ -2002,6 +2002,68 @@ class TestBlindQualityBoundary(APITestCase):
             assert choose_assignment(**base, source=sources[0], key=uuid4()).pk != sources[0].pk
             assert choose_assignment(**base, source=sources[1], key=uuid4()).pk == sources[1].pk
 
+    def test_mixed_decision_replay_rechecks_live_access_and_quality_integrity(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_provenance import current_quality_assignment_ids
+        from classification_disagreements.gold_api import MAX_BYTES
+        from projects.models import ProjectMember
+        from review_batches.service import digest
+
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        config = {
+            'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+            'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+            'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+            'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+        }
+        base = {'principal': local_principal(self.manager)}
+        ordinary_args = {**base, 'task': TaskFactory(project=self.project, data={'text': 'ordinary replay'}),
+                         'assignee': members[0], 'references': [], 'ratio_basis_points': 0, 'key': uuid4()}
+        quality_args = {**base, 'task': TaskFactory(project=self.project, data={'text': 'quality carrier replay'}),
+                        'assignee': members[1], 'references': [{'id': reference.pk, 'hash': reference.manifest_hash}],
+                        'ratio_basis_points': 10000, 'key': uuid4()}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            ordinary = create_mixed_assignment(**ordinary_args)
+            quality = create_mixed_assignment(**quality_args)
+            assert create_mixed_assignment(**ordinary_args).pk == ordinary.pk
+            assert create_mixed_assignment(**quality_args).pk == quality.pk
+
+            # The SQL prefilter does not check manifest digests. A replay must
+            # still reject an object-level integrity failure, even when that
+            # prefilter considers the assignment current.
+            assert current_quality_assignment_ids(members[1].pk).filter(assignment_id=quality.pk).exists()
+            def invalid_proof_digest(value):
+                if isinstance(value, dict) and value.get('schema') == 'classification-blind-eligibility/v1':
+                    return '0' * 64
+                return digest(value)
+
+            with patch('review_batches.service.digest', side_effect=invalid_proof_digest):
+                with self.assertRaises(ValidationError):
+                    create_mixed_assignment(**quality_args)
+            assert create_mixed_assignment(**quality_args).pk == quality.pk
+
+            Task.objects.filter(pk=ordinary.task_id).update(data={'text': 'x' * (MAX_BYTES + 1)})
+            with self.assertRaises(ValidationError):
+                create_mixed_assignment(**ordinary_args)
+            Task.objects.filter(pk=ordinary.task_id).update(data={'text': 'ordinary replay'})
+            assert create_mixed_assignment(**ordinary_args).pk == ordinary.pk
+            ordinary.cancel()
+            with self.assertRaises(ValidationError):
+                create_mixed_assignment(**ordinary_args)
+
+            ProjectMember.objects.filter(project=self.project, user=members[1]).update(enabled=False)
+            with self.assertRaises(ValidationError):
+                create_mixed_assignment(**quality_args)
+
     def test_atomic_mix_defers_ordinary_work_until_quality_submission(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
@@ -3526,6 +3588,73 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             for reader in readers:
                 reader.result(timeout=20)
             writer.result(timeout=20)
+
+    def test_mixed_replay_fences_concurrent_reference_exposure(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_provenance
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from projects.models import ProjectMember
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        carrier = TaskFactory(project=self.project, data={'text': 'independent quality replay carrier'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        args = {'task': carrier, 'assignee': member, 'references': [{'id': reference.pk, 'hash': reference.manifest_hash}],
+                'ratio_basis_points': 10000, 'principal': local_principal(self.manager), 'key': uuid4()}
+        entered, release, exposure_started = Event(), Event(), Event()
+        original = blind_provenance.checked_quality_proof
+
+        def pause(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError('mixed replay was not released')
+            return original(*args, **kwargs)
+
+        def replay():
+            close_old_connections()
+            try:
+                return create_mixed_assignment(**args).pk
+            finally:
+                close_old_connections()
+
+        def expose():
+            close_old_connections()
+            try:
+                exposure_started.set()
+                blind_provenance.record_label_metadata_access(account_id=member.pk)
+            finally:
+                close_old_connections()
+
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            chosen = create_mixed_assignment(**args)
+            with patch.object(blind_provenance, 'checked_quality_proof', side_effect=pause):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    reading = pool.submit(replay)
+                    try:
+                        assert entered.wait(10)
+                        exposure = pool.submit(expose)
+                        assert exposure_started.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            exposure.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    assert reading.result(timeout=20) == chosen.pk
+                    exposure.result(timeout=20)
+            with self.assertRaises(ValidationError):
+                create_mixed_assignment(**args)
 
     def test_editor_read_completes_before_exposure_and_next_read_is_revoked(self):
         from access_control.identity import LocalIdentityProvider

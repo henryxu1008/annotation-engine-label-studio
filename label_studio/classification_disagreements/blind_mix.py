@@ -105,7 +105,42 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
                 pk__in=current_quality_assignment_ids(source.assignee_id),
             ).exists():
                 unavailable()
-        return previous.chosen_assignment
+        # A durable decision is not a durable grant. Replays must use the same
+        # live participant authorization for ordinary and quality work. In
+        # particular, the SQL quality prefilter above does not verify the
+        # immutable manifest hashes and cannot substitute for object access.
+        from access_control.authorization import authorization
+        from access_control.project_operations import local_principal
+        from .blind_provenance import lock_capture_epoch_for_read
+        from .blind_task_handles import _lock_bounded_task
+        from rest_framework.exceptions import NotFound
+        from users.models import User
+
+        lock_capture_epoch_for_read()
+        scope = TaskAssignment.objects.filter(
+            pk=previous.chosen_id_frozen, project=project, assignee_id=source.assignee_id,
+            status__in=TaskAssignment.ACTIVE_STATUSES,
+        ).values('task_id').first()
+        assignee = User.objects.filter(pk=source.assignee_id, is_active=True,
+                                       active_organization_id=project.organization_id).first()
+        if scope is None or assignee is None:
+            unavailable()
+        try:
+            task = _lock_bounded_task(task_id=scope['task_id'], project_id=project.pk)
+        except NotFound:
+            unavailable()
+        chosen = TaskAssignment.objects.select_for_update().filter(
+            pk=previous.chosen_id_frozen, task=task, project=project, assignee_id=assignee.pk,
+            status__in=TaskAssignment.ACTIVE_STATUSES,
+        ).first()
+        if chosen is None:
+            unavailable()
+        task.project = project
+        chosen.task, chosen.project = task, project
+        live = authorization.active_task_assignment(local_principal(assignee), task)
+        if live is None or live.pk != chosen.pk or live.project_id != project.pk:
+            unavailable()
+        return chosen
     if BlindMixDecision.objects.filter(project=project, source_id_frozen=source.pk).exists():
         unavailable()
     get_object_or_404(Task.objects.select_for_update(), pk=source.task_id, project=project)
