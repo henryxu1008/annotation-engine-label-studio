@@ -237,6 +237,53 @@ class ProjectTaskFenceTests(TransactionTestCase):
         self.assertEqual(response.status_code, 403, response.content)
 
     @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
+    def test_project_next_task_is_denied_after_pause(self):
+        Project.objects.filter(pk=self.project.pk).update(title='test-paused')
+        client = APIClient()
+        client.force_authenticate(self.manager)
+        response = client.get(f'/api/projects/{self.project.pk}/next/')
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertFalse(self.task.locks.exists())
+
+    @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
+    def test_project_next_task_is_available_when_active(self):
+        client = APIClient()
+        client.force_authenticate(self.manager)
+        with patch.object(project_api, 'get_next_task', return_value=(self.task, 'test')) as sampler:
+            response = client.get(f'/api/projects/{self.project.pk}/next/')
+        self.assertEqual(response.status_code, 200, response.content)
+        sampler.assert_called_once()
+
+    @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
+    def test_project_next_task_waiting_on_pause_cannot_create_task_lock(self):
+        if connection.vendor != 'postgresql':
+            self.skipTest('requires PostgreSQL row locks')
+        pid = []
+
+        def next_task():
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_backend_pid()')
+                    pid.append(cursor.fetchone()[0])
+                client = APIClient()
+                client.force_authenticate(self.manager)
+                return client.get(f'/api/projects/{self.project.pk}/next/')
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                project = Project.objects.select_for_update().get(pk=self.project.pk)
+                project.title = 'test-paused'
+                project.save(update_fields=['title'])
+                future = pool.submit(next_task)
+                self.assert_waiting(pid)
+            response = future.result(30)
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertFalse(self.task.locks.exists())
+
+    @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
     def test_next_task_waiting_on_pause_cannot_create_task_lock(self):
         if connection.vendor != 'postgresql':
             self.skipTest('requires PostgreSQL row locks')

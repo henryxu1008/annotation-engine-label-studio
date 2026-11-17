@@ -7,7 +7,12 @@ import pathlib
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
 from access_control.project_access import require_project_manager, visible_projects_for_actor
-from access_control.project_operations import MANAGE_TASKS, lifecycle_background_fence_enabled, lock_project_operation
+from access_control.project_operations import (
+    EDIT,
+    MANAGE_TASKS,
+    lifecycle_background_fence_enabled,
+    lock_project_operation,
+)
 from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.filters import ListFilter
@@ -743,7 +748,17 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
     queryset = Project.objects.all()
 
     def get(self, request, *args, **kwargs):
-        from access_control.project_operations import EDIT, require_project_operation
+        # The sampler writes task locks and stream history despite being a GET.
+        # Hold the same project lock as a lifecycle transition until those
+        # effects commit, including the unscoped manager exploration path.
+        if lifecycle_background_fence_enabled():
+            with transaction.atomic():
+                lock_project_operation(self.kwargs['pk'], resolve_principal(request), EDIT)
+                return self._get_next_task(request, *args, **kwargs)
+        return self._get_next_task(request, *args, **kwargs)
+
+    def _get_next_task(self, request, *args, **kwargs):
+        from access_control.project_operations import require_project_operation
         from task_packages.scope import PackageScope
 
         scope = PackageScope.from_project_id(request, self.kwargs['pk'])

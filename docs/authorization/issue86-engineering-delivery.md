@@ -27,6 +27,13 @@ validate rollout and preserve lifecycle enforcement through rollback. Unknown
 external outcomes remain blocking. A successful local test, an empty queue or a
 disabled credential alone is not evidence of cloud drain.
 
+If a worker dies after claiming an operation, its record can remain `running`.
+The current manager API does not convert a running record to reconciled, and
+the replay timer only redispatches queued records. No timeout proves that an
+external effect has stopped. Such a record therefore remains a drain blocker;
+do not enable the feature assuming automatic recovery from every worker crash.
+Cloud request isolation and terminal-outcome recovery remain part of #144.
+
 Nonempty lifecycle state, operation ledger or pinned versions deliberately block
 destructive schema reversal. This protects data; it is not a tested lossless
 downgrade to an older binary. An older binary must not receive traffic while it
@@ -65,6 +72,13 @@ The changed tracked Python files retain pre-existing lint/format findings from
 the main baseline. A comparison with that baseline found no newly introduced
 Blue formatting failures; the repository-wide lint check is not clean. New
 Python files and the new lifecycle frontend files were checked separately.
+
+The subsequent review added a project lock around the legacy next-task GET,
+which creates task locks and stream history, and rejects background imports
+if the label configuration changes between parsing and commit. The isolated
+PostgreSQL next-task regressions include a request waiting on a paused project;
+the background-import regressions run against PostgreSQL and SQLite. Hosted CI
+must be checked again after these changes rather than reusing an earlier head.
 
 ## Review limitations
 

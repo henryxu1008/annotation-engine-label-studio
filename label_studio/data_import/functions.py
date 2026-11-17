@@ -54,6 +54,7 @@ def async_import_background(
 
     start = time.time()
     project = project_import.project
+    source_config = project.label_config
     tasks = None
     # upload files from request, and parse all tasks
     # TODO: Stop passing request to load_tasks function, make all validation before
@@ -112,6 +113,8 @@ def async_import_background(
                     authorization.can_manage_project(principal, project),
                     'Project manager role is required to import tasks.',
                 )
+                if project.label_config != source_config:
+                    raise ValidationError('Project label configuration changed during import; retry.')
                 # Lock summary for update to avoid race conditions
                 summary = ProjectSummary.objects.select_for_update().get(project=project)
 
@@ -537,6 +540,7 @@ def _async_import_background_streaming(project_import, user, actor=None):
                     'Project manager role is required to import tasks.',
                 )
                 project_import.project = project
+                source_config = project.label_config
         # Input parsing may access remote storage; finish it before taking the
         # project row lock. TemporaryFile is private and removed on close.
         with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as staged:
@@ -558,6 +562,8 @@ def _async_import_background_streaming(project_import, user, actor=None):
                         authorization.can_manage_project(principal, project),
                         'Project manager role is required to import tasks.',
                     )
+                    if project.label_config != source_config:
+                        raise ValidationError('Project label configuration changed during import; retry.')
                     project_import.project = project
                 _commit_streaming_import(project_import, user, actor, batches())
     except Exception as exc:

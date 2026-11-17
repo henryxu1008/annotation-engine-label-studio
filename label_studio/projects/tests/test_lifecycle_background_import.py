@@ -85,6 +85,20 @@ class BackgroundImportFenceTests(TestCase):
         self.assertEqual(self.job.status, ProjectImport.Status.COMPLETED)
         self.assertEqual(Task.objects.filter(project=self.project).count(), 1)
 
+    def test_changed_label_config_during_parsing_aborts_commit(self):
+        def parse(*args):
+            type(self.project).objects.filter(pk=self.project.pk).update(label_config=self.project.label_config + '\n')
+            return [{'data': {'text': 'x'}}], [], {}, []
+
+        with patch('data_import.functions.flag_set', return_value=False), patch(
+            'data_import.functions.load_tasks_for_async_import', side_effect=parse
+        ):
+            async_import_background(self.job.pk, self.actor.pk)
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, ProjectImport.Status.FAILED)
+        self.assertIn('configuration changed', self.job.error)
+        self.assertFalse(Task.objects.filter(project=self.project).exists())
+
 
 @override_settings(REIMPORT_BATCH_SIZE=1)
 class StreamingReimportAtomicTests(TestCase):
@@ -256,6 +270,19 @@ class StreamingImportAtomicTests(TestCase):
         self.assertEqual(self.job.status, ProjectImport.Status.COMPLETED)
         self.assertEqual(self.job.task_count, 2)
         self.assertEqual(Task.objects.filter(project=self.project).count(), 2)
+
+    def test_changed_label_config_during_staging_aborts_commit(self):
+        def batches(*args):
+            yield [{'data': {'text': 'one'}}], [], {}, ['text']
+            type(self.project).objects.filter(pk=self.project.pk).update(label_config=self.project.label_config + '\n')
+            yield [{'data': {'text': 'two'}}], [], {}, ['text']
+
+        with patch('data_import.functions.load_tasks_for_async_import_streaming', side_effect=batches):
+            with self.assertRaisesRegex(Exception, 'configuration changed'):
+                _async_import_background_streaming(self.job, self.actor)
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, ProjectImport.Status.FAILED)
+        self.assertFalse(Task.objects.filter(project=self.project).exists())
 
     @override_settings(
         ANNOTATION_PROJECT_OPERATION_PROVIDER='tasks.tests.test_project_operation_policy.PausedProvider'
