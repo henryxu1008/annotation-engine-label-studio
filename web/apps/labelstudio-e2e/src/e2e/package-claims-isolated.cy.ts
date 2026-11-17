@@ -26,12 +26,12 @@ for (const locale of ["en-US", "zh-CN"] as const) {
       cy.contains("label", zh ? "优先级（0–100）" : "Priority (0–100)").find("input").clear().type("8");
       cy.contains("label", zh ? "开放领取" : "Open for claims").find('input[type="checkbox"]').check();
     });
-    cy.intercept("PUT", new RegExp(`/api/projects/${project}/task-packages/\\d+/pool/`)).as("savePool");
+    cy.intercept({ method: "PUT", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/pool/?$`) }).as("savePool");
     cy.contains("button", zh ? "保存领取设置" : "Save claim settings").click();
-    cy.wait("@savePool").its("response.statusCode").should("eq", 200);
+    cy.wait("@savePool").then(({ response }) => expect(response?.statusCode, JSON.stringify(response?.body)).to.eq(200));
     cy.loginAs("issue86-annotator@example.test", password, `/projects/${project}/data`);
     cy.get('[data-testid="open-task-packages"]').should("be.visible").click();
-    cy.intercept("POST", new RegExp(`/api/projects/${project}/task-packages/\\d+/claim/`)).as("claimPool");
+    cy.intercept({ method: "POST", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/claim/?$`) }).as("claimPool");
     cy.contains("li", name).within(() => {
       cy.contains("button", zh ? "领取任务包／重试" : "Claim package / retry").click();
     });
@@ -48,11 +48,11 @@ for (const locale of ["en-US", "zh-CN"] as const) {
     cy.get('[data-testid="open-task-packages"]').should("be.visible").click();
     cy.contains("button", name).click();
     cy.contains("button", zh ? "管理分配与领取" : "Manage assignment and claims").click();
-    cy.intercept("POST", new RegExp(`/api/projects/${project}/task-packages/\\d+/reopen/`)).as("reopenPool");
+    cy.intercept({ method: "POST", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/reopen/?$`) }).as("reopenPool");
     cy.contains("button", zh ? "取消原分配后重新开放／重试" : "Reopen after cancellation / retry").click();
     cy.wait("@reopenPool").its("response.statusCode").should("eq", 200);
     cy.contains("button", zh ? "管理分配与领取" : "Manage assignment and claims").click();
-    cy.intercept("POST", new RegExp(`/api/projects/${project}/task-packages/\\d+/balance/`)).as("balancePool");
+    cy.intercept({ method: "POST", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/balance/?$`) }).as("balancePool");
     cy.contains("button", zh ? "分配给负载最低的成员／重试" : "Assign to least-loaded member / retry").click();
     cy.wait("@balancePool").then(({ response }) => {
       expect(response?.statusCode).to.eq(201);
