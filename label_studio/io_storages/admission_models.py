@@ -25,6 +25,8 @@ class StorageOperation(models.Model):
     target_storage_binding = models.CharField(max_length=64, null=True)
     target_object_token = models.CharField(max_length=32, null=True)
     effect_payload = models.JSONField(null=True)
+    effect_phase = models.CharField(max_length=32, null=True)
+    effect_claim_token = models.UUIDField(null=True)
     next_dispatch_at = models.DateTimeField(null=True)
     dispatch_attempts = models.PositiveIntegerField(default=0)
     state = models.CharField(max_length=16, choices=State.choices, default=State.RUNNING)
@@ -36,3 +38,15 @@ class StorageOperation(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['project', 'state'], name='storage_op_project_state_idx')]
+
+
+class StorageOperationRecovery(models.Model):
+    operation = models.ForeignKey(StorageOperation, on_delete=models.PROTECT, related_name='recoveries')
+    claim_token = models.UUIDField()
+    reason = models.TextField()
+    actor = models.ForeignKey('users.User', null=True, on_delete=models.SET_NULL, related_name='+')
+    actor_id_snapshot = models.BigIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['operation', 'claim_token'], name='unique_storage_recovery_claim')]

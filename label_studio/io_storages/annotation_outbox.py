@@ -11,6 +11,7 @@ from django.utils import timezone
 from io_storages.admission import (
     TERMINAL_STATES,
     _require_postgres,
+    begin_claimed_storage_effect,
     claim_storage_dispatch,
     finish_storage_operation,
     require_no_pending_deletion,
@@ -96,7 +97,7 @@ def dispatch_queued_annotation_export(operation_id):
         state=StorageOperation.State.QUEUED,
     ).exists():
         raise ValueError('A queued v3 annotation export is required.')
-    return start_job_async_or_sync(annotation_export_v3, str(operation_id), queue_name='low')
+    return start_job_async_or_sync(annotation_export_v4, str(operation_id), queue_name='low')
 
 
 def annotation_export_v2(operation_id, **kwargs):
@@ -106,6 +107,14 @@ def annotation_export_v2(operation_id, **kwargs):
 
 def annotation_export_v3(operation_id, **kwargs):
     """New entry and ledger operation cannot be claimed by a v2 worker."""
+    return _annotation_export(operation_id, fenced=False)
+
+
+def annotation_export_v4(operation_id, **kwargs):
+    return _annotation_export(operation_id, fenced=True)
+
+
+def _annotation_export(operation_id, *, fenced):
     from io_storages.base_models import ExportStorage
     from tasks.models import Annotation
 
@@ -116,8 +125,10 @@ def annotation_export_v3(operation_id, **kwargs):
     if storage_class is None or not issubclass(storage_class, ExportStorage):
         raise ValueError('Invalid outbox storage type')
     storage = storage_class.objects.get(pk=record.storage_id, project_id=record.project_id)
-    record = claim_storage_dispatch(storage, record.pk, 'annotation_export_v3_queued')
+    record = claim_storage_dispatch(storage, record.pk, 'annotation_export_v3_queued', fenced=fenced)
     storage._storage_lifecycle_revision = record.lifecycle_revision
+    if fenced:
+        begin_claimed_storage_effect(record)
     try:
         annotation = Annotation.objects.filter(pk=record.subject_id, project_id=record.project_id).first()
         if annotation is not None:
@@ -148,7 +159,10 @@ def annotation_export_v3(operation_id, **kwargs):
                     pk=record.pk,
                     state=StorageOperation.State.RUNNING,
                     operation='annotation_export_v3_queued',
-                ).update(state=StorageOperation.State.QUEUED, next_dispatch_at=timezone.now() + timedelta(minutes=5))
+                ).update(
+                    state=StorageOperation.State.QUEUED, next_dispatch_at=timezone.now() + timedelta(minutes=5),
+                    effect_phase=None, effect_claim_token=None,
+                )
                 if updated != 1:
                     raise RuntimeError('Cannot requeue the blocked S3 export.')
             return

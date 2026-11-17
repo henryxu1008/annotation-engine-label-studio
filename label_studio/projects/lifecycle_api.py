@@ -12,6 +12,8 @@ from io_storages.admission import (
     legacy_export_blocker_details,
     reconcile_pending_deletion,
     reconcile_uncertain_storage_operation,
+    recover_unstarted_storage,
+    recover_unsubmitted_webhook,
     storage_operation_page,
 )
 from io_storages.admission_models import StorageOperation
@@ -113,6 +115,14 @@ class StorageOperationResolveAPI(LifecycleBase):
             if data['attested'] is not False:
                 raise ValidationError('Cancellation does not use an attestation.')
             cancel_unsubmitted_s3_preflight(pk, operation_id, principal, reason=data['reason'])
+        elif data['action'] == 'recover_webhook_pre_send':
+            if data['attested'] is not False:
+                raise ValidationError('Cancellation does not use an attestation.')
+            recover_unsubmitted_webhook(pk, operation_id, principal, reason=data['reason'])
+        elif data['action'] == 'recover_storage_pre_effect':
+            if data['attested'] is not False:
+                raise ValidationError('Recovery does not use an attestation.')
+            recover_unstarted_storage(pk, operation_id, principal, reason=data['reason'])
         elif data['action'] == 'confirm_deletion':
             reconcile_pending_deletion(
                 pk,

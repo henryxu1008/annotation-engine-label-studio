@@ -22,7 +22,7 @@ from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from io_storages.admission_models import StorageOperation
+from io_storages.admission_models import StorageOperation, StorageOperationRecovery
 from projects.models import Project
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -80,7 +80,10 @@ LEGACY_STORAGE_MODELS = {
 }
 LEGACY_STORAGE_SETTLED_STATUSES = frozenset({'initialized', 'completed'})
 QUEUE_OWNER_META_KEY = '_issue86_queue_owner'
+QUEUE_JOB_ATTEMPT_META_KEY = '_issue86_job_attempt'
 SYNC_OPERATIONS = ('import_sync', 'export_sync', 'export_sync_new')
+STORAGE_PRE_EFFECT = 'storage_pre_effect_v1'
+STORAGE_EFFECT_STARTED = 'storage_effect_started_v1'
 
 
 def require_manual_reconciliation_supported(record):
@@ -340,14 +343,37 @@ def storage_operation_page(project, *, limit=100, cursor=None):
         'effect_payload',
         'target_object_token',
         'target_version_id',
+        'effect_phase',
+        'effect_claim_token',
     )
     entries = list(query.order_by('started_at', 'pk').values(*fields)[: limit + 1])
     has_more = len(entries) > limit
     page = entries[:limit]
+    from webhooks.durable import PROJECT_EVENTS, WEBHOOK_PRE_SEND
+
     for entry in page:
         payload = entry.pop('effect_payload')
         token = entry.pop('target_object_token')
         version = entry.pop('target_version_id')
+        phase = entry.pop('effect_phase')
+        claim_token = entry.pop('effect_claim_token')
+        entry['can_recover_webhook_pre_send'] = bool(
+            entry['storage_model'] == 'webhooks.webhook'
+            and entry['operation'] in {'webhook_task_created', *PROJECT_EVENTS.values()}
+            and entry['state'] == StorageOperation.State.RUNNING
+            and phase == WEBHOOK_PRE_SEND
+            and claim_token is not None
+        )
+        entry['can_recover_storage_pre_effect'] = bool(
+            entry['state'] == StorageOperation.State.RUNNING
+            and phase == STORAGE_PRE_EFFECT
+            and claim_token is not None
+            and (
+                (entry['operation'] == 'import_sync' and entry['storage_model'] in VERSIONED_IMPORT_MODELS)
+                or (entry['operation'] in {'export_sync', 'export_sync_new', 'annotation_export_v3_queued'}
+                    and entry['storage_model'] in VERSIONED_EXPORT_MODELS)
+            )
+        )
         entry['can_cancel_s3_preflight'] = bool(
             entry['storage_model'] == 'io_storages.s3exportstorage'
             and entry['operation'] == 'annotation_export'
@@ -448,16 +474,20 @@ def record_storage_dispatch_job(storage, operation_id, job_id, *, dispatch_attem
         )
         if record is None:
             return 0
-        return (
-            type(storage)
-            .objects.filter(
+        locked_storage = (
+            type(storage).objects.select_for_update().filter(
                 pk=storage.pk,
                 project=project,
                 status__in=('queued', 'in_progress'),
                 **{f'meta__{QUEUE_OWNER_META_KEY}': str(record.pk)},
-            )
-            .update(last_sync_job=job_id)
+            ).first()
         )
+        if locked_storage is None:
+            return 0
+        locked_storage.last_sync_job = job_id
+        locked_storage.meta = {**locked_storage.meta, QUEUE_JOB_ATTEMPT_META_KEY: dispatch_attempt}
+        locked_storage.save(update_fields=['last_sync_job', 'meta'])
+        return 1
 
 
 def prepare_storage_dispatch(storage, operation, *, mark_queued=False):
@@ -508,7 +538,7 @@ def prepare_storage_dispatch(storage, operation, *, mark_queued=False):
         return record
 
 
-def claim_storage_dispatch(storage, operation_id, operation, *, dispatch_attempt=0):
+def claim_storage_dispatch(storage, operation_id, operation, *, dispatch_attempt=0, fenced=False):
     """Claim only the original storage, operation and generation under the project lock."""
     _require_postgres()
     if connection.in_atomic_block:
@@ -522,6 +552,8 @@ def claim_storage_dispatch(storage, operation_id, operation, *, dispatch_attempt
             or record.storage_model != storage._meta.label_lower
             or record.storage_id != storage.pk
             or record.operation != operation
+            or record.effect_phase is not None
+            or record.effect_claim_token is not None
         ):
             raise ValidationError('The queued storage operation does not match.')
         if record.lifecycle_revision != project.lifecycle_revision:
@@ -549,8 +581,30 @@ def claim_storage_dispatch(storage, operation_id, operation, *, dispatch_attempt
             # Refresh so it does not execute with an already stale status/meta.
             storage.refresh_from_db()
         record.state = StorageOperation.State.RUNNING
-        record.save(update_fields=['state'])
+        if fenced:
+            from uuid import uuid4
+
+            record.effect_phase = STORAGE_PRE_EFFECT
+            record.effect_claim_token = uuid4()
+        record.save(update_fields=['state', 'effect_phase', 'effect_claim_token'])
         return record
+
+
+def begin_claimed_storage_effect(record):
+    """Commit the irreversible-effect fence before invoking a storage provider."""
+    if connection.in_atomic_block or not connection.get_autocommit():
+        raise RuntimeError('Storage effect admission must commit before execution')
+    if not isinstance(record.effect_claim_token, UUID):
+        raise ValidationError('A storage claim token is required.')
+    with transaction.atomic():
+        updated = StorageOperation.objects.filter(
+            pk=record.pk, project_id=record.project_id, storage_model=record.storage_model,
+            storage_id=record.storage_id, operation=record.operation, lifecycle_revision=record.lifecycle_revision,
+            state=StorageOperation.State.RUNNING, effect_phase=STORAGE_PRE_EFFECT,
+            effect_claim_token=record.effect_claim_token,
+        ).update(effect_phase=STORAGE_EFFECT_STARTED)
+        if updated != 1:
+            raise ValidationError('Storage pre-effect admission is no longer active.')
 
 
 def cancel_queued_storage_dispatch(project_id, operation_id, principal, *, reason):
@@ -698,6 +752,113 @@ def cancel_unsubmitted_s3_preflight(project_id, operation_id, principal, *, reas
         record.finished_at = timezone.now()
         record.save(
             update_fields=['state', 'resolution_reason', 'resolved_by', 'resolved_by_id_snapshot', 'finished_at']
+        )
+
+
+def recover_unsubmitted_webhook(project_id, operation_id, principal, *, reason):
+    """Requeue a provably unsent v4 webhook while fencing its original claimant."""
+    _require_postgres()
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+        raise ValidationError('A cancellation reason is required.')
+    from webhooks.durable import PROJECT_EVENTS, WEBHOOK_PRE_SEND, dispatch_project_event, dispatch_webhook
+
+    with transaction.atomic():
+        project, actor = lock_project_operation(project_id, principal, SECURITY_CANCEL)
+        authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+        record = StorageOperation.objects.select_for_update().filter(
+            pk=operation_id,
+            project=project,
+            storage_model='webhooks.webhook',
+            operation__in={'webhook_task_created', *PROJECT_EVENTS.values()},
+            state=StorageOperation.State.RUNNING,
+            effect_phase=WEBHOOK_PRE_SEND,
+            effect_claim_token__isnull=False,
+        ).first()
+        if record is None:
+            raise ValidationError('A provably unsubmitted webhook is required.')
+        require_project_operation(project, SYNC_STORAGE)
+        if record.lifecycle_revision != project.lifecycle_revision:
+            raise ValidationError({'reason': 'STALE_LIFECYCLE_GENERATION'})
+        StorageOperationRecovery.objects.create(
+            operation=record, claim_token=record.effect_claim_token, reason=reason.strip(),
+            actor=actor, actor_id_snapshot=actor.pk,
+        )
+        record.state = StorageOperation.State.QUEUED
+        record.effect_phase = None
+        record.effect_claim_token = None
+        record.next_dispatch_at = None
+        record.save(update_fields=['state', 'effect_phase', 'effect_claim_token', 'next_dispatch_at'])
+        dispatch = dispatch_webhook if record.operation == 'webhook_task_created' else dispatch_project_event
+        transaction.on_commit(lambda pk=record.pk: dispatch(pk), robust=True)
+
+
+def recover_unstarted_storage(project_id, operation_id, principal, *, reason):
+    """Requeue only a fenced storage claim whose provider work has not started."""
+    _require_postgres()
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+        raise ValidationError('A recovery reason is required.')
+    from django.apps import apps
+    from io_storages.base_models import ExportStorage, ImportStorage
+    from io_storages.dispatch_recovery import redispatch_queued_operation
+    from io_storages.localfiles import models as _localfiles_models  # noqa: F401
+
+    with transaction.atomic():
+        project, actor = lock_project_operation(project_id, principal, SECURITY_CANCEL)
+        authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+        record = StorageOperation.objects.select_for_update().filter(
+            pk=operation_id, project=project, state=StorageOperation.State.RUNNING,
+            effect_phase=STORAGE_PRE_EFFECT, effect_claim_token__isnull=False,
+        ).first()
+        if record is None:
+            raise ValidationError('A provably unstarted storage operation is required.')
+        valid_import = record.operation == 'import_sync' and record.storage_model in VERSIONED_IMPORT_MODELS
+        valid_export = record.operation in {'export_sync', 'export_sync_new', 'annotation_export_v3_queued'} and (
+            record.storage_model in VERSIONED_EXPORT_MODELS
+        )
+        if not (valid_import or valid_export):
+            raise ValidationError('A version-fenced storage operation is required.')
+        require_project_operation(project, SYNC_STORAGE)
+        if record.lifecycle_revision != project.lifecycle_revision:
+            raise ValidationError({'reason': 'STALE_LIFECYCLE_GENERATION'})
+        storage_class = apps.get_model(record.storage_model)
+        expected_base = ImportStorage if valid_import else ExportStorage
+        if storage_class is None or not issubclass(storage_class, expected_base):
+            raise ValidationError('Storage type does not match the operation.')
+        storage = storage_class.objects.select_for_update().filter(pk=record.storage_id, project=project).first()
+        if storage is None:
+            raise ValidationError('The original storage no longer exists.')
+        require_no_pending_deletion(project, record.storage_model, record.storage_id)
+        if record.operation in SYNC_OPERATIONS:
+            owner = storage.meta.get(QUEUE_OWNER_META_KEY) if isinstance(storage.meta, dict) else None
+            if storage.status not in {'queued', 'failed'} or owner != str(record.pk):
+                raise ValidationError({'reason': 'STORAGE_QUEUE_OWNERSHIP_UNVERIFIED'})
+            # A previous RQ job receipt must not let a health check mark the
+            # recovered attempt failed before the new enqueue returns its ID.
+            storage.last_sync_job = None
+            storage.status = 'queued'
+            storage.traceback = None
+            # Change the receipt epoch even if a broker later reuses an old ID;
+            # an in-flight health observation must not match the new attempt.
+            from uuid import uuid4
+
+            storage.meta = {
+                **{key: value for key, value in storage.meta.items() if key != QUEUE_JOB_ATTEMPT_META_KEY},
+                '_issue86_health_epoch': str(uuid4()),
+            }
+            storage.save(update_fields=['last_sync_job', 'status', 'traceback', 'meta'])
+            record.dispatch_attempts += 1
+        StorageOperationRecovery.objects.create(
+            operation=record, claim_token=record.effect_claim_token, reason=reason.strip(),
+            actor=actor, actor_id_snapshot=actor.pk,
+        )
+        record.state = StorageOperation.State.QUEUED
+        record.effect_phase = None
+        record.effect_claim_token = None
+        record.next_dispatch_at = None
+        record.save(update_fields=['state', 'effect_phase', 'effect_claim_token', 'next_dispatch_at', 'dispatch_attempts'])
+        transaction.on_commit(
+            lambda pk=record.pk, attempt=record.dispatch_attempts: redispatch_queued_operation(pk, expected_attempt=attempt),
+            robust=True,
         )
 
 

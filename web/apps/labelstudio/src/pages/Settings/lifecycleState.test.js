@@ -125,4 +125,29 @@ describe("lifecycle policy presentation", () => {
     expect(apiSucceeded({ $meta: { ok: false } })).toBe(false);
     expect(apiSucceeded({ $meta: { ok: true } })).toBe(true);
   });
+  it("only offers webhook recovery for the server-confirmed pre-send state", () => {
+    const entry = {
+      state: "running",
+      operation: "webhook_task_created",
+      storage_model: "webhooks.webhook",
+      can_recover_webhook_pre_send: true,
+    };
+    expect(resolutionFor(entry)).toBe("recover_webhook_pre_send");
+    expect(resolutionFor({ ...entry, can_recover_webhook_pre_send: "true" })).toBeNull();
+    expect(resolutionFor({ ...entry, operation: "unknown" })).toBeNull();
+    expect(resolutionFor({ ...entry, storage_model: "plugin.unknown" })).toBeNull();
+    expect(resolutionFor({ ...entry, state: "queued" })).toBe("cancel_queued");
+  });
+  it("only offers storage recovery for known, server-confirmed pre-effect work", () => {
+    const entry = {
+      state: "running",
+      operation: "import_sync",
+      storage_model: "io_storages.localfilesimportstorage",
+      can_recover_storage_pre_effect: true,
+    };
+    expect(resolutionFor(entry)).toBe("recover_storage_pre_effect");
+    expect(resolutionFor({ ...entry, can_recover_storage_pre_effect: "true" })).toBeNull();
+    expect(resolutionFor({ ...entry, storage_model: "plugin.unknown" })).toBeNull();
+    expect(resolutionFor({ ...entry, operation: "unknown" })).toBeNull();
+  });
 });

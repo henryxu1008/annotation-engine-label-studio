@@ -296,10 +296,15 @@ export const LifecycleSettings = () => {
       (legacyDetails && (legacyDetails.items.length > 0 || legacyDetails.possibly_truncated)),
   );
   const resolution = operation && resolutionFor(operation);
-  const isCancellation = ["cancel_queued", "cancel_s3_preflight"].includes(resolution);
+  const noAttestationNeeded = [
+    "cancel_queued",
+    "cancel_s3_preflight",
+    "recover_webhook_pre_send",
+    "recover_storage_pre_effect",
+  ].includes(resolution);
   const resolve = async (event) => {
     event.preventDefault();
-    if (!resolution || !resolutionReason.trim() || (!isCancellation && !attested)) return;
+    if (!resolution || !resolutionReason.trim() || (!noAttestationNeeded && !attested)) return;
     const projectId = project.id;
     if (
       (await mutate(
@@ -307,7 +312,7 @@ export const LifecycleSettings = () => {
         {
           action: resolution,
           reason: resolutionReason.trim(),
-          attested: isCancellation ? false : attested,
+          attested: noAttestationNeeded ? false : attested,
         },
         { operation: operation.id },
       )) &&
@@ -498,7 +503,7 @@ export const LifecycleSettings = () => {
                 onChange={(e) => setResolutionReason(e.target.value)}
                 disabled={busy || locked}
               />
-              {!isCancellation && (
+              {!noAttestationNeeded && (
                 <p>
                   <label>
                     <input
@@ -513,7 +518,7 @@ export const LifecycleSettings = () => {
               )}
               <Button
                 type="submit"
-                disabled={busy || locked || !resolutionReason.trim() || (!isCancellation && !attested)}
+                disabled={busy || locked || !resolutionReason.trim() || (!noAttestationNeeded && !attested)}
               >
                 {t("lifecycleResolve")}
               </Button>

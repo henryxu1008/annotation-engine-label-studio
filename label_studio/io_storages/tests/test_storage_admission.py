@@ -20,6 +20,7 @@ from data_export.audit_models import AuditActorBinding, AuditAttempt, AuditPacka
 from data_export.models import ConvertedFormat, Export
 from data_export.snapshot_models import ReleaseSnapshot
 from django.apps import apps
+from django.conf import settings
 from django.core import signing
 from django.core.management import call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
@@ -30,6 +31,8 @@ from io_storages.admission import (
     CLOUD_STORAGE_MODELS,
     LEGACY_STORAGE_MODELS,
     QUEUE_OWNER_META_KEY,
+    STORAGE_EFFECT_STARTED,
+    STORAGE_PRE_EFFECT,
     admitted_storage_operation,
     begin_storage_operation,
     cancel_queued_storage_dispatch,
@@ -42,17 +45,27 @@ from io_storages.admission import (
     reconcile_pending_deletion,
     reconcile_uncertain_storage_operation,
     record_storage_dispatch_job,
+    recover_unstarted_storage,
 )
-from io_storages.admission_models import StorageOperation
-from io_storages.annotation_outbox import annotation_export_v2, annotation_export_v3, dispatch_queued_annotation_export
+from io_storages.admission_models import StorageOperation, StorageOperationRecovery
+from io_storages.annotation_outbox import (
+    annotation_export_v2,
+    annotation_export_v3,
+    annotation_export_v4,
+    dispatch_queued_annotation_export,
+)
+from io_storages.azure_blob.models import AzureBlobExportStorage
 from io_storages.base_models import (
     import_sync_background,
     storage_background_failure,
     storage_sync_v2,
     storage_sync_v2_failure,
+    storage_sync_v3,
 )
 from io_storages.dispatch_recovery import redispatch_queued_operation
+from io_storages.gcs.models import GCSExportStorage
 from io_storages.localfiles.models import LocalFilesExportStorage, LocalFilesExportStorageLink, LocalFilesImportStorage
+from io_storages.redis.models import RedisExportStorage
 from io_storages.s3.models import S3ExportStorage, S3ExportStorageLink, S3ImportStorage
 from io_storages.s3.version_provenance import S3ExportTargetBusy
 from organizations.tests.factories import OrganizationFactory
@@ -81,6 +94,519 @@ class StorageAdmissionTests(TransactionTestCase):
     def require_pg(self):
         if connection.vendor != 'postgresql':
             self.skipTest('requires PostgreSQL row locks')
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_local_export_reloads_source_after_an_older_worker_was_delayed(self):
+        self.require_pg()
+        task = TaskFactory(project=self.project)
+        annotation = AnnotationFactory(task=task, project=self.project, result=[{'value': 'old'}])
+        storage = LocalFilesExportStorage.objects.create(project=self.project, path='/tmp/issue86-ordered-export')
+        loaded, release = threading.Event(), threading.Event()
+        writes = []
+
+        def old_worker():
+            close_old_connections()
+            try:
+                old = Annotation.objects.get(pk=annotation.pk)
+                loaded.set()
+                if not release.wait(20):
+                    raise TimeoutError('newer export did not finish')
+                LocalFilesExportStorage.objects.get(pk=storage.pk).save_annotation(old)
+            finally:
+                connection.close()
+
+        with patch.object(LocalFilesExportStorage, '_get_storage_path_or_raise', return_value='/tmp/issue86-ordered-export'), \
+             patch.object(LocalFilesExportStorage, '_get_serialized_data', side_effect=lambda item: {'result': item.result}), \
+             patch('io_storages.localfiles.models.open_local_file_write', mock_open()), \
+             patch('io_storages.localfiles.models.is_private_local_path', return_value=False), \
+             patch('io_storages.localfiles.models.json.dump', side_effect=lambda payload, *a, **kw: writes.append(payload)), \
+             ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(old_worker)
+            try:
+                self.assertTrue(loaded.wait(15))
+                with transaction.atomic():
+                    type(self.project).objects.select_for_update().get(pk=self.project.pk)
+                    Annotation.objects.filter(pk=annotation.pk).update(result=[{'value': 'new'}])
+                storage.save_annotation(Annotation.objects.get(pk=annotation.pk))
+            finally:
+                release.set()
+            future.result(30)
+        self.assertEqual(writes, [{'result': [{'value': 'new'}]}, {'result': [{'value': 'new'}]}])
+        self.assertEqual(StorageOperation.objects.filter(project=self.project, state='completed').count(), 2)
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_local_export_does_not_write_after_annotation_is_deleted(self):
+        self.require_pg()
+        annotation = AnnotationFactory(task=TaskFactory(project=self.project), project=self.project)
+        Annotation.objects.filter(pk=annotation.pk).delete()
+        storage = LocalFilesExportStorage.objects.create(project=self.project, path='/tmp/issue86-deleted-export')
+        with patch('io_storages.localfiles.models.open_local_file_write') as write:
+            storage.save_annotation(annotation)
+        write.assert_not_called()
+        self.assertFalse(LocalFilesExportStorageLink.objects.filter(storage=storage).exists())
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_non_s3_providers_serialize_current_annotation_after_project_lock(self):
+        self.require_pg()
+        annotation = AnnotationFactory(task=TaskFactory(project=self.project), project=self.project, result=[{'value': 'old'}])
+        Annotation.objects.filter(pk=annotation.pk).update(result=[{'value': 'new'}])
+        providers = (
+            (GCSExportStorage, {'bucket': 'synthetic'}, 'get_bucket'),
+            (AzureBlobExportStorage, {'container': 'synthetic'}, 'get_container'),
+            (RedisExportStorage, {'host': 'synthetic'}, 'get_client'),
+        )
+        for model, fields, client_method in providers:
+            with self.subTest(provider=model.__name__):
+                storage = model.objects.create(project=self.project, **fields)
+                seen = []
+                with patch.object(model, client_method, return_value=MagicMock()), \
+                     patch.object(model, '_get_serialized_data', side_effect=lambda item: seen.append(item.result) or {}):
+                    storage.save_annotation(annotation)
+                self.assertEqual(seen, [[{'value': 'new'}]])
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_non_s3_providers_do_not_open_clients_for_deleted_annotations(self):
+        self.require_pg()
+        annotation = AnnotationFactory(task=TaskFactory(project=self.project), project=self.project)
+        Annotation.objects.filter(pk=annotation.pk).delete()
+        for model, fields, client_method in (
+            (GCSExportStorage, {'bucket': 'synthetic'}, 'get_bucket'),
+            (AzureBlobExportStorage, {'container': 'synthetic'}, 'get_container'),
+            (RedisExportStorage, {'host': 'synthetic'}, 'get_client'),
+        ):
+            with self.subTest(provider=model.__name__):
+                storage = model.objects.create(project=self.project, **fields)
+                with patch.object(model, client_method) as client:
+                    storage.save_annotation(annotation)
+                client.assert_not_called()
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_storage_recovery_fences_old_claim_after_new_worker_reclaims(self):
+        self.require_pg()
+        from io_storages.admission import begin_claimed_storage_effect
+
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-recover-sync')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        first_ready, second_ready = threading.Event(), threading.Event()
+        release_first, release_second = threading.Event(), threading.Event()
+        tokens = []
+        mutex = threading.Lock()
+
+        def pause(claim):
+            with mutex:
+                tokens.append(claim.effect_claim_token)
+                first = len(tokens) == 1
+            (first_ready if first else second_ready).set()
+            if not (release_first if first else release_second).wait(20):
+                raise TimeoutError('test did not release storage claim')
+            return begin_claimed_storage_effect(claim)
+
+        def worker(attempt):
+            close_old_connections()
+            try:
+                storage_sync_v3(LocalFilesImportStorage, storage.pk, record.pk, 'import_sync', attempt)
+            finally:
+                connection.close()
+
+        with patch('io_storages.base_models.begin_claimed_storage_effect', side_effect=pause), \
+             patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')), \
+             patch.object(LocalFilesImportStorage, 'scan_and_create_links') as scan, \
+             ThreadPoolExecutor(max_workers=2) as pool:
+            old = pool.submit(worker, 0)
+            try:
+                self.assertTrue(first_ready.wait(15))
+                recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='worker stopped')
+                record.refresh_from_db()
+                self.assertEqual((record.state, record.dispatch_attempts), (StorageOperation.State.QUEUED, 1))
+                new = pool.submit(worker, 1)
+                self.assertTrue(second_ready.wait(15))
+                self.assertNotEqual(tokens[0], tokens[1])
+                release_first.set()
+                with self.assertRaises(ValidationError):
+                    old.result(15)
+                scan.assert_not_called()
+                release_second.set()
+                new.result(15)
+            finally:
+                release_first.set()
+                release_second.set()
+        scan.assert_called_once()
+        self.assertEqual(StorageOperationRecovery.objects.filter(operation=record).count(), 1)
+        record.refresh_from_db()
+        self.assertEqual(record.state, StorageOperation.State.COMPLETED)
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_annotation_export_recovery_fences_old_claim_and_preserves_delivery(self):
+        self.require_pg()
+        from io_storages.admission import begin_claimed_storage_effect
+
+        annotation = AnnotationFactory(task=TaskFactory(project=self.project), project=self.project)
+        storage = LocalFilesExportStorage.objects.create(project=self.project, path='/tmp/issue86-recover-annotation')
+        record = StorageOperation.objects.create(
+            project=self.project, storage_model=storage._meta.label_lower, storage_id=storage.pk,
+            operation='annotation_export_v3_queued', lifecycle_revision=0, subject_id=annotation.pk, state='queued',
+        )
+        first_ready, second_ready = threading.Event(), threading.Event()
+        release_first, release_second = threading.Event(), threading.Event()
+        tokens = []
+        mutex = threading.Lock()
+
+        def pause(claim):
+            with mutex:
+                tokens.append(claim.effect_claim_token)
+                first = len(tokens) == 1
+            (first_ready if first else second_ready).set()
+            if not (release_first if first else release_second).wait(20):
+                raise TimeoutError('test did not release export claim')
+            return begin_claimed_storage_effect(claim)
+
+        def worker():
+            close_old_connections()
+            try:
+                annotation_export_v4(record.pk)
+            finally:
+                connection.close()
+
+        with patch('io_storages.annotation_outbox.begin_claimed_storage_effect', side_effect=pause), \
+             patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')), \
+             patch.object(LocalFilesExportStorage, 'save_annotation') as save, \
+             ThreadPoolExecutor(max_workers=2) as pool:
+            old = pool.submit(worker)
+            try:
+                self.assertTrue(first_ready.wait(15))
+                recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='worker stopped')
+                new = pool.submit(worker)
+                self.assertTrue(second_ready.wait(15))
+                self.assertNotEqual(tokens[0], tokens[1])
+                release_first.set()
+                with self.assertRaises(ValidationError):
+                    old.result(15)
+                save.assert_not_called()
+                release_second.set()
+                new.result(15)
+            finally:
+                release_first.set()
+                release_second.set()
+        save.assert_called_once()
+        record.refresh_from_db()
+        self.assertEqual(record.state, StorageOperation.State.COMPLETED)
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_storage_recovery_refuses_legacy_started_wrong_owner_and_cross_project(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-recover-negative')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        principal = local_principal(self.manager)
+        for phase, token in ((None, None), (STORAGE_EFFECT_STARTED, uuid.uuid4())):
+            StorageOperation.objects.filter(pk=record.pk).update(state='running', effect_phase=phase, effect_claim_token=token)
+            with self.assertRaises(ValidationError):
+                recover_unstarted_storage(self.project.pk, record.pk, principal, reason='recover')
+        StorageOperation.objects.filter(pk=record.pk).update(effect_phase=STORAGE_PRE_EFFECT, effect_claim_token=uuid.uuid4())
+        other = ProjectFactory(organization=self.org)
+        with self.assertRaises(ValidationError):
+            recover_unstarted_storage(other.pk, record.pk, principal, reason='recover')
+        storage.refresh_from_db()
+        storage.meta = {QUEUE_OWNER_META_KEY: 'different-owner'}
+        storage.save(update_fields=['meta'])
+        with self.assertRaises(ValidationError):
+            recover_unstarted_storage(self.project.pk, record.pk, principal, reason='recover')
+        self.assertFalse(StorageOperationRecovery.objects.filter(operation=record).exists())
+
+    @override_settings(
+        ANNOTATION_LIFECYCLE_PUBLIC_API_ENABLED=True,
+        ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True,
+        ANNOTATION_STORAGE_ADMISSION_ENABLED=True,
+        ANNOTATION_PROJECT_OPERATION_PROVIDER='access_control.project_operations.LifecycleProjectOperationProvider',
+    )
+    def test_public_storage_recovery_enforces_scope_actor_and_stale_receipt(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-public-recover')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        StorageOperation.objects.filter(pk=record.pk).update(
+            state='running', effect_phase=STORAGE_PRE_EFFECT, effect_claim_token=uuid.uuid4()
+        )
+        client = APIClient()
+        client.force_authenticate(self.manager)
+        url = f'/api/projects/{self.project.pk}/storage-operations/{record.pk}/resolve/'
+        body = {'action': 'recover_storage_pre_effect', 'reason': 'worker stopped', 'attested': False}
+        inventory = client.get(f'/api/projects/{self.project.pk}/storage-operations/')
+        self.assertEqual(inventory.status_code, 200, inventory.content)
+        self.assertTrue(inventory.data['operations'][0]['can_recover_storage_pre_effect'])
+        self.assertNotIn('effect_claim_token', inventory.data['operations'][0])
+        self.assertEqual(client.post(url, {**body, 'attested': True}, format='json').status_code, 400)
+        other = ProjectFactory(organization=self.org)
+        wrong_url = f'/api/projects/{other.pk}/storage-operations/{record.pk}/resolve/'
+        self.assertEqual(client.post(wrong_url, body, format='json').status_code, 400)
+        annotator = UserFactory(active_organization=self.org)
+        self.org.add_user(annotator)
+        ProjectMember.objects.create(project=self.project, user=annotator, role='annotator')
+        client.force_authenticate(annotator)
+        self.assertIn(client.post(url, body, format='json').status_code, (403, 404))
+        client.force_authenticate(self.manager)
+        with patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')):
+            self.assertEqual(client.post(url, body, format='json').status_code, 204)
+        self.assertEqual(client.post(url, body, format='json').status_code, 400)
+        record.refresh_from_db()
+        self.assertEqual((record.state, record.dispatch_attempts), (StorageOperation.State.QUEUED, 1))
+        self.assertEqual(StorageOperationRecovery.objects.filter(operation=record).count(), 1)
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_killed_storage_worker_pre_effect_is_requeued_without_repeating_effect(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-killed-pre-effect')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        code = """
+import os, time, django
+from unittest.mock import patch
+django.setup()
+from io_storages.base_models import storage_sync_v3
+from io_storages.localfiles.models import LocalFilesImportStorage
+def pause(*args):
+    open(os.environ['ISSUE86_MARKER'], 'w').write('pre-effect')
+    time.sleep(300)
+with patch('io_storages.base_models.begin_claimed_storage_effect', pause):
+    storage_sync_v3(LocalFilesImportStorage, int(os.environ['ISSUE86_STORAGE']), os.environ['ISSUE86_OPERATION'], 'import_sync')
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'started'
+            environment = os.environ.copy()
+            environment.update(
+                POSTGRE_NAME=connection.settings_dict['NAME'], SECRET_KEY=settings.SECRET_KEY,
+                ANNOTATION_STORAGE_ADMISSION_ENABLED='true',
+                ANNOTATION_PROJECT_OPERATION_PROVIDER='projects.tests.test_lifecycle_task_fence.TitlePolicy',
+                ISSUE86_MARKER=str(marker), ISSUE86_OPERATION=str(record.pk), ISSUE86_STORAGE=str(storage.pk),
+                DJANGO_SETTINGS_MODULE='core.settings.label_studio', LATEST_VERSION_CHECK='false',
+            )
+            process = subprocess.Popen(
+                [sys.executable, '-c', code], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
+            try:
+                deadline = time.monotonic() + 45
+                while not marker.exists() and time.monotonic() < deadline and process.poll() is None:
+                    time.sleep(0.05)
+                if not marker.exists():
+                    if process.poll() is None:
+                        process.kill()
+                    _, error = process.communicate(timeout=10)
+                    self.fail(f'worker did not reach pre-effect: {error.decode(errors="replace")[-2000:]}')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=10)
+        record.refresh_from_db()
+        self.assertEqual((record.state, record.effect_phase), (StorageOperation.State.RUNNING, STORAGE_PRE_EFFECT))
+        with patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')):
+            recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='worker died')
+        record.refresh_from_db()
+        self.assertEqual((record.state, record.dispatch_attempts), (StorageOperation.State.QUEUED, 1))
+        StorageOperation.objects.filter(pk=record.pk).update(started_at=timezone.now() - timedelta(minutes=2))
+        with patch('core.redis.start_job_async_or_sync', return_value=MagicMock(id='retried-job')) as enqueue:
+            call_command('replay_storage_outbox', project_id=self.project.pk)
+        self.assertEqual(enqueue.call_args.args[0], storage_sync_v3)
+        record.refresh_from_db()
+        with patch.object(LocalFilesImportStorage, 'scan_and_create_links') as scan:
+            storage_sync_v3(LocalFilesImportStorage, storage.pk, record.pk, 'import_sync', record.dispatch_attempts)
+        scan.assert_called_once()
+        record.refresh_from_db()
+        self.assertEqual(record.state, StorageOperation.State.COMPLETED)
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_storage_recovery_rejects_an_effect_already_started(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-running-effect')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        entered, release = threading.Event(), threading.Event()
+
+        def effect():
+            entered.set()
+            if not release.wait(15):
+                raise TimeoutError('test did not release effect')
+
+        def worker():
+            close_old_connections()
+            try:
+                storage_sync_v3(LocalFilesImportStorage, storage.pk, record.pk, 'import_sync')
+            finally:
+                connection.close()
+
+        with patch.object(LocalFilesImportStorage, 'scan_and_create_links', side_effect=effect) as scan, \
+             ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(worker)
+            try:
+                self.assertTrue(entered.wait(15))
+                record.refresh_from_db()
+                self.assertEqual(record.effect_phase, STORAGE_EFFECT_STARTED)
+                with self.assertRaises(ValidationError):
+                    recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='recover')
+            finally:
+                release.set()
+            future.result(15)
+        scan.assert_called_once()
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_stale_health_check_cannot_fail_a_recovered_storage_attempt(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-stale-health')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'old-failed-job'), 1)
+        stale = LocalFilesImportStorage.objects.get(pk=storage.pk)
+        StorageOperation.objects.filter(pk=record.pk).update(
+            state='running', effect_phase=STORAGE_PRE_EFFECT, effect_claim_token=uuid.uuid4()
+        )
+        pids = []
+
+        def check():
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_backend_pid()')
+                    pids.append(cursor.fetchone()[0])
+                stale.job_health_check()
+            finally:
+                connection.close()
+
+        with patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')), \
+             patch('io_storages.base_models.django_rq.get_queue'), \
+             patch('io_storages.base_models.Job.fetch', return_value=MagicMock(get_status=lambda: 'failed')) as fetch, \
+             ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='recover')
+                future = pool.submit(check)
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if pids:
+                        with connection.cursor() as cursor:
+                            cursor.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s', [pids[0]])
+                            row = cursor.fetchone()
+                        if row and row[0] == 'Lock':
+                            break
+                    time.sleep(0.02)
+                else:
+                    self.fail('health check did not wait for recovery')
+            future.result(15)
+        fetch.assert_called_once()
+        storage.refresh_from_db()
+        record.refresh_from_db()
+        self.assertEqual((storage.status, storage.last_sync_job), ('queued', None))
+        self.assertEqual((record.state, record.dispatch_attempts), (StorageOperation.State.QUEUED, 1))
+        # An old in-memory ping cannot mark a recovered queued attempt failed
+        # even when Redis is unavailable and job_health_check is skipped.
+        stale.status = 'in_progress'
+        stale.meta = {'time_last_ping': (timezone.now() - timedelta(days=1)).isoformat()}
+        with patch('io_storages.base_models.redis_connected', return_value=False):
+            stale.health_check()
+        storage.refresh_from_db()
+        self.assertEqual(storage.status, 'queued')
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_storage_recovery_clears_failed_old_receipt_after_health_check_wins(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-health-won')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'old-failed-job'), 1)
+        storage.refresh_from_db()
+        StorageOperation.objects.filter(pk=record.pk).update(
+            state='running', effect_phase=STORAGE_PRE_EFFECT, effect_claim_token=uuid.uuid4()
+        )
+        with patch('io_storages.base_models.django_rq.get_queue'), \
+             patch('io_storages.base_models.Job.fetch', return_value=MagicMock(get_status=lambda: 'failed')):
+            storage.job_health_check()
+        storage.refresh_from_db()
+        self.assertEqual(storage.status, 'failed')
+        with patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')):
+            recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='recover')
+        storage.refresh_from_db()
+        self.assertEqual((storage.status, storage.last_sync_job, storage.traceback), ('queued', None, None))
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_stalled_redis_observation_cannot_block_or_fail_recovered_reused_job_id(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-stalled-health')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'reused-job'), 1)
+        stale = LocalFilesImportStorage.objects.get(pk=storage.pk)
+        StorageOperation.objects.filter(pk=record.pk).update(
+            state='running', effect_phase=STORAGE_PRE_EFFECT, effect_claim_token=uuid.uuid4()
+        )
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(*args, **kwargs):
+            entered.set()
+            if not release.wait(20):
+                raise TimeoutError('test did not release Redis observation')
+            return MagicMock(get_status=lambda: 'failed')
+
+        def check():
+            close_old_connections()
+            try:
+                stale.job_health_check()
+            finally:
+                connection.close()
+
+        with patch('io_storages.base_models.django_rq.get_queue'), \
+             patch('io_storages.base_models.Job.fetch', side_effect=fetch), \
+             patch('io_storages.dispatch_recovery.redispatch_queued_operation', side_effect=OSError('broker unavailable')), \
+             ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(check)
+            try:
+                self.assertTrue(entered.wait(15))
+                recover_unstarted_storage(self.project.pk, record.pk, local_principal(self.manager), reason='recover')
+                self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'reused-job', dispatch_attempt=1), 1)
+            finally:
+                release.set()
+            future.result(15)
+        storage.refresh_from_db()
+        record.refresh_from_db()
+        self.assertEqual((storage.status, storage.last_sync_job), ('queued', 'reused-job'))
+        self.assertEqual((record.state, record.dispatch_attempts), (StorageOperation.State.QUEUED, 1))
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_timer_new_attempt_invalidates_inflight_health_observation(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-timer-health')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'same-job'), 1)
+        stale = LocalFilesImportStorage.objects.get(pk=storage.pk)
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(*args, **kwargs):
+            entered.set()
+            if not release.wait(20):
+                raise TimeoutError('test did not release Redis observation')
+            return MagicMock(get_status=lambda: 'failed')
+
+        def check():
+            close_old_connections()
+            try:
+                stale.job_health_check()
+            finally:
+                connection.close()
+
+        with patch('io_storages.base_models.django_rq.get_queue'), \
+             patch('io_storages.base_models.Job.fetch', side_effect=fetch), ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(check)
+            try:
+                self.assertTrue(entered.wait(15))
+                StorageOperation.objects.filter(pk=record.pk).update(dispatch_attempts=1)
+            finally:
+                release.set()
+            future.result(15)
+        storage.refresh_from_db()
+        self.assertEqual((storage.status, storage.last_sync_job), ('queued', 'same-job'))
+
+    @override_settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True)
+    def test_timer_reservation_before_health_check_does_not_reuse_old_receipt(self):
+        self.require_pg()
+        storage = LocalFilesImportStorage.objects.create(project=self.project, path='/tmp/issue86-timer-first')
+        record = prepare_storage_dispatch(storage, 'import_sync', mark_queued=True)
+        self.assertEqual(record_storage_dispatch_job(storage, record.pk, 'old-job', dispatch_attempt=0), 1)
+        StorageOperation.objects.filter(pk=record.pk).update(dispatch_attempts=1)
+        storage.refresh_from_db()
+        with patch('io_storages.base_models.django_rq.get_queue'), \
+             patch('io_storages.base_models.Job.fetch', return_value=MagicMock(get_status=lambda: 'failed')):
+            storage.job_health_check()
+        storage.refresh_from_db()
+        self.assertEqual((storage.status, storage.last_sync_job), ('queued', 'old-job'))
 
     def test_sqlite_refuses_to_claim_durable_admission(self):
         if connection.vendor == 'postgresql':
@@ -2298,7 +2824,7 @@ import_sync_background(S3ImportStorage, int(os.environ['TEST_STORAGE_ID']))
             enqueue.return_value.id = 'test-job'
             storage.sync()
         function, klass, storage_id, operation_id, operation, attempt = enqueue.call_args.args
-        self.assertEqual(function.__name__, 'storage_sync_v2')
+        self.assertEqual(function.__name__, 'storage_sync_v3')
         self.assertEqual(enqueue.call_args.kwargs['on_failure'].__name__, 'storage_sync_v2_failure')
         self.assertEqual((klass, storage_id, operation), (LocalFilesImportStorage, storage.pk, 'import_sync'))
         self.assertEqual(attempt, 0)
@@ -2559,6 +3085,8 @@ import_sync_background(S3ImportStorage, int(os.environ['TEST_STORAGE_ID']))
         job.id = 'current-job'
         for job_args, func_name, job_id in (
             ((LocalFilesImportStorage, storage.pk, str(record.pk), 'import_sync', 0), job.func_name, 'current-job'),
+            ((LocalFilesImportStorage, storage.pk, str(record.pk), 'import_sync', 0),
+             'io_storages.base_models.storage_sync_v3', 'current-job'),
             ((LocalFilesImportStorage, storage.pk, str(record.pk), 'import_sync', 1), job.func_name, 'different-job'),
             ((LocalFilesImportStorage, storage.pk), 'io_storages.base_models.import_sync_background', 'current-job'),
         ):
@@ -2592,6 +3120,7 @@ import_sync_background(S3ImportStorage, int(os.environ['TEST_STORAGE_ID']))
         self.assertEqual(storage.status, 'in_progress')
         storage.meta['time_in_progress'] = timezone.now().isoformat()
         storage.save(update_fields=['meta'])
+        job.func_name = 'io_storages.base_models.storage_sync_v3'
         storage_sync_v2_failure(job)
         storage.refresh_from_db()
         record.refresh_from_db()

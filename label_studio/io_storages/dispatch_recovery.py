@@ -38,7 +38,7 @@ def redispatch_queued_operation(operation_id, *, expected_attempt=None):
     if type(expected_attempt) is not int or expected_attempt < 0 or record.dispatch_attempts != expected_attempt:
         raise ValidationError({'reason': 'STALE_STORAGE_DISPATCH_ATTEMPT'})
     from core.redis import start_job_async_or_sync
-    from io_storages.base_models import ExportStorage, ImportStorage, storage_sync_v2, storage_sync_v2_failure
+    from io_storages.base_models import ExportStorage, ImportStorage, storage_sync_v2_failure, storage_sync_v3
 
     storage_class = apps.get_model(record.storage_model)
     expected_base = ImportStorage if record.operation == 'import_sync' else ExportStorage
@@ -60,7 +60,7 @@ def redispatch_queued_operation(operation_id, *, expected_attempt=None):
     # Use stored IDs, not caller-provided project or storage fields. Claim will
     # revalidate project, storage, operation, generation and policy atomically.
     job = start_job_async_or_sync(
-        storage_sync_v2,
+        storage_sync_v3,
         storage_class,
         record.storage_id,
         str(record.pk),

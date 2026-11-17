@@ -10,6 +10,7 @@ import sys
 import traceback as tb
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 from functools import wraps
@@ -35,6 +36,9 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from fsm.functions import backfill_fsm_states_for_tasks
 from io_storages.admission import (
+    QUEUE_JOB_ATTEMPT_META_KEY,
+    QUEUE_OWNER_META_KEY,
+    begin_claimed_storage_effect,
     claim_storage_dispatch,
     finish_storage_operation,
     prepare_storage_dispatch,
@@ -242,14 +246,20 @@ class StorageInfo(models.Model):
             storage.health_check()
 
     def health_check(self):
-        # get duration between last ping time and now
-        now = timezone.now()
-        last_ping = datetime.fromisoformat(self.meta.get('time_last_ping', str(now)))
-        delta = (now - last_ping).total_seconds()
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return self._admission_health_check(check_heartbeat=True, require_redis_connection=True)
+        return self._health_check()
 
+    def _health_check(self):
         # check redis connection
         if redis_connected():
             self.job_health_check()
+        self._check_storage_heartbeat()
+
+    def _check_storage_heartbeat(self):
+        now = timezone.now()
+        last_ping = datetime.fromisoformat(self.meta.get('time_last_ping', str(now)))
+        delta = (now - last_ping).total_seconds()
 
         # in progress last ping time, job is not needed here
         if self.status == self.Status.IN_PROGRESS and delta > settings.STORAGE_IN_PROGRESS_TIMER * 5:
@@ -266,6 +276,80 @@ class StorageInfo(models.Model):
             )
 
     def job_health_check(self):
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return self._admission_health_check(check_heartbeat=False, require_redis_connection=False)
+        return self._job_health_check()
+
+    def _admission_health_check(self, *, check_heartbeat, require_redis_connection):
+        # Broker I/O is deliberately outside project/storage row locks. The
+        # observation may become stale; apply it only if the entire receipt
+        # snapshot is unchanged once both database locks have been acquired.
+        snapshot = (self.status, self.last_sync_job, deepcopy(self.meta))
+        ledger_snapshot = self._health_ledger_receipt(snapshot[2], locked=False)
+        job_status = None
+        if (
+            self.status in (self.Status.IN_PROGRESS, self.Status.QUEUED)
+            and self.last_sync_job
+            and (not require_redis_connection or redis_connected())
+        ):
+            queue = django_rq.get_queue('low')
+            try:
+                job_status = Job.fetch(self.last_sync_job, connection=queue.connection).get_status()
+            except rq.exceptions.NoSuchJobError:
+                job_status = 'not found'
+        with transaction.atomic():
+            Project.objects.select_for_update().get(pk=self.project_id)
+            # The replay timer can advance an attempt without changing the
+            # storage row or broker job ID; lock and recheck the ledger too.
+            current_ledger = self._health_ledger_receipt(snapshot[2], locked=True)
+            type(self).objects.select_for_update().get(pk=self.pk, project_id=self.project_id)
+            self.refresh_from_db()
+            if (
+                job_status is not None
+                and snapshot == (self.status, self.last_sync_job, self.meta)
+                and ledger_snapshot != ('invalid',)
+                and ledger_snapshot == current_ledger
+                and self._health_receipt_matches_attempt(snapshot[2], ledger_snapshot)
+            ):
+                self._apply_job_health_status(job_status)
+            if check_heartbeat:
+                self._check_storage_heartbeat()
+
+    def _health_ledger_receipt(self, meta, *, locked):
+        from uuid import UUID
+
+        from io_storages.admission_models import StorageOperation
+
+        owner = meta.get(QUEUE_OWNER_META_KEY) if isinstance(meta, dict) else None
+        if not owner:
+            return None
+        try:
+            owner_id = UUID(str(owner))
+        except (TypeError, ValueError, AttributeError):
+            return ('invalid',)
+        query = StorageOperation.objects.filter(
+            pk=owner_id, project_id=self.project_id, storage_model=self._meta.label_lower, storage_id=self.pk,
+        )
+        if locked:
+            query = query.select_for_update()
+        receipt = query.values_list('state', 'dispatch_attempts').first()
+        return (str(owner_id), receipt) if receipt is not None else ('invalid',)
+
+    @staticmethod
+    def _health_receipt_matches_attempt(meta, ledger_receipt):
+        if ledger_receipt is None:
+            return True  # A legacy storage has no durable queue owner.
+        if ledger_receipt == ('invalid',) or not isinstance(meta, dict):
+            return False
+        receipt_attempt = meta.get(QUEUE_JOB_ATTEMPT_META_KEY)
+        state, current_attempt = ledger_receipt[1]
+        return (
+            state in ('queued', 'running', 'uncertain')
+            and type(receipt_attempt) is int
+            and receipt_attempt == current_attempt
+        )
+
+    def _job_health_check(self):
         Status = self.Status
         if self.status not in [Status.IN_PROGRESS, Status.QUEUED]:
             return
@@ -282,6 +366,10 @@ class StorageInfo(models.Model):
         except rq.exceptions.NoSuchJobError:
             job_status = 'not found'
 
+        self._apply_job_health_status(job_status)
+
+    def _apply_job_health_status(self, job_status):
+        Status = self.Status
         # broken synchronization between storage and job
         # this might happen when job was stopped because of OOM and on_failure wasn't called
         if job_status == 'failed':
@@ -763,7 +851,7 @@ def _enqueue_storage_sync_v2(storage, operation):
         return
     if redis_connected():
         job = start_job_async_or_sync(
-            storage_sync_v2,
+            storage_sync_v3,
             storage.__class__,
             storage.pk,
             str(record.pk),
@@ -777,16 +865,26 @@ def _enqueue_storage_sync_v2(storage, operation):
         )
         record_storage_dispatch_job(storage, record.pk, job.id, dispatch_attempt=record.dispatch_attempts)
     else:
-        storage_sync_v2(storage.__class__, storage.pk, str(record.pk), operation)
+        storage_sync_v3(storage.__class__, storage.pk, str(record.pk), operation)
 
 
 def storage_sync_v2(storage_class, storage_id, operation_id, operation, dispatch_attempt=0, **kwargs):
     """New queue name: an old worker cannot run this through the legacy entry."""
+    return _storage_sync(storage_class, storage_id, operation_id, operation, dispatch_attempt, fenced=False)
+
+
+def storage_sync_v3(storage_class, storage_id, operation_id, operation, dispatch_attempt=0, **kwargs):
+    return _storage_sync(storage_class, storage_id, operation_id, operation, dispatch_attempt, fenced=True)
+
+
+def _storage_sync(storage_class, storage_id, operation_id, operation, dispatch_attempt, *, fenced):
     if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
         raise ValidationError('Storage admission is disabled.')
     storage = storage_class.objects.get(pk=storage_id)
-    record = claim_storage_dispatch(storage, operation_id, operation, dispatch_attempt=dispatch_attempt)
+    record = claim_storage_dispatch(storage, operation_id, operation, dispatch_attempt=dispatch_attempt, fenced=fenced)
     storage._storage_lifecycle_revision = record.lifecycle_revision
+    if fenced:
+        begin_claimed_storage_effect(record)
     try:
         if operation == 'import_sync':
             storage.scan_and_create_links()
@@ -814,7 +912,9 @@ def storage_sync_v2_failure(*args, **kwargs):
     if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) or not args:
         return
     job = args[0]
-    if not isinstance(job, rq.job.Job) or job.func_name != f'{__name__}.storage_sync_v2':
+    if not isinstance(job, rq.job.Job) or job.func_name not in {
+        f'{__name__}.storage_sync_v2', f'{__name__}.storage_sync_v3',
+    }:
         return
     values = job.args
     if len(values) not in (4, 5):
@@ -977,6 +1077,16 @@ class ExportStorage(Storage, ProjectStorageMixin):
             serializer_class = load_func(settings.STORAGE_ANNOTATION_SERIALIZER)
             # deprecated functionality - save only annotation
             return serializer_class(annotation, context={'project': self.project}).data
+
+    def current_annotation_for_delivery(self, annotation):
+        """Read current source data after the caller holds the project lock."""
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return annotation
+        if not transaction.get_connection().in_atomic_block:
+            raise RuntimeError('Annotation refresh requires the project transaction.')
+        # A new instance also discards a previously cached task/relations.
+        # A deleted or moved annotation must not create an external object.
+        return Annotation.objects.filter(pk=annotation.pk, project_id=self.project_id).first()
 
     def save_annotation(self, annotation):
         raise NotImplementedError

@@ -59,6 +59,8 @@
   "lifecycleState_archived": "已归档",
   "lifecycleResolution_cancel_queued": "在操作开始前取消该排队任务。",
   "lifecycleResolution_cancel_s3_preflight": "若此 S3 尝试尚未发送，可将其取消；服务端会在取消前再次核对。",
+  "lifecycleResolution_recover_webhook_pre_send": "仅在服务器确认尚未开始发送时，以原投递 ID 重新排队此 webhook。",
+  "lifecycleResolution_recover_storage_pre_effect": "仅在服务器确认存储操作尚未开始时重新排队。",
   "lifecycleResolution_confirm_deletion": "独立核对外部删除已完成后，记录处理结果。",
   "lifecycleResolution_confirm_uncertain": "独立核对 worker 和外部请求已停止及实际结果后，记录处理结果。",
   "lifecycleAttest_confirm_deletion": "我已核实目标外部对象的删除已完成。",

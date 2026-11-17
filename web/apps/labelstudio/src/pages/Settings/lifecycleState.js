@@ -66,6 +66,21 @@ export const requiresVerifiedRecovery = (entry) =>
     entry.storage_model !== "io_storages.localfilesexportstorage");
 
 export const resolutionFor = (entry) => {
+  if (
+    entry.can_recover_webhook_pre_send === true &&
+    entry.storage_model === "webhooks.webhook" &&
+    cancellableWebhookOperations.has(entry.operation) &&
+    entry.state === "running"
+  )
+    return "recover_webhook_pre_send";
+  if (
+    entry.can_recover_storage_pre_effect === true &&
+    entry.state === "running" &&
+    ((entry.operation === "import_sync" && versionedImportModels.has(entry.storage_model)) ||
+      (["export_sync", "export_sync_new", "annotation_export_v3_queued"].includes(entry.operation) &&
+        versionedExportModels.has(entry.storage_model)))
+  )
+    return "recover_storage_pre_effect";
   if (canCancelS3Preflight(entry)) return "cancel_s3_preflight";
   if (requiresVerifiedRecovery(entry)) return null;
   if (entry.state === "uncertain") return "confirm_uncertain";

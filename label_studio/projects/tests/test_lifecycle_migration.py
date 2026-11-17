@@ -1,9 +1,11 @@
 """Exercise additive migration and empty-ledger schema rollback on disposable DBs."""
+import uuid
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 from django.urls import get_resolver
-from io_storages.admission_models import StorageOperation
+from io_storages.admission_models import StorageOperation, StorageOperationRecovery
 from io_storages.s3.models import S3ExportStorage, S3ExportStorageLink
 from organizations.tests.factories import OrganizationFactory
 from projects.tests.factories import ProjectFactory
@@ -22,7 +24,7 @@ class LifecycleMigrationTests(TransactionTestCase):
             ('projects', '0035_projectmember_role_and_unique'),
             ('io_storages', '0022_normalize_localfiles_paths'),
         ]
-        after = [('projects', '0036_project_lifecycle'), ('io_storages', '0024_s3_export_expected_owner')]
+        after = [('projects', '0036_project_lifecycle'), ('io_storages', '0025_storageoperation_effect_phase')]
         try:
             MigrationExecutor(connection).migrate(before)
             with connection.cursor() as cursor:
@@ -101,6 +103,25 @@ class LifecycleMigrationTests(TransactionTestCase):
             ('webhook_label_link_updated', StorageOperation.State.QUEUED, 2),
         )
 
+    def test_recovery_audit_and_claim_survive_rejected_phase_rollback(self):
+        token = uuid.uuid4()
+        record = StorageOperation.objects.create(
+            project=self.project, storage_model='webhooks.webhook', storage_id=42,
+            operation='webhook_task_created', lifecycle_revision=0, state=StorageOperation.State.RUNNING,
+            effect_phase='webhook_pre_send_v1', effect_claim_token=token,
+        )
+        audit = StorageOperationRecovery.objects.create(
+            operation=record, claim_token=token, reason='verified pre-send',
+            actor=self.organization.created_by, actor_id_snapshot=self.organization.created_by_id,
+        )
+        with self.assertRaisesRegex(RuntimeError, 'storage operations or S3 version bindings'):
+            MigrationExecutor(connection).migrate([('io_storages', '0024_s3_export_expected_owner')])
+        record.refresh_from_db()
+        audit.refresh_from_db()
+        self.assertEqual(record.effect_claim_token, token)
+        self.assertEqual((audit.operation_id, audit.claim_token, audit.reason, audit.actor_id_snapshot),
+                         (record.pk, token, 'verified pre-send', self.organization.created_by_id))
+
     def test_classified_project_blocks_lifecycle_schema_rollback(self):
         self.project.lifecycle_state = 'paused'
         self.project.lifecycle_revision = 1
@@ -110,7 +131,7 @@ class LifecycleMigrationTests(TransactionTestCase):
                 MigrationExecutor(connection).migrate([('projects', '0035_projectmember_role_and_unique')])
         finally:
             # A dependent empty storage migration may already have been unapplied.
-            MigrationExecutor(connection).migrate([('io_storages', '0024_s3_export_expected_owner')])
+            MigrationExecutor(connection).migrate([('io_storages', '0025_storageoperation_effect_phase')])
         self.project.refresh_from_db()
         self.assertEqual((self.project.lifecycle_state, self.project.lifecycle_revision), ('paused', 1))
 

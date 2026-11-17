@@ -1,5 +1,6 @@
 """Durable, generation-bound task-created webhook deliveries."""
 import json
+import uuid
 
 import requests
 from core.redis import start_job_async_or_sync
@@ -117,13 +118,13 @@ def queue_project_event(project, action, instance):
 def dispatch_webhook(operation_id):
     if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
         raise ValidationError('Storage admission is disabled.')
-    return start_job_async_or_sync(deliver_task_created_v2, str(operation_id), queue_name='low')
+    return start_job_async_or_sync(deliver_task_created_v4, str(operation_id), queue_name='low')
 
 
 def dispatch_project_event(operation_id):
     if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
         raise ValidationError('Storage admission is disabled.')
-    return start_job_async_or_sync(deliver_project_event_v3, str(operation_id), queue_name='low')
+    return start_job_async_or_sync(deliver_project_event_v4, str(operation_id), queue_name='low')
 
 
 def deliver_task_created_v2(operation_id, **kwargs):
@@ -135,7 +136,40 @@ def deliver_project_event_v3(operation_id, **kwargs):
     return _deliver(operation_id, set(PROJECT_EVENTS.values()))
 
 
-def _deliver(operation_id, operations):
+WEBHOOK_PRE_SEND = 'webhook_pre_send_v1'
+WEBHOOK_SUBMITTING = 'webhook_submitting_v1'
+
+
+def deliver_task_created_v4(operation_id, **kwargs):
+    return _deliver(operation_id, {'webhook_task_created'}, fenced=True)
+
+
+def deliver_project_event_v4(operation_id, **kwargs):
+    return _deliver(operation_id, set(PROJECT_EVENTS.values()), fenced=True)
+
+
+def _begin_fenced_send(operation_id, claim_token, project_id, revision, operations):
+    # This transaction must commit before the HTTP request and outside the
+    # webhook configuration transaction. A cancellation winning the same row
+    # prevents the worker from ever entering requests.post.
+    if connection.in_atomic_block or not connection.get_autocommit():
+        raise RuntimeError('Webhook submission must commit before delivery')
+    with transaction.atomic():
+        updated = StorageOperation.objects.filter(
+            pk=operation_id,
+            project_id=project_id,
+            storage_model='webhooks.webhook',
+            operation__in=operations,
+            lifecycle_revision=revision,
+            state=StorageOperation.State.RUNNING,
+            effect_phase=WEBHOOK_PRE_SEND,
+            effect_claim_token=claim_token,
+        ).update(effect_phase=WEBHOOK_SUBMITTING)
+        if updated != 1:
+            raise ValidationError('Webhook pre-send admission is no longer active.')
+
+
+def _deliver(operation_id, operations, *, fenced=False):
     if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
         raise ValidationError('Storage admission is disabled.')
     _require_postgres()
@@ -150,10 +184,16 @@ def _deliver(operation_id, operations):
             or record.storage_model != 'webhooks.webhook'
             or record.state != StorageOperation.State.QUEUED
             or record.lifecycle_revision != project.lifecycle_revision
+            or record.effect_phase is not None
+            or record.effect_claim_token is not None
         ):
             raise ValidationError('The queued webhook operation does not match.')
         record.state = StorageOperation.State.RUNNING
-        record.save(update_fields=['state'])
+        record.effect_phase = WEBHOOK_PRE_SEND if fenced else None
+        record.effect_claim_token = uuid.uuid4() if fenced else None
+        record.save(update_fields=['state', 'effect_phase', 'effect_claim_token'])
+    if fenced:
+        _begin_fenced_send(record.pk, record.effect_claim_token, record.project_id, record.lifecycle_revision, operations)
     try:
         with transaction.atomic():
             hook = (

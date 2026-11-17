@@ -27,12 +27,23 @@ validate rollout and preserve lifecycle enforcement through rollback. Unknown
 external outcomes remain blocking. A successful local test, an empty queue or a
 disabled credential alone is not evidence of cloud drain.
 
-If a worker dies after claiming an operation, its record can remain `running`.
-The current manager API does not convert a running record to reconciled, and
-the replay timer only redispatches queued records. No timeout proves that an
-external effect has stopped. Such a record therefore remains a drain blocker;
-do not enable the feature assuming automatic recovery from every worker crash.
-Cloud request isolation and terminal-outcome recovery remain part of #144.
+If a v4 webhook, v3 storage-sync or v4 annotation-export worker dies before its
+committed effect fence, a Manager can requeue the original operation ID. A
+unique claim token fences the original worker even if it resumes after another
+worker claims the same operation. The recovery is audited, storage-sync queue
+attempts advance, and a failed enqueue remains eligible for the replay timer.
+The new worker entry points require mixed-version rollout and queue draining:
+an old worker cannot execute them, and old workers must be isolated before
+enabling enforcement. Old records without a token and operations that reached
+the effect fence are not eligible: no timeout proves that an external effect
+has stopped. Those records remain drain blockers; do not enable the feature
+assuming automatic recovery from every worker crash. Cloud request isolation
+and terminal-outcome recovery remain part of #144.
+
+The draft lifecycle state currently permits task management and reads but not
+storage synchronization. The broader source-sync allowance in the original
+contract is a proposal that requires product confirmation before widening the
+server policy.
 
 Nonempty lifecycle state, operation ledger or pinned versions deliberately block
 destructive schema reversal. This protects data; it is not a tested lossless

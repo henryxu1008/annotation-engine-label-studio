@@ -484,6 +484,46 @@ it("requests cancellation of a server-identified unsubmitted S3 attempt without 
   );
 });
 
+it("requests server-verified webhook recovery using the original delivery", async () => {
+  mockCallApi.mockImplementation(async (method) => {
+    if (method === "projectLifecycle") return { state: "active", revision: 1 };
+    if (method === "projectStorageOperations")
+      return {
+        operations: [
+          {
+            id: "hook",
+            state: "running",
+            operation: "webhook_task_created",
+            storage_model: "webhooks.webhook",
+            storage_id: 1,
+            can_recover_webhook_pre_send: true,
+          },
+        ],
+        ...noStoragePages,
+        legacy_export_blockers: noLegacyExports,
+        legacy_export_details: noLegacyDetails,
+      };
+    if (method === "projectStorageOperationResolve") return { error: true, status: 409 };
+    throw new Error(method);
+  });
+  render(<LifecycleSettings />);
+  fireEvent.click(await screen.findByRole("radio"));
+  expect(screen.getByText("lifecycleResolution_recover_webhook_pre_send")).toBeTruthy();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  fireEvent.change(screen.getByLabelText("lifecycleReason", { selector: "#lifecycle-resolution-reason" }), {
+    target: { value: "restart pre-send" },
+  });
+  fireEvent.click(screen.getByText("lifecycleResolve"));
+  await screen.findByRole("alert");
+  expect(mockCallApi).toHaveBeenCalledWith(
+    "projectStorageOperationResolve",
+    expect.objectContaining({
+      params: { pk: 4, operation: "hook" },
+      body: { action: "recover_webhook_pre_send", reason: "restart pre-send", attested: false },
+    }),
+  );
+});
+
 it("does not offer attestation-only recovery for uncertain cloud operations", async () => {
   mockCallApi.mockImplementation(async (method) => {
     if (method === "projectLifecycle") return { state: "active", revision: 1 };

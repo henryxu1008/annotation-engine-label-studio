@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence)
+param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence, [switch]$TestWebhookRecovery, [switch]$TestWebhookMixed, [switch]$TestRqRecovery)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -34,7 +34,7 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
-    if (@($TestS3Fence, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
+    if (@($TestS3Fence, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
     if ($TestEngineering) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_background_import.py `
@@ -43,6 +43,40 @@ try {
             io_storages/tests/test_s3_delete_key_fence.py io_storages/tests/test_rq_sync_attempt_isolated.py `
             io_storages/tests/test_upgrade_isolation_postgres.py tasks/tests/test_project_operation_policy.py `
             data_export/tests/test_lifecycle_worker_fence.py
+    } elseif ($TestRqRecovery) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            io_storages/tests/test_rq_sync_attempt_isolated.py `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_failure_callback_cannot_overwrite_a_different_attempt_or_legacy_job `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_reserved_redispatch_fences_older_queued_worker_and_job_receipt
+    } elseif ($TestWebhookMixed) {
+        $oldWorker = '8c273179c778b1e99ee74d8c17ddb7516ab96b92'
+        git -C $repoRoot cat-file -e "$oldWorker^{commit}"
+        if ($LASTEXITCODE -ne 0) { throw 'The pinned previous worker commit is unavailable.' }
+        docker exec $runner mkdir -p /legacy-worker
+        git -C $repoRoot archive --format=tar $oldWorker label_studio pyproject.toml | docker exec -i $runner tar -xf - -C /legacy-worker
+        if ($LASTEXITCODE -ne 0) { throw 'Could not extract the previous worker.' }
+        docker exec -e ISSUE86_OLD_DURABLE_WORKER_DIR=/legacy-worker/label_studio `
+            -e ISSUE86_TEST_REDIS_URL=redis://127.0.0.1:6379/0 $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            io_storages/tests/test_webhook_outbox.py::TaskCreatedWebhookOutboxTests::test_recovered_delivery_can_be_claimed_by_real_old_webhook_worker `
+            io_storages/tests/test_rq_sync_attempt_isolated.py::IsolatedRQSyncAttemptTests::test_previous_worker_attempt_cannot_claim_recovered_storage
+    } elseif ($TestWebhookRecovery) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            io_storages/tests/test_webhook_outbox.py projects/tests/test_lifecycle_migration.py `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_local_export_reloads_source_after_an_older_worker_was_delayed `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_local_export_does_not_write_after_annotation_is_deleted `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_non_s3_providers_serialize_current_annotation_after_project_lock `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_non_s3_providers_do_not_open_clients_for_deleted_annotations `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_storage_recovery_fences_old_claim_after_new_worker_reclaims `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_annotation_export_recovery_fences_old_claim_and_preserves_delivery `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_storage_recovery_refuses_legacy_started_wrong_owner_and_cross_project `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_public_storage_recovery_enforces_scope_actor_and_stale_receipt `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_killed_storage_worker_pre_effect_is_requeued_without_repeating_effect `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_storage_recovery_rejects_an_effect_already_started `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_stale_health_check_cannot_fail_a_recovered_storage_attempt `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_storage_recovery_clears_failed_old_receipt_after_health_check_wins `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_stalled_redis_observation_cannot_block_or_fail_recovered_reused_job_id `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_timer_new_attempt_invalidates_inflight_health_observation `
+            io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_timer_reservation_before_health_check_does_not_reuse_old_receipt
     } elseif ($TestNextTaskFence) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py -k next_task

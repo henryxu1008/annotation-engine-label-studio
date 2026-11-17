@@ -137,6 +137,9 @@ class RedisExportStorage(RedisStorageMixin, ExportStorage):
     @transaction.atomic
     def save_annotation(self, annotation):
         self.require_mutable_delivery_allowed(lock_project=True)
+        annotation = self.current_annotation_for_delivery(annotation)
+        if annotation is None:
+            return
         client = self.get_client()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)
