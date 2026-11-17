@@ -80,6 +80,88 @@ credential deactivation or elapsed time alone is not proof of request drain.
 
 ## Provider constraints and result
 
+### AWS acceptance prerequisites for issue 144
+
+The cloud test is **NOT_RUN** until a dedicated account or explicitly isolated
+AWS resources and a separately scoped operator identity are available. The
+operator must first record the account and bucket owner, region, endpoint,
+test-only resources, every writer and intermediary, role trust policies,
+permission and bucket policy versions, relevant network boundaries and the
+evidence source for each request. A missing writer or unknown request remains
+UNKNOWN and prevents an empty-drain conclusion. Do not reuse another workload's
+bucket, IAM identity, network or broker as the test fixture.
+
+AWS role-session revocation is not by itself a durable fence: the AWS revocation
+policy denies sessions issued before its cutoff, while later role sessions can
+still be obtained. Restrict the ability to obtain replacement sessions as well,
+verify denial using both an existing session and a fresh assume-role attempt,
+and test each permitted network path separately. Account for policy propagation
+and role types to which the procedure does not apply. Never apply these controls
+to a shared role. See [AWS role-session revocation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_revoke-sessions.html).
+
+Before issuing test writes, explicitly enable and verify the applicable S3 data
+event logging for the isolated bucket and capture its configuration and coverage
+interval. Ordinary CloudTrail Event history does not contain S3 data events, and
+log delivery time is not guaranteed. A missing event, an empty object-version
+list or an empty multipart page is therefore not proof that an individual
+request cannot still commit. Correlate each original request with provider-side
+evidence and the exact ledger entry; any unproven outcome stays UNKNOWN. See
+[S3 data-event logging](https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-cloudtrail-logging-for-s3.html)
+and [CloudTrail log delivery](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/get-and-view-cloudtrail-log-files.html).
+
+For multipart completion, record and validate the **entire** response body:
+S3 can send an HTTP 200 header before processing finishes and then return an
+error in the response body. A lost or incomplete body is not a success receipt,
+and the absence of an upload from a subsequent listing does not by itself prove
+the completion outcome. Do not infer a safe retry from that absence. See
+[CompleteMultipartUpload](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html).
+
+### Local revalidation on 2026-11-17
+
+On a Windows Docker host, the local fixtures can be run in order with the
+following wrapper. The virtual environment and MinIO client must be Linux
+executables; the required local Docker images and pinned baseline commits are
+checked by the individual fixtures. Each stage stops on failure, and a later
+stage not reached is NOT_RUN. Use `-Subnet` if the default isolated subnet
+overlaps an existing network. The wrapper does not connect to AWS.
+
+```powershell
+./scripts/issue144-local-acceptance.ps1 -DependencyVenv <linux-venv-path> -MinioClient <linux-mc-path>
+```
+
+Against merged main `cdfdb46ef614a4c2fa0823dfb106a75eb55494bf`, disposable
+Docker services with synthetic identities and no host-published ports produced:
+
+| Local fixture | Result |
+| --- | --- |
+| Network disconnect and buffered request | PASS: a request buffered before disconnect committed afterward; new legacy-container connections were blocked. The existing SDK client's outcome remained UNKNOWN. The separate process-death proxy regression passed (1 test). |
+| Pinned upstream old worker and mixed upgrade | PASS: 3 mixed-upgrade tests and 1 old-worker death test; the standalone old-worker/object-store fixture passed 2 tests. |
+| S3 unknown outcomes | PASS: 4 tests. |
+| Redis legacy queue and S3 multipart inventory | PASS: 14 and 15 tests respectively; inventory pages still report UNKNOWN and are not snapshots. |
+| PostgreSQL isolation and lifecycle migrations | PASS: 11 tests; rejecting a destructive reverse migration with a nonempty ledger is not a successful lossless downgrade. |
+| Recovery regressions | 48 passed, 2 skipped; the skipped old-worker cases were not counted as passes in this run. |
+| Previous durable workers | PASS: 2 tests against the pinned previous worker; the upstream old-worker case skipped by recovery was run in the mixed-upgrade fixture above. |
+
+The complete wrapper subsequently passed all 9 local fixture stages on the
+same main baseline. Its failure path was also checked with a synthetic failing
+stage: it exited unsuccessfully and did not start later stages.
+
+These are local fixture observations, not evidence for an AWS account, an AWS
+request terminal outcome, or a production rollout. AWS identity and network
+isolation, in-flight reconciliation and drain, cloud mixed-version recovery,
+and an actual lossless nonempty-ledger rollback remain NOT_RUN or UNKNOWN.
+
+### Remaining cloud acceptance gates
+
+| Gate | Required evidence | Current status |
+| --- | --- | --- |
+| Test boundary | A dedicated account or isolated test resources, operator authority, synthetic data, immutable identities, provider region and recorded resource ownership. | NOT_RUN: no authorized cloud environment is available. |
+| All old writers fenced | Inventory old processes, SDKs, proxies, temporary identities, presigned requests and network paths; test existing and newly obtained credentials and each path after policy propagation. | NOT_RUN; unknown writers block acceptance. |
+| Original requests reconciled | For submitted, timed-out, lost-response, killed-process, proxy-buffered and multipart-completion cases, correlate original request and ledger with reliable provider terminal evidence. | NOT_RUN; unresolved requests remain UNKNOWN and block drain. |
+| Old queue and multipart disposition | Inspect all relevant brokers, registries and pages, account for every identified job and upload, and establish that inventory did not race continuing writers. | NOT_RUN in the cloud; non-snapshot observations alone are insufficient. |
+| Mixed versions and recovery | Exercise actual old and new application builds with the isolated provider, failed jobs, process death and restart; retain request, version and ledger evidence. | NOT_RUN in the cloud. |
+| Rollback and rollout | Demonstrate the proposed downgrade boundary with a nonempty ledger and preserved effects, or explicitly retain the current fail-closed rollback prohibition. Independently review the deployment-specific isolation and drain evidence before enabling lifecycle transitions. | NOT_RUN for an actual lossless downgrade; automatic deletion remains separately tracked by #145. |
+
 On 2026-11-16, a disposable internal Docker network with a synthetic MinIO
 bucket and separate administrator and old-worker identities was exercised.
 Disabling the old MinIO user denied a subsequent old-worker request. After
