@@ -175,7 +175,14 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
       if (current !== generation.current) return;
       if (failed(response)) {
         if (denied(response)) setPool(null);
-        setError("poolSaveFailed");
+        const reason = response?.response?.display_context?.reason;
+        setError(
+          reason === "POOL_AUTOMATION_OWNER_CHANGED"
+            ? "automationOwnerChanged"
+            : reason === "POOL_AUTOMATION_CONFIRM_REQUIRED"
+              ? "automationConfirmRequired"
+              : "poolSaveFailed",
+        );
       } else {
         setPool({
           ...response,

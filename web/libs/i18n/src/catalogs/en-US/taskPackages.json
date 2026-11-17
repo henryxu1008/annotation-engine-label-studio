@@ -11,6 +11,8 @@
   "poolPriority": "Priority (0–100)",
   "poolAutomatic": "Automatically assign this package",
   "poolAutomaticHelp": "A separately enabled background worker assigns to the least-loaded eligible member. Reopening disables automation until it is enabled again.",
+  "automationOwnerChanged": "Another manager enabled automation. Turn it off and save before enabling it under your account.",
+  "automationConfirmRequired": "Automation was enabled elsewhere. Reload and confirm the setting before saving.",
   "poolPriorityValue": "Priority: {{priority}}",
   "poolReopen": "Reopen after cancellation / retry",
   "poolBalance": "Assign to least-loaded member / retry",

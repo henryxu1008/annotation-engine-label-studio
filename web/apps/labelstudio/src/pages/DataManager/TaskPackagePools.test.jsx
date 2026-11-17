@@ -274,3 +274,33 @@ it("saves an explicit background allocation choice", async () => {
   unmount();
   runtime.destroy();
 });
+
+it("explains how to transfer an existing automation owner", async () => {
+  mockCallApi.mockImplementation((name) => {
+    if (name === "taskPackagePool")
+      return Promise.resolve({
+        revision: 1,
+        enabled: true,
+        candidate_ids: [8],
+        due_at: null,
+        advanced_enabled: true,
+        automation_available: true,
+        automatic: true,
+      });
+    if (name === "projectMembers") return Promise.resolve({ results: [], next: null, previous: null });
+    return Promise.resolve({
+      error: true,
+      status: 409,
+      response: { display_context: { reason: "POOL_AUTOMATION_OWNER_CHANGED" } },
+    });
+  });
+  const { runtime, unmount } = mount(
+    <PackageManagement projectId={4} packageId={7} canManagePool onChanged={jest.fn()} />,
+    "en-US",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage assignment and claims" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Save claim settings" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Turn it off and save");
+  unmount();
+  runtime.destroy();
+});

@@ -11,6 +11,8 @@
   "poolPriority": "优先级（0–100）",
   "poolAutomatic": "自动分配此任务包",
   "poolAutomaticHelp": "需单独启用后台任务，由其分配给负载最低的合格成员。重新开放后需再次启用自动分配。",
+  "automationOwnerChanged": "自动分配由其他管理员启用。请先关闭并保存，再以你的账户重新启用。",
+  "automationConfirmRequired": "自动分配已在其他位置启用，请重新加载并确认设置后保存。",
   "poolPriorityValue": "优先级：{{priority}}",
   "poolReopen": "取消原分配后重新开放／重试",
   "poolBalance": "分配给负载最低的成员／重试",
