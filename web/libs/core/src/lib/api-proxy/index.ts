@@ -209,6 +209,7 @@ export class APIProxy<T extends {}> {
 
           if (extendedBody instanceof FormData || extendedBody instanceof URLSearchParams) {
             requestParams.body = extendedBody;
+            if (contentType === "application/json") requestHeaders.delete("Content-Type");
           } else if (contentType === "multipart/form-data") {
             requestParams.body = this.createRequestBody(extendedBody);
           } else if (contentType === "application/json") {
