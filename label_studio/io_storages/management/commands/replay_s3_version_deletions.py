@@ -27,6 +27,10 @@ class Command(BaseCommand):
             version_delete._require_verified_cloud_isolation()
         except Exception:
             raise CommandError('Verified cloud isolation and request drain are unavailable.') from None
+        try:
+            version_delete._require_autocommit()
+        except RuntimeError:
+            raise CommandError('S3 deletion replay requires independent PostgreSQL transactions.') from None
         pending = StorageOperation.objects.filter(
             operation='annotation_delete_pending', storage_model='io_storages.s3exportstorage',
             state=StorageOperation.State.QUEUED, effect_phase__isnull=True, effect_claim_token__isnull=True,

@@ -87,6 +87,10 @@ enforcement, network isolation or provider request drain.
 1. Pass #144 for the actual deployment: fence all old identities, sessions,
    processes, direct SDK clients, network paths, presigned requests, proxies,
    retries and multipart completion; account for every submitted operation.
+   Include all other mutations of the same bucket/key, including administrators,
+   batch jobs, replication and provider lifecycle rules. A version-specific
+   success response alone does not prove no other actor removed the target
+   between observation and submission.
    Unknown writers or requests block automatic deletion.
 2. Preserve and validate the bucket owner, endpoint, storage binding, project,
    lifecycle generation, target key, immutable version and original export

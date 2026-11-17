@@ -98,6 +98,16 @@ class VersionDeleteTests(TransactionTestCase):
         self.assertEqual((self.record.state, self.record.dispatch_attempts), ('queued', 1))
         enqueue.assert_not_called()
 
+    def test_replay_refuses_an_unusable_database_before_reservation(self):
+        with patch.object(version_delete, '_require_verified_cloud_isolation'), patch.object(
+            version_delete, '_require_autocommit', side_effect=RuntimeError('unsupported database')
+        ), patch.object(version_delete, 'start_job_async_or_sync') as enqueue:
+            with self.assertRaisesRegex(CommandError, 'PostgreSQL'):
+                call_command('replay_s3_version_deletions', stdout=StringIO())
+        self.record.refresh_from_db()
+        self.assertEqual((self.record.state, self.record.dispatch_attempts), ('queued', 1))
+        enqueue.assert_not_called()
+
     def test_replay_reserves_before_enqueue_when_test_gate_is_replaced(self):
         StorageOperation.objects.filter(pk=self.record.pk).update(dispatch_attempts=0, next_dispatch_at=None)
         with patch.object(version_delete, '_require_verified_cloud_isolation'), patch.object(
