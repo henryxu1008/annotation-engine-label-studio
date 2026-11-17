@@ -2209,3 +2209,13 @@ Local bbox quality and arbitration evidence is separate from Host review and
 release authority and is gated by explicit `fork_review` configuration. Do not
 enable the experimental endpoints until their UI, replay, permissions, lifecycle,
 cleanup scheduling and complete cross-platform tests have been reviewed.
+
+### Fixed-package dispatch and claim pools (unreleased)
+
+The #83 branch adds independently default-off dispatch and claim-pool routes.
+They reuse project-first write fencing and TaskAssignment, require PostgreSQL,
+and persist idempotency receipts. Candidate-scoped pool discovery and claimed
+work deadlines are additional authorization-sensitive read paths. Reconcile
+these endpoints, the operation matrix, membership revocation locks and migrations
+against upstream on upgrade; do not assume UI controls authorize mutations.
+Details, scope limits and rollback behavior are in `fixed-task-packages.md`.

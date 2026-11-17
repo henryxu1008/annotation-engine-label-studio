@@ -5,6 +5,7 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
 import { cn } from "../../utils/bem";
 import { displayWorkState } from "./workDisplay";
+import { PackageManagement, PackagePoolList } from "./TaskPackagePools";
 import "./TaskPackages.scss";
 
 const failed = (result) => !result || result.error || result.$meta?.ok === false;
@@ -252,6 +253,8 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
           <p>{t("overlapNotice")}</p>
           <p>{t(data.role === "manager" ? "managerScope" : data.role === "reviewer" ? "reviewScope" : "ownScope")}</p>
           {data.as_of && <p>{t("asOf", { time: data.as_of })}</p>}
+          {data.can_discover_pools && <PackagePoolList projectId={projectId}
+            onClaimed={(id) => onSelectPackage ? onSelectPackage({ id }) : load()} />}
           <ul>
             {data.results.map((item) => (
               <li key={item.id} data-testid={`package-summary-${item.id}`}>
@@ -328,6 +331,10 @@ export const TaskPackages = ({ projectId, initialTaskIds = [], onOpenReviewQueue
           <h3>{data.package.name}</h3>
           <p className={packages.elem("instructions").toClassName()}>{data.package.instructions}</p>
           {data.role === "manager" && <p>{data.package.source_note}</p>}
+          {(data.can_dispatch || data.can_manage_pool) && (
+            <PackageManagement projectId={projectId} packageId={selected} canDispatch={data.can_dispatch}
+              canManagePool={data.can_manage_pool} onChanged={() => load(selected, page, filter)} />
+          )}
           <p>{t(data.role === "manager" ? "managerScope" : data.role === "reviewer" ? "reviewScope" : "ownScope")}</p>
           <PackageCounts counts={data.counts} role={data.role} />
           <p>{t("asOf", { time: data.as_of })}</p>

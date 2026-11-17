@@ -36,7 +36,7 @@ try {
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
     if (@($TestS3Fence, $TestVersionDelete, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery, $TestPackageDispatch).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
     if ($TestPackageDispatch) {
-        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider task_packages/tests/test_package_dispatch.py task_packages/tests/test_packages.py
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider task_packages/tests/test_package_pools.py task_packages/tests/test_package_dispatch.py task_packages/tests/test_packages.py
     } elseif ($TestEngineering) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_background_import.py `

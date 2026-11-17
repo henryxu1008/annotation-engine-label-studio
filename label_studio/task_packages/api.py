@@ -2,11 +2,14 @@
 
 import hashlib
 import json
+import re
 from uuid import UUID
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor
 from access_control.project_operations import (
+    ASSIGN,
+    BATCH_ASSIGN,
     EDIT,
     ORGANIZE_WORK,
     READ_WORK,
@@ -17,19 +20,20 @@ from access_control.project_operations import (
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from projects.models import Project, ProjectMember
 from rest_framework import generics, serializers
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from tasks.models import Task
-from tasks.my_work import work_projects
+from tasks.models import Task, TaskAssignment
+from tasks.my_work import annotate_assignment_work, work_projects
 
 from .access import current_read_policy, fail, visible_packages
 from .dispatch import dispatch_package
-from .models import TaskPackage, TaskPackageItem
+from .models import TaskPackage, TaskPackageItem, TaskPackagePool
+from .pools import claim_pool, configure_pool
 from .progress import PackageWork, filter_states, requested_state
 
 
@@ -52,6 +56,26 @@ class CreatePackage(serializers.Serializer):
         if len(value) != len(set(value)):
             fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'Task IDs must be unique.')
         return sorted(value)
+
+
+class PoolConfiguration(serializers.Serializer):
+    expected_revision = serializers.IntegerField(min_value=0)
+    candidate_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), min_length=1, max_length=100)
+    due_at = serializers.DateTimeField(allow_null=True)
+    enabled = serializers.BooleanField()
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or set(data) != set(self.fields):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'All pool configuration fields are required.')
+        due = data.get('due_at')
+        if due is not None and (not isinstance(due, str) or not re.search(r'(Z|[+-]\d\d:\d\d)$', due)):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Deadline must include a UTC offset.')
+        if type(data['expected_revision']) is not int or type(data['enabled']) is not bool:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid revision or enabled value.')
+        ids = data['candidate_ids']
+        if not isinstance(ids, list) or any(type(value) is not int for value in ids) or len(ids) != len(set(ids)):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Candidate IDs must be distinct positive integers.')
+        return super().to_internal_value(data)
 
 
 def digest(value):
@@ -132,7 +156,10 @@ class PackageListAPI(PackageAPIBase):
         )
         policy = current_read_policy(project, actor, role, package_ids=ids)
         response.data.update(
-            role=role, can_create=role == 'manager' and policy.allows(ORGANIZE_WORK), as_of=timezone.now()
+            role=role,
+            can_create=role == 'manager' and policy.allows(ORGANIZE_WORK),
+            as_of=timezone.now(),
+            can_discover_pools=settings.ANNOTATION_PACKAGE_CLAIM_ENABLED and role in ('annotator', 'manager'),
         )
         return response
 
@@ -193,8 +220,12 @@ class PackageDispatchAPI(PackageAPIBase):
         principal, _, _, _, _ = self.context(request, pk)
         if not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED:
             raise NotFound()
-        if (not isinstance(request.data, dict) or set(request.data) != {'assignee_id'}
-                or type(request.data['assignee_id']) is not int or request.data['assignee_id'] < 1):
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data) != {'assignee_id'}
+            or type(request.data['assignee_id']) is not int
+            or request.data['assignee_id'] < 1
+        ):
             fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'Provide only a positive integer assignee_id.')
         try:
             key = UUID(request.headers.get('Idempotency-Key', ''))
@@ -202,13 +233,158 @@ class PackageDispatchAPI(PackageAPIBase):
             fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
         assignee_id = request.data['assignee_id']
         receipt, replayed = dispatch_package(
-            project_id=pk, package_id=package_id, assignee_id=assignee_id, principal=principal, key=key,
+            project_id=pk,
+            package_id=package_id,
+            assignee_id=assignee_id,
+            principal=principal,
+            key=key,
             request_hash=digest({'package_id': package_id, 'assignee_id': assignee_id}),
         )
-        return Response({'dispatch_id': receipt.pk, 'package_id': receipt.package_id,
-                         'assignee_id': receipt.assignee_id_snapshot, 'assignment_ids': receipt.assignment_ids,
-                         'assignment_count': len(receipt.assignment_ids), 'replayed': replayed},
-                        status=200 if replayed else 201)
+        return Response(
+            {
+                'dispatch_id': receipt.pk,
+                'package_id': receipt.package_id,
+                'assignee_id': receipt.assignee_id_snapshot,
+                'assignment_ids': receipt.assignment_ids,
+                'assignment_count': len(receipt.assignment_ids),
+                'replayed': replayed,
+            },
+            status=200 if replayed else 201,
+        )
+
+
+class PackagePoolAPI(PackageAPIBase):
+    def get(self, request, pk, package_id):
+        principal, _, project, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if not authorization.can_manage_project(principal, project):
+            raise PermissionDenied()
+        package = generics.get_object_or_404(TaskPackage, pk=package_id, project=project)
+        pool = TaskPackagePool.objects.filter(package=package).first()
+        overdue = overdue_counts([pool], project) if pool else {}
+        if not authorization.can_manage_project(principal, project):
+            raise PermissionDenied()
+        return Response(
+            {
+                'revision': pool.revision if pool else 0,
+                'enabled': pool.enabled if pool else False,
+                'candidate_ids': list(pool.candidates.order_by('pk').values_list('pk', flat=True)) if pool else [],
+                'due_at': pool.due_at if pool else None,
+                'claimed': hasattr(pool, 'claim') if pool else False,
+                'overdue_count': overdue.get(pool.pk, 0) if pool else 0,
+            }
+        )
+
+    def put(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        serializer = PoolConfiguration(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        pool = configure_pool(project_id=pk, package_id=package_id, principal=principal, **serializer.validated_data)
+        return Response(
+            {
+                'revision': pool.revision,
+                'enabled': pool.enabled,
+                'due_at': pool.due_at,
+                'candidate_ids': sorted(serializer.validated_data['candidate_ids']),
+            }
+        )
+
+
+def overdue_counts(pools, project):
+    """Count claimed, active work still requiring submission after the deadline."""
+    now = timezone.now()
+    by_assignment = {}
+    for pool in pools:
+        if pool.due_at and pool.due_at <= now and hasattr(pool, 'claim'):
+            by_assignment.update({assignment_id: pool.pk for assignment_id in pool.claim.assignment_ids})
+    counts = {}
+    if by_assignment:
+        assignments = TaskAssignment.objects.filter(
+            project=project, pk__in=by_assignment, status__in=TaskAssignment.ACTIVE_STATUSES
+        )
+        unfinished = annotate_assignment_work(assignments).filter(
+            work_state__in=['assigned', 'in_progress', 'rework', 'conflict']
+        )
+        for assignment_id in unfinished.values_list('pk', flat=True):
+            pool_id = by_assignment[assignment_id]
+            counts[pool_id] = counts.get(pool_id, 0) + 1
+    return counts
+
+
+class AvailablePoolsAPI(PackageAPIBase):
+    def get(self, request, pk):
+        principal, actor, project, role, policy = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if role not in ('annotator', 'manager'):
+            raise PermissionDenied()
+        pools = (
+            TaskPackagePool.objects.filter(
+                package__project=project, candidates=actor, package__project_id__in=work_projects(actor, [role])
+            )
+            .filter(Q(enabled=True, claim__isnull=True) | Q(claim__actor=actor))
+            .select_related('package', 'claim')
+            .order_by('pk')
+        )
+        page = self.paginate_queryset(pools)
+        now = timezone.now()
+        overdue = overdue_counts(page, project)
+        current = set(
+            TaskPackagePool.objects.filter(
+                pk__in=[pool.pk for pool in page],
+                candidates=actor,
+                package__project_id__in=work_projects(actor, [role]),
+            )
+            .filter(Q(enabled=True, claim__isnull=True) | Q(claim__actor=actor))
+            .values_list('pk', flat=True)
+        )
+        if current != {pool.pk for pool in page} or authorization.project_role(principal, project) != role:
+            fail(PermissionDenied, 'POOL_ACCESS_CHANGED', 'Claim pool access changed; refresh the page.')
+        return self.get_paginated_response(
+            [
+                {
+                    'package_id': pool.package_id,
+                    'name': pool.package.name,
+                    'due_at': pool.due_at,
+                    'claimed': hasattr(pool, 'claim'),
+                    'deadline_passed': bool(pool.due_at and pool.due_at <= now),
+                    'overdue_count': overdue.get(pool.pk, 0),
+                    'can_claim': not hasattr(pool, 'claim')
+                    and pool.enabled
+                    and (not pool.due_at or pool.due_at > now)
+                    and policy.allows(BATCH_ASSIGN)
+                    and policy.allows(ASSIGN)
+                    and policy.allows(EDIT),
+                }
+                for pool in page
+            ]
+        )
+
+
+class PackageClaimAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No claim fields are accepted.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        claim, replayed = claim_pool(project_id=pk, package_id=package_id, principal=principal, key=key)
+        return Response(
+            {
+                'package_id': package_id,
+                'assignment_ids': claim.assignment_ids,
+                'assignment_count': len(claim.assignment_ids),
+                'replayed': replayed,
+            },
+            status=200 if replayed else 201,
+        )
 
 
 class PackageDetailAPI(PackageAPIBase):
@@ -308,6 +484,14 @@ class PackageDetailAPI(PackageAPIBase):
             filter_states=filter_states(role),
             as_of=timezone.now(),
             can_review=role == 'reviewer' and policy.allows(REVIEW),
+            can_manage_pool=role == 'manager'
+            and settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            and policy.allows(BATCH_ASSIGN)
+            and policy.allows(ASSIGN),
+            can_dispatch=role == 'manager'
+            and settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            and policy.allows(BATCH_ASSIGN)
+            and policy.allows(ASSIGN),
             continue_url=f'/projects/{pk}/data?labeling=1&task_package={package.pk}'
             if role == 'annotator' and policy.allows(EDIT) and not state
             else None,

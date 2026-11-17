@@ -95,7 +95,9 @@ class LegacyProjectOperationProvider:
         if getattr(settings, 'ANNOTATION_NER_ARBITRATION_ENABLED', False):
             operations = operations | {ORGANIZE_NER_ARBITRATION, ARBITRATE_NER}
         if getattr(settings, 'ANNOTATION_FIXED_PACKAGES_ENABLED', False):
-            if getattr(settings, 'ANNOTATION_PACKAGE_DISPATCH_ENABLED', False):
+            if getattr(settings, 'ANNOTATION_PACKAGE_DISPATCH_ENABLED', False) or getattr(
+                settings, 'ANNOTATION_PACKAGE_CLAIM_ENABLED', False
+            ):
                 operations = operations | {BATCH_ASSIGN}
             return ProjectOperationPolicy('legacy-fixed-list-v1', 'legacy', operations | {ORGANIZE_WORK})
         return ProjectOperationPolicy('legacy-single-task-v1', 'legacy', operations)

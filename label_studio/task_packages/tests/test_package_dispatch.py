@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
+from unittest import skipUnless
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from task_packages.tests.test_packages import PackageFixture
 from tasks.models import Task, TaskAssignment
 
 
+@skipUnless(connection.vendor == 'postgresql', 'Package dispatch requires PostgreSQL row locks.')
 @override_settings(
     ANNOTATION_FIXED_PACKAGES_ENABLED=True,
     ANNOTATION_PACKAGE_DISPATCH_ENABLED=True,
@@ -27,8 +29,12 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
     def post(self, *, user=None, key=None, payload=None):
         client = APIClient()
         client.force_authenticate(user or self.manager)
-        return client.post(self.dispatch_url, payload or {'assignee_id': self.annotator.pk}, format='json',
-                           HTTP_IDEMPOTENCY_KEY=str(key or uuid4()))
+        return client.post(
+            self.dispatch_url,
+            payload or {'assignee_id': self.annotator.pk},
+            format='json',
+            HTTP_IDEMPOTENCY_KEY=str(key or uuid4()),
+        )
 
     def test_atomic_receipt_replay_and_key_conflict(self):
         key = uuid4()
@@ -61,13 +67,18 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
 
     def test_revoked_target_and_cross_project_are_rejected(self):
         from projects.models import ProjectMember
+
         ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
         assert self.post().status_code == 400
         self.project.refresh_from_db()
         response = self.create(task_ids=[self.tasks[0].pk])
         foreign_url = self.dispatch_url.replace(f'/projects/{self.project.pk}/', '/projects/999999999/')
-        assert self.client.post(foreign_url, {'assignee_id': self.other.pk}, format='json',
-                                HTTP_IDEMPOTENCY_KEY=str(uuid4())).status_code == 404
+        assert (
+            self.client.post(
+                foreign_url, {'assignee_id': self.other.pk}, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())
+            ).status_code
+            == 404
+        )
         assert response.status_code == 201
         assert TaskAssignment.objects.count() == TaskPackageDispatch.objects.count() == 0
 
@@ -80,7 +91,7 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         TaskPackageDispatch.objects.all().delete()
         executor = MigrationExecutor(connection)
         executor.migrate([('task_packages', '0001_initial')])
-        MigrationExecutor(connection).migrate([('task_packages', '0002_taskpackagedispatch')])
+        MigrationExecutor(connection).migrate([('task_packages', '0003_package_pool')])
 
     def test_paused_project_blocks_even_replay(self):
         key = uuid4()
@@ -162,7 +173,8 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         extra = Task.objects.bulk_create([Task(project=self.project, data={}) for _ in range(997)])
         response = self.create(task_ids=[t.pk for t in [*self.tasks, *extra]])
         url = f'{self.url}{response.json()["id"]}/dispatch/'
-        result = self.client.post(url, {'assignee_id': self.annotator.pk}, format='json',
-                                  HTTP_IDEMPOTENCY_KEY=str(uuid4()))
+        result = self.client.post(
+            url, {'assignee_id': self.annotator.pk}, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())
+        )
         assert result.status_code == 201, result.content
         assert result.json()['assignment_count'] == TaskAssignment.objects.count() == 1000

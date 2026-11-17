@@ -111,9 +111,35 @@ receipt even if an assignment was subsequently cancelled; they do not recreate
 work. Receipts follow project/package cascade deletion and their migration cannot
 be reversed while receipts exist. They are not an independent audit archive.
 
-Claim pools, load balancing, overlap allocation, priority/deadline enforcement,
-automatic overdue handling, and a dispatch UI remain unavailable. Existing
-single-task assignment, submit/rework and review authorization remain authoritative.
+`ANNOTATION_PACKAGE_CLAIM_ENABLED` independently enables a PostgreSQL-only
+claim pool for a fixed package. Managers specify 1–100 existing eligible
+project users, an optional timezone-aware deadline, and whether the pool is
+open. Configuration uses an expected revision; stale updates are rejected.
+Candidate changes are refused after a claim. A claimant is derived from the
+authenticated principal, must still be an active eligible member, and may
+claim only an explicitly offered package. The project lock serializes pool
+changes, claims, and supported assignment writers. The first successful claim
+atomically creates all assignments and a durable receipt. Same-key retries by
+the same principal return that receipt; other claims cannot acquire the package.
+An existing active assignment on any member rejects the whole claim. Later
+manager-directed overlapping assignments remain possible through the existing
+assignment APIs; the pool does not globally reserve task IDs forever.
+
+The deadline closes new claims and marks active claimed assignments still in
+assigned, in-progress, rework, or conflict state as overdue. Submission and
+approval are not considered overdue annotation work. Expiry neither cancels
+assignments nor prevents existing work from being submitted. Managers can change
+the deadline after a claim; candidate membership stays fixed. These counts are
+live projections, not immutable events or a general SLA engine, and apply to
+pool-created assignments rather than direct dispatch. Pool configuration and
+claim receipts follow package deletion and must not be treated as an independent
+audit archive; migration rollback refuses to discard nonempty pools.
+
+The existing task-package workspace offers managers assignment and pool
+configuration, and offers eligible users pool discovery and claiming. The UI
+accepts project user IDs; a member picker and automated load balancing, claim
+reservations, priorities and automatic overdue notifications remain unavailable.
+Existing single-task assignment, submit/rework and review authorization remain authoritative.
 
 ## Regression coverage
 
@@ -128,8 +154,8 @@ The bilingual React workspace reuses ApiProvider, i18n and existing work links.
 It clears stale rows on refresh failure, ignores disposed responses, and retries
 an out-of-range page once by its specific machine code. Creation retries retain
 the request key/body. `fixed-task-packages.cy.ts` covers real browser creation
-and manager/annotator/reviewer views in en-US and zh-CN. The existing UI does not
-expose dispatch.
+and manager/annotator/reviewer views in en-US and zh-CN. Pool and dispatch
+controls are feature-gated separately from package discovery.
 
 The feature defaults off; retained-pilot activation and production deployment
 remain separate work. IAM recovery and Core business integration are out of scope.

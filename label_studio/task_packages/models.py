@@ -49,4 +49,25 @@ class TaskPackageDispatch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['project', 'idempotency_key'], name='package_dispatch_key_unique')]
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='package_dispatch_key_unique')
+        ]
+
+
+class TaskPackagePool(models.Model):
+    package = models.OneToOneField(TaskPackage, on_delete=models.CASCADE, related_name='pool')
+    candidates = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='+')
+    enabled = models.BooleanField(default=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    revision = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TaskPackageClaim(models.Model):
+    pool = models.OneToOneField(TaskPackagePool, on_delete=models.CASCADE, related_name='claim')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    actor_id_snapshot = models.PositiveBigIntegerField()
+    principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    assignment_ids = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
