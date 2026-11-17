@@ -137,7 +137,8 @@ jobs:
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_migration.py \
             projects/tests/test_lifecycle_background_import.py io_storages/tests/test_project_operation_fence.py \
             io_storages/tests/test_storage_admission.py io_storages/tests/test_webhook_outbox.py \
-            io_storages/tests/test_s3_version_provenance.py io_storages/tests/test_s3_delete_key_fence.py \
+            io_storages/tests/test_s3_version_provenance.py io_storages/tests/test_s3_deletion_plan.py io_storages/tests/test_s3_delete_key_fence.py \
+            io_storages/tests/test_s3_version_delete.py \
             io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_legacy_iam_inventory.py \
             io_storages/tests/test_s3_write_retry_policy.py io_storages/tests/test_upgrade_queue_inventory.py \
             data_export/tests/test_api.py data_export/tests/test_lifecycle_worker_fence.py \

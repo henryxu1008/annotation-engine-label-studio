@@ -30,6 +30,7 @@ from io_storages.s3.utils import (
     resolve_s3_url,
 )
 from io_storages.utils import StorageObject, load_tasks_json, storage_can_resolve_bucket_url
+from rest_framework.exceptions import PermissionDenied
 from tasks.models import Annotation
 
 from label_studio.io_storages.s3.utils import AWS
@@ -357,20 +358,10 @@ class S3ExportStorage(S3StorageMixin, ExportStorage):
             link.save(update_fields=['pinned_version_id', 'pinned_key', 'pinned_storage_binding', 'pinned_object_token'])
 
     @admitted_annotation_effect('annotation_delete')
-    @catch_and_reraise_from_none
     def delete_annotation(self, annotation):
-        client, s3 = self.get_client_and_resource()
-        logger.debug(f'Deleting object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
-
-        # get key that identifies this object in storage
-        key = S3ExportStorageLink.get_key(annotation)
-        key = str(self.prefix) + '/' + key if self.prefix else key
-
-        # delete object from storage
-        s3.Object(self.bucket, key).delete()
-
-        # delete link if everything ok
-        S3ExportStorageLink.objects.filter(storage=self, annotation=annotation).delete()
+        # A key-only DELETE can hide a replacement. The old path has no durable
+        # version or outcome, even when lifecycle admission is disabled.
+        raise PermissionDenied('Unversioned S3 annotation deletion is unavailable.')
 
 
 def async_export_annotation_to_s3_storages(annotation: 'Annotation | int'):

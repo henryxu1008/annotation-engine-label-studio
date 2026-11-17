@@ -61,6 +61,7 @@
   "lifecycleResolution_cancel_s3_preflight": "Cancel this S3 attempt if it has not been sent. The server checks again before cancelling.",
   "lifecycleResolution_recover_webhook_pre_send": "Requeue this webhook with the same delivery ID only if the server confirms that sending has not begun.",
   "lifecycleResolution_recover_storage_pre_effect": "Requeue this operation only if the server confirms that storage work has not begun.",
+  "lifecycleResolution_recover_s3_delete_pre_effect": "Requeue only if the server confirms the delete request was not submitted. Dispatch remains blocked until cloud isolation is verified.",
   "lifecycleResolution_confirm_deletion": "Record that the external deletion was completed after independent verification.",
   "lifecycleResolution_confirm_uncertain": "Record that the worker has stopped and the external outcome was independently checked.",
   "lifecycleAttest_confirm_deletion": "I verified that the intended external deletion is complete.",

@@ -524,6 +524,46 @@ it("requests server-verified webhook recovery using the original delivery", asyn
   );
 });
 
+it("requests S3 deletion recovery only for a server-confirmed pre-effect claim", async () => {
+  mockCallApi.mockImplementation(async (method) => {
+    if (method === "projectLifecycle") return { state: "active", revision: 1 };
+    if (method === "projectStorageOperations")
+      return {
+        operations: [
+          {
+            id: "delete-claim",
+            state: "running",
+            operation: "annotation_delete_pending",
+            storage_model: "io_storages.s3exportstorage",
+            storage_id: 1,
+            can_recover_s3_delete_pre_effect: true,
+          },
+        ],
+        ...noStoragePages,
+        legacy_export_blockers: noLegacyExports,
+        legacy_export_details: noLegacyDetails,
+      };
+    if (method === "projectStorageOperationResolve") return { error: true, status: 409 };
+    throw new Error(method);
+  });
+  render(<LifecycleSettings />);
+  fireEvent.click(await screen.findByRole("radio"));
+  expect(screen.getByText("lifecycleResolution_recover_s3_delete_pre_effect")).toBeTruthy();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  fireEvent.change(screen.getByLabelText("lifecycleReason", { selector: "#lifecycle-resolution-reason" }), {
+    target: { value: "recover before send" },
+  });
+  fireEvent.click(screen.getByText("lifecycleResolve"));
+  await screen.findByRole("alert");
+  expect(mockCallApi).toHaveBeenCalledWith(
+    "projectStorageOperationResolve",
+    expect.objectContaining({
+      params: { pk: 4, operation: "delete-claim" },
+      body: { action: "recover_s3_delete_pre_effect", reason: "recover before send", attested: false },
+    }),
+  );
+});
+
 it("does not offer attestation-only recovery for uncertain cloud operations", async () => {
   mockCallApi.mockImplementation(async (method) => {
     if (method === "projectLifecycle") return { state: "active", revision: 1 };

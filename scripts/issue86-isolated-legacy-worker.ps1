@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$MinioClient,
     [string]$Subnet = '10.252.86.0/28',
     [switch]$TestS3Unknown,
-    [switch]$TestMixedUpgrade
+    [switch]$TestMixedUpgrade,
+    [switch]$TestVersionDelete
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,8 +74,11 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
-    if ($TestS3Unknown -and $TestMixedUpgrade) { throw 'Select only one test group.' }
-    if ($TestMixedUpgrade) {
+    if (@($TestS3Unknown, $TestMixedUpgrade, $TestVersionDelete).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
+    if ($TestVersionDelete) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            io_storages/tests/test_s3_version_delete_isolated.py
+    } elseif ($TestMixedUpgrade) {
         docker exec -e ISSUE86_OLD_LABEL_STUDIO_DIR=/legacy/label_studio -e ISSUE86_OLD_WORKER_DIR=/legacy/label_studio `
             -e ISSUE86_TEST_REDIS_URL=redis://127.0.0.1:6379/0 $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
             io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_old_sync_worker_blocks_new_drain_without_new_ledger `

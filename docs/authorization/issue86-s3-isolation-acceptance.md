@@ -4,6 +4,8 @@ This is a proposed acceptance protocol, not evidence that the provider or the
 application has passed it. Automatic annotation-object deletion and lifecycle
 admission stay disabled until the deployment-specific isolation mechanism and
 every applicable gate below have been demonstrated and independently reviewed.
+The confirmed #145 outcome and the current read-only preparation are described
+in [the versioned deletion plan](issue145-versioned-delete-plan.md).
 
 ## Test boundary
 

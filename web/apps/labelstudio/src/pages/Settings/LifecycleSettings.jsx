@@ -301,6 +301,7 @@ export const LifecycleSettings = () => {
     "cancel_s3_preflight",
     "recover_webhook_pre_send",
     "recover_storage_pre_effect",
+    "recover_s3_delete_pre_effect",
   ].includes(resolution);
   const resolve = async (event) => {
     event.preventDefault();

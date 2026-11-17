@@ -349,6 +349,7 @@ def storage_operation_page(project, *, limit=100, cursor=None):
     entries = list(query.order_by('started_at', 'pk').values(*fields)[: limit + 1])
     has_more = len(entries) > limit
     page = entries[:limit]
+    from io_storages.s3.version_delete import PRE_EFFECT as S3_DELETE_PRE_EFFECT
     from webhooks.durable import PROJECT_EVENTS, WEBHOOK_PRE_SEND
 
     for entry in page:
@@ -373,6 +374,15 @@ def storage_operation_page(project, *, limit=100, cursor=None):
                 or (entry['operation'] in {'export_sync', 'export_sync_new', 'annotation_export_v3_queued'}
                     and entry['storage_model'] in VERSIONED_EXPORT_MODELS)
             )
+        )
+        entry['can_recover_s3_delete_pre_effect'] = bool(
+            entry['storage_model'] == 'io_storages.s3exportstorage'
+            and entry['operation'] == 'annotation_delete_pending'
+            and entry['state'] == StorageOperation.State.RUNNING
+            and phase == S3_DELETE_PRE_EFFECT
+            and claim_token is not None
+            and isinstance(payload, dict)
+            and payload.get('kind') == 's3_version_delete_v1'
         )
         entry['can_cancel_s3_preflight'] = bool(
             entry['storage_model'] == 'io_storages.s3exportstorage'

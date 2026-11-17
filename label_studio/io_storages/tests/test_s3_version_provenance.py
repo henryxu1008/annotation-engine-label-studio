@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
+from io_storages.s3.deletion_plan import describe_version_deletion
 from io_storages.s3.version_provenance import (
     _export_cursor_cipher,
     inspect_aws_deletion_history,
@@ -42,6 +43,8 @@ class S3VersionIdentityTests(SimpleTestCase):
             project_id=4,
             storage_id=9,
             storage_model='io_storages.s3exportstorage',
+            lifecycle_revision=0,
+            subject_id=12,
             target_key='a/object',
             target_version_id='v1',
             target_object_token='a' * 32,
@@ -155,6 +158,20 @@ class S3VersionIdentityTests(SimpleTestCase):
         self.client.head_object.return_value['VersionId'] = 'other-version'
         with self.assertRaisesRegex(ValueError, 'does not match'):
             verify_aws_deletion_target(self.storage, self.record, '123456789012', self.client)
+        self.client.delete_object.assert_not_called()
+
+    def test_object_lock_metadata_never_makes_a_read_only_observation_executable(self):
+        self.client.head_object.return_value['ObjectLockMode'] = 'COMPLIANCE'
+        self.client.head_object.return_value['ObjectLockLegalHoldStatus'] = 'ON'
+        self.client.list_object_versions.return_value = {
+            'IsTruncated': False,
+            'Versions': [{'Key': 'a/object', 'VersionId': 'v1', 'IsLatest': True}],
+        }
+        verify_aws_deletion_target(self.storage, self.record, '123456789012', self.client)
+        history = inspect_aws_deletion_history(self.storage, self.record, '123456789012', self.client)
+        plan = describe_version_deletion(history)
+        self.assertIn('OBJECT_LOCK_NOT_VERIFIED', plan['blockers'])
+        self.assertEqual(plan['automatic_execution'], 'BLOCKED')
         self.client.delete_object.assert_not_called()
 
     def test_read_only_inspection_command_binds_record_and_never_deletes(self):

@@ -1,6 +1,19 @@
-import { apiSucceeded, lifecycleTargets, resolutionFor } from "./lifecycleState";
+import { apiSucceeded, lifecycleTargets, requiresVerifiedRecovery, resolutionFor } from "./lifecycleState";
 
 describe("lifecycle policy presentation", () => {
+  it("offers S3 deletion recovery only for a server-confirmed pre-effect claim", () => {
+    const entry = {
+      state: "running",
+      operation: "annotation_delete_pending",
+      storage_model: "io_storages.s3exportstorage",
+      can_recover_s3_delete_pre_effect: true,
+    };
+    expect(resolutionFor(entry)).toBe("recover_s3_delete_pre_effect");
+    expect(resolutionFor({ ...entry, can_recover_s3_delete_pre_effect: "true" })).toBeNull();
+    expect(requiresVerifiedRecovery({ ...entry, can_recover_s3_delete_pre_effect: false })).toBe(true);
+    expect(resolutionFor({ ...entry, state: "uncertain" })).toBeNull();
+    expect(resolutionFor({ ...entry, storage_model: "plugin.unknown" })).toBeNull();
+  });
   it("shows only transitions supported by the server", () => {
     expect(lifecycleTargets.active).toEqual(["paused", "completed"]);
     expect(lifecycleTargets.archived).toEqual(["active"]);

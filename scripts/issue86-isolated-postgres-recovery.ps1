@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence, [switch]$TestWebhookRecovery, [switch]$TestWebhookMixed, [switch]$TestRqRecovery)
+param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestVersionDelete, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence, [switch]$TestWebhookRecovery, [switch]$TestWebhookMixed, [switch]$TestRqRecovery)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -34,7 +34,7 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
-    if (@($TestS3Fence, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
+    if (@($TestS3Fence, $TestVersionDelete, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
     if ($TestEngineering) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_background_import.py `
@@ -43,6 +43,9 @@ try {
             io_storages/tests/test_s3_delete_key_fence.py io_storages/tests/test_rq_sync_attempt_isolated.py `
             io_storages/tests/test_upgrade_isolation_postgres.py tasks/tests/test_project_operation_policy.py `
             data_export/tests/test_lifecycle_worker_fence.py
+    } elseif ($TestVersionDelete) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
+            io_storages/tests/test_s3_version_delete.py
     } elseif ($TestRqRecovery) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             io_storages/tests/test_rq_sync_attempt_isolated.py `
@@ -90,6 +93,7 @@ try {
     } elseif ($TestS3Fence) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
             io_storages/tests/test_s3_delete_key_fence.py `
+            io_storages/tests/test_s3_deletion_plan.py `
             io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_standalone_process_inventories_legacy_storage_without_loading_urls `
             io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_s3_delete_records_exact_key_without_calling_provider `
             io_storages/tests/test_storage_admission.py::StorageAdmissionTests::test_s3_put_version_is_bound_to_deletion_intent `
