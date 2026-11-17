@@ -143,8 +143,9 @@ Docker services with synthetic identities and no host-published ports produced:
 | Previous durable workers | PASS: 2 tests against the pinned previous worker; the upstream old-worker case skipped by recovery was run in the mixed-upgrade fixture above. |
 
 The complete wrapper subsequently passed all 9 local fixture stages on the
-same main baseline. Its failure path was also checked with a synthetic failing
-stage: it exited unsuccessfully and did not start later stages.
+same main baseline. Its failure path was also checked with synthetic thrown
+exceptions and nonzero script exit codes: it exited unsuccessfully and did not
+start later stages.
 
 These are local fixture observations, not evidence for an AWS account, an AWS
 request terminal outcome, or a production rollout. AWS identity and network

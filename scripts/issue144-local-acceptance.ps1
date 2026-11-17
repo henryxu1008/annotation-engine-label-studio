@@ -35,7 +35,14 @@ foreach ($stage in $stages) {
     Write-Host "LOCAL START: $($stage.Name)"
     try {
         $stageArgs = $stage.Args
+        # A script may use `exit` or return a failed native command without
+        # throwing. Do not let a stale exit code or a nonzero result become a
+        # successful acceptance stage.
+        $global:LASTEXITCODE = 0
         & (Join-Path $PSScriptRoot $stage.Script) @stageArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Fixture exited with code $LASTEXITCODE."
+        }
     } catch {
         Write-Host "LOCAL FAIL: $($stage.Name); later stages NOT_RUN."
         throw
