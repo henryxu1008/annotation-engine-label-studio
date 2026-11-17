@@ -2219,3 +2219,8 @@ work deadlines are additional authorization-sensitive read paths. Reconcile
 these endpoints, the operation matrix, membership revocation locks and migrations
 against upstream on upgrade; do not assume UI controls authorize mutations.
 Details, scope limits and rollback behavior are in `fixed-task-packages.md`.
+Optional background allocation additionally persists a local manager identity,
+revalidates it under the project lock, and uses one idempotency key per explicit
+automation generation. Old workers and externally mapped identities are not
+eligible for this background path until their isolation and revocation contracts
+are established.

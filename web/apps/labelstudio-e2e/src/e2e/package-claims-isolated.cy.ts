@@ -82,3 +82,35 @@ for (const locale of ["en-US", "zh-CN"] as const) {
     });
   });
 }
+
+it("automatically allocates an opted-in package through the background worker", () => {
+  Cypress.env("loginLocale", "en-US");
+  const name = "Synthetic automatic package";
+  cy.loginAs("issue86-manager@example.test", password, `/projects/${project}/data`);
+  cy.getCookie("csrftoken", { log: false }).then((cookie) => cy.request({
+    method: "POST", url: root(), headers: { "X-CSRFToken": cookie?.value ?? "", "Idempotency-Key": crypto.randomUUID() },
+    body: { name, task_ids: [taskId] },
+  })).its("status").should("eq", 201);
+  cy.reload();
+  cy.get('[data-testid="open-task-packages"]').should("be.visible").click();
+  cy.contains("button", name).click();
+  cy.contains("button", "Manage assignment and claims").click();
+  cy.contains("button", "Save claim settings").closest("form").within(() => {
+    cy.contains("label", "issue86-annotator@example.test").find('input[type="checkbox"]').check();
+    cy.contains("label", "Open for claims").find('input[type="checkbox"]').check();
+    cy.contains("label", "Automatically assign this package").find('input[type="checkbox"]').check();
+  });
+  cy.intercept({ method: "PUT", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/pool/?$`) }).as("autoConfig");
+  cy.contains("button", "Save claim settings").click();
+  cy.wait("@autoConfig").its("response.statusCode").should("eq", 200);
+  const poll = (remaining: number): Cypress.Chainable<any> => cy.request(
+    `/api/task-assignments/?project=${project}&task=${taskId}`,
+  ).then(({ body }) => {
+    const assignments = body.results ?? body;
+    if (assignments.some((row: any) => row.status === "assigned" && row.assignee === Number(Cypress.env("issue83_annotator_id")))) return;
+    expect(remaining, "background worker completed allocation").to.be.greaterThan(0);
+    cy.wait(1000);
+    return poll(remaining - 1);
+  });
+  poll(40);
+});

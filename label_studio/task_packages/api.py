@@ -33,7 +33,14 @@ from tasks.my_work import annotate_assignment_work, work_projects
 from .access import current_read_policy, fail, visible_packages
 from .dispatch import dispatch_package
 from .models import TaskPackage, TaskPackageItem, TaskPackageOverdueNotice, TaskPackagePool
-from .pools import balanced_dispatch, claim_pool, configure_pool, postgres_required, reopen_pool
+from .pools import (
+    balanced_dispatch,
+    claim_pool,
+    configure_pool,
+    local_automation_identity,
+    postgres_required,
+    reopen_pool,
+)
 from .progress import PackageWork, filter_states, requested_state
 
 
@@ -64,6 +71,7 @@ class PoolConfiguration(serializers.Serializer):
     due_at = serializers.DateTimeField(allow_null=True)
     enabled = serializers.BooleanField()
     priority = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    automatic = serializers.BooleanField(required=False)
 
     def to_internal_value(self, data):
         if (
@@ -79,6 +87,8 @@ class PoolConfiguration(serializers.Serializer):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid revision or enabled value.')
         if 'priority' in data and type(data['priority']) is not int:
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Priority must be an integer.')
+        if 'automatic' in data and type(data['automatic']) is not bool:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Automatic allocation must be a boolean.')
         ids = data['candidate_ids']
         if not isinstance(ids, list) or any(type(value) is not int for value in ids) or len(ids) != len(set(ids)):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Candidate IDs must be distinct positive integers.')
@@ -282,6 +292,11 @@ class PackagePoolAPI(PackageAPIBase):
                 'claim_id': pool.claim.pk if pool and hasattr(pool, 'claim') else None,
                 'priority': pool.priority if pool else 0,
                 'advanced_enabled': settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED,
+                'automation_available': settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED
+                and settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+                and settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+                and local_automation_identity(),
+                'automatic': pool.automatic if pool else False,
                 'overdue_count': overdue.get(pool.pk, 0) if pool else 0,
             }
         )
@@ -294,12 +309,15 @@ class PackagePoolAPI(PackageAPIBase):
         serializer.is_valid(raise_exception=True)
         if 'priority' in serializer.validated_data and not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED:
             raise NotFound()
+        if serializer.validated_data.get('automatic') and not settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED:
+            raise NotFound()
         pool = configure_pool(project_id=pk, package_id=package_id, principal=principal, **serializer.validated_data)
         return Response(
             {
                 'revision': pool.revision,
                 'enabled': pool.enabled,
                 'priority': pool.priority,
+                'automatic': pool.automatic,
                 'due_at': pool.due_at,
                 'candidate_ids': sorted(serializer.validated_data['candidate_ids']),
             }

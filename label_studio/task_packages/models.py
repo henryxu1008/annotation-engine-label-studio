@@ -60,6 +60,11 @@ class TaskPackagePool(models.Model):
     enabled = models.BooleanField(default=True)
     due_at = models.DateTimeField(null=True, blank=True)
     priority = models.PositiveSmallIntegerField(default=0)
+    automatic = models.BooleanField(default=False)
+    automation_generation = models.PositiveIntegerField(default=0)
+    automation_actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+'
+    )
     revision = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -8,6 +8,7 @@ from access_control.project_operations import (
     lock_project_operation,
     require_project_operation,
 )
+from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import Count
 from django.utils import timezone
@@ -29,8 +30,24 @@ def postgres_required():
         fail(DispatchConflict, 'POOL_DATABASE_UNSUPPORTED', 'Claim pools require PostgreSQL locking.')
 
 
+def local_automation_identity():
+    return getattr(settings, 'ANNOTATION_IDENTITY_PROVIDER', None) in (
+        None,
+        'access_control.identity.LocalIdentityProvider',
+    )
+
+
 def configure_pool(
-    *, project_id, package_id, principal, expected_revision, candidate_ids, due_at, enabled, priority=None
+    *,
+    project_id,
+    package_id,
+    principal,
+    expected_revision,
+    candidate_ids,
+    due_at,
+    enabled,
+    priority=None,
+    automatic=None,
 ):
     postgres_required()
     with transaction.atomic():
@@ -38,10 +55,24 @@ def configure_pool(
         require_project_operation(project, ASSIGN)
         if not authorization.can_manage_project(principal, project):
             raise PermissionDenied()
+        if automatic and (
+            not settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED
+            or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+            or not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            or not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            or not local_automation_identity()
+            or principal.source != 'label_studio_local'
+            or principal.principal_id != f'label_studio_local:{principal.local_user_id}'
+        ):
+            fail(DispatchConflict, 'POOL_AUTOMATION_UNAVAILABLE', 'Automatic allocation requires a local manager.')
         package = get_object_or_404(TaskPackage, pk=package_id, project=project)
         pool = TaskPackagePool.objects.select_for_update().filter(package=package).first()
         if (pool.revision if pool else 0) != expected_revision:
             fail(DispatchConflict, 'POOL_REVISION_CONFLICT', 'The pool configuration changed; refresh it.')
+        if pool and pool.automatic and automatic is None:
+            fail(DispatchConflict, 'POOL_AUTOMATION_CONFIRM_REQUIRED', 'Confirm the current automation setting.')
+        if pool and pool.automatic and automatic and pool.automation_actor_id != principal.local_user_id:
+            fail(DispatchConflict, 'POOL_AUTOMATION_OWNER_CHANGED', 'Disable automation before changing its manager.')
         existing_ids = set(pool.candidates.values_list('pk', flat=True)) if pool else set()
         new_ids = set(candidate_ids) - existing_ids
         active = set(User.objects.filter(pk__in=new_ids, is_active=True).values_list('pk', flat=True))
@@ -66,15 +97,37 @@ def configure_pool(
                 fail(DispatchConflict, 'POOL_ALREADY_CLAIMED', 'Candidates cannot change after a claim.')
         if pool is None:
             pool = TaskPackagePool.objects.create(
-                package=package, enabled=enabled, due_at=due_at, priority=priority or 0
+                package=package,
+                enabled=enabled,
+                due_at=due_at,
+                priority=priority or 0,
+                automatic=bool(automatic),
+                automation_actor_id=principal.local_user_id if automatic else None,
+                automation_generation=1 if automatic else 0,
             )
         else:
             pool.enabled = enabled
             pool.due_at = due_at
             if priority is not None:
                 pool.priority = priority
+            if automatic is not None:
+                if automatic and not pool.automatic:
+                    pool.automation_generation += 1
+                pool.automatic = automatic
+                pool.automation_actor_id = principal.local_user_id if automatic else None
             pool.revision += 1
-            pool.save(update_fields=['enabled', 'due_at', 'priority', 'revision', 'updated_at'])
+            pool.save(
+                update_fields=[
+                    'enabled',
+                    'due_at',
+                    'priority',
+                    'automatic',
+                    'automation_actor',
+                    'automation_generation',
+                    'revision',
+                    'updated_at',
+                ]
+            )
         pool.candidates.set(candidate_ids)
         return pool
 
@@ -188,11 +241,15 @@ def reopen_pool(*, project_id, package_id, principal, expected_revision, claim_i
         )
         claim.delete()
         pool.revision += 1
-        pool.save(update_fields=['revision', 'updated_at'])
+        # A reopened pool must not be silently reassigned before a manager
+        # deliberately enables automation for the new generation.
+        pool.automatic = False
+        pool.automation_actor = None
+        pool.save(update_fields=['revision', 'automatic', 'automation_actor', 'updated_at'])
         return history, False
 
 
-def balanced_dispatch(*, project_id, package_id, principal, key, request_hash):
+def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, automation_revision=None):
     """Assign the whole package to the eligible member with the fewest active tasks."""
     postgres_required()
     with transaction.atomic():
@@ -200,6 +257,20 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash):
         require_project_operation(project, ASSIGN)
         if not authorization.can_manage_project(principal, project):
             raise PermissionDenied()
+        pool = get_object_or_404(
+            TaskPackagePool.objects.select_for_update(), package_id=package_id, package__project=project
+        )
+        if automation_revision is not None and (
+            not settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED
+            or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+            or not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            or not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            or not local_automation_identity()
+            or not pool.automatic
+            or pool.automation_actor_id != actor.pk
+            or pool.revision != automation_revision
+        ):
+            fail(DispatchConflict, 'POOL_AUTOMATION_CHANGED', 'Automatic allocation configuration changed.')
         previous = TaskPackageDispatch.objects.filter(project=project, idempotency_key=key).first()
         if previous:
             if (
@@ -209,9 +280,6 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash):
             ):
                 fail(DispatchConflict, 'DISPATCH_KEY_CONFLICT', 'This key identifies a different request.')
             return previous, True
-        pool = get_object_or_404(
-            TaskPackagePool.objects.select_for_update(), package_id=package_id, package__project=project
-        )
         if (
             not pool.enabled
             or (pool.due_at and pool.due_at <= timezone.now())

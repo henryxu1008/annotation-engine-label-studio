@@ -128,8 +128,7 @@ assignment APIs; the pool does not globally reserve task IDs forever.
 With `ANNOTATION_PACKAGE_ADVANCED_ENABLED` separately enabled, managers may
 set priority 0–100 and explicitly request balanced assignment of the whole
 package to the eligible candidate with the fewest active project assignments
-(ties use the lowest user ID). This is an on-demand decision, not a background
-rebalance; the decision and assignment are transactionally recorded. Discovery
+(ties use the lowest user ID). The decision and assignment are transactionally recorded. Discovery
 sorts higher-priority pools first. Managers can reopen a claimed pool only
 after each original assignment can be verified as cancelled and the package has
 no active assignments. The immutable historical receipt remains bound to the
@@ -137,7 +136,7 @@ original principal and idempotency key; retries return `released`, and a stale
 reopen retry cannot release a subsequent claim. Cancellation itself continues
 to use the existing assignment API and version fencing.
 
-The advanced flag defaults off. All web/API and worker processes must be
+The advanced and `ANNOTATION_PACKAGE_AUTOMATION_ENABLED` flags default off. All web/API and worker processes must be
 upgraded and old processes drained before enabling it: an older claim endpoint
 does not know about historical receipts and cannot safely honor old retries
 after a reopen. This code alone cannot verify deployment-wide process isolation.
@@ -160,12 +159,28 @@ in-app overdue notices and returns only currently visible, still-overdue work.
 It does not send email, push messages, or proactively notify offline users;
 the bounded `reconcile_package_overdue --after <cursor> --limit <n>` command
 can be scheduled by operators to create inbox records while users are away,
-but no deployment scheduler is installed by this change. Start each sweep at
-zero and continue with `next_after` until empty; rerunning a page is idempotent.
+and the opt-in `run_package_automation` worker runs bounded allocation and
+notice scans continuously. A manager must explicitly enable automatic
+allocation per pool. The worker rechecks the manager, candidates, project state,
+configuration revision and live assignments while holding the project lock.
+It uses a deterministic request key per automation generation: edits to a
+deadline or priority do not reassign previously cancelled work. Reopening a
+claim turns automation off, and a manager must enable it again. Older clients
+cannot silently modify an automatically allocated pool. Initial automation is
+restricted to locally authenticated managers; externally mapped identities need
+a host-platform service identity and revocation contract before use.
+
+An optional Compose overlay `docker-compose.task-packages.yml` supplies a
+`package-automation` profile. Enabling the five flags and starting that profile
+are deployment actions, not part of this change. The process retains bounded
+scan cursors while running; a restart begins another idempotent sweep. It does
+not send email, push messages, or notify users outside the application.
+For an externally scheduled sweep, start `reconcile_package_overdue` at zero
+and continue with `next_after` until empty; rerunning a page is idempotent.
 The existing task-package
 workspace offers a paginated project-member picker, assignment and pool
-configuration, and eligible users pool discovery and claiming. Automatic
-background balancing, claim reservations, and external overdue delivery remain
+configuration, and eligible users pool discovery and claiming. Claim reservations
+and external overdue delivery remain
 unavailable.
 Existing single-task assignment, submit/rework and review authorization remain authoritative.
 

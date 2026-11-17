@@ -233,3 +233,44 @@ it("shows reconciled overdue notices and supports the next page", async () => {
   unmount();
   runtime.destroy();
 });
+
+it("saves an explicit background allocation choice", async () => {
+  mockCallApi.mockImplementation((name) => {
+    if (name === "taskPackagePool")
+      return Promise.resolve({
+        revision: 1,
+        enabled: true,
+        candidate_ids: [8],
+        due_at: null,
+        advanced_enabled: true,
+        automation_available: true,
+        automatic: false,
+      });
+    if (name === "projectMembers") return Promise.resolve({ results: [], next: null, previous: null });
+    return Promise.resolve({
+      revision: 2,
+      enabled: true,
+      candidate_ids: [8],
+      due_at: null,
+      priority: 0,
+      automatic: true,
+    });
+  });
+  const { runtime, unmount } = mount(
+    <PackageManagement projectId={4} packageId={7} canManagePool onChanged={jest.fn()} />,
+    "en-US",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage assignment and claims" }));
+  fireEvent.click(await screen.findByLabelText("Automatically assign this package"));
+  fireEvent.click(screen.getByRole("button", { name: "Save claim settings" }));
+  await waitFor(() =>
+    expect(mockCallApi).toHaveBeenCalledWith(
+      "updateTaskPackagePool",
+      expect.objectContaining({
+        body: expect.objectContaining({ automatic: true, expected_revision: 1 }),
+      }),
+    ),
+  );
+  unmount();
+  runtime.destroy();
+});

@@ -104,6 +104,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
   const [deadlineDirty, setDeadlineDirty] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [priority, setPriority] = useState(0);
+  const [automatic, setAutomatic] = useState(false);
   const [assignee, setAssignee] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -139,6 +140,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
         setDeadlineDirty(false);
         setEnabled(response.enabled);
         setPriority(response.priority ?? 0);
+        setAutomatic(response.automatic === true);
       }
     } catch {
       if (current === generation.current) setError("poolLoadFailed");
@@ -165,6 +167,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
           candidate_ids: ids,
           enabled,
           ...(pool.advanced_enabled ? { priority: Number(priority) } : {}),
+          ...(pool.automation_available || pool.automatic ? { automatic } : {}),
           due_at: deadlineDirty ? (deadline ? new Date(deadline).toISOString() : null) : pool.due_at,
         },
         errorFilter: () => true,
@@ -179,6 +182,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
           claimed: pool.claimed,
           claim_id: pool.claim_id,
           advanced_enabled: pool.advanced_enabled,
+          automation_available: pool.automation_available,
         });
         setDeadlineDirty(false);
         setMessage("poolSaved");
@@ -337,6 +341,18 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
                   />
                 </label>
               )}
+              {(pool.automation_available || pool.automatic) && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={automatic}
+                    onChange={(e) => setAutomatic(e.target.checked)}
+                    disabled={saving || (!pool.automation_available && !automatic)}
+                  />
+                  {t("poolAutomatic")}
+                </label>
+              )}
+              {(pool.automation_available || pool.automatic) && <p>{t("poolAutomaticHelp")}</p>}
               <label>
                 <input
                   type="checkbox"

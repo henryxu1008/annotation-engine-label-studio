@@ -77,6 +77,7 @@ backend application
         -e ANNOTATION_LIFECYCLE_PUBLIC_API_ENABLED=true `
         -e "ANNOTATION_FIXED_PACKAGES_ENABLED=$packageFlag" -e "ANNOTATION_PACKAGE_CLAIM_ENABLED=$packageFlag" `
         -e "ANNOTATION_PACKAGE_DISPATCH_ENABLED=$packageFlag" -e "ANNOTATION_PACKAGE_ADVANCED_ENABLED=$packageFlag" `
+        -e "ANNOTATION_PACKAGE_AUTOMATION_ENABLED=$packageFlag" `
         -e ANNOTATION_PROJECT_OPERATION_PROVIDER=access_control.project_operations.LifecycleProjectOperationProvider `
         python:3.11-slim-bookworm sleep 1800 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start disposable app runner.' }
@@ -98,6 +99,10 @@ backend application
     if ($fixture.project_id -lt 1 -or $fixture.manager -ne 'issue86-manager@example.test') { throw 'Invalid fixture scope.' }
     docker exec -d $runner /opt/venv/bin/python manage.py runserver 0.0.0.0:8080 --noreload
     if ($LASTEXITCODE -ne 0) { throw 'Could not start the local app.' }
+    if ($TestPackage) {
+        docker exec -d $runner /opt/venv/bin/python manage.py run_package_automation --interval 1
+        if ($LASTEXITCODE -ne 0) { throw 'Could not start the isolated package automation worker.' }
+    }
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
         try { Invoke-WebRequest -Uri "$baseUrl/user/login/" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
