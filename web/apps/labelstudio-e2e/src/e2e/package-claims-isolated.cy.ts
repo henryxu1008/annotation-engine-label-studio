@@ -33,6 +33,7 @@ for (const locale of ["en-US", "zh-CN"] as const) {
     cy.get('[data-testid="open-task-packages"]').should("be.visible").click();
     cy.intercept({ method: "POST", pathname: new RegExp(`/api/projects/${project}/task-packages/\\d+/claim/?$`) }).as("claimPool");
     cy.contains("li", name).within(() => {
+      cy.contains(zh ? "优先级：8" : "Priority: 8").should("be.visible");
       cy.contains("button", zh ? "领取任务包／重试" : "Claim package / retry").click();
     });
     cy.wait("@claimPool").its("response.statusCode").should("eq", 201);
@@ -41,6 +42,22 @@ for (const locale of ["en-US", "zh-CN"] as const) {
       expect(assignmentIds).to.have.length(1);
     });
     cy.loginAs("issue86-manager@example.test", password, `/projects/${project}/data`);
+    const setDeadline = (dueAt: string | null) => {
+      cy.then(() => cy.request(`${root()}${packageId}/pool/`)).then(({ body }) => {
+        cy.getCookie("csrftoken", { log: false }).then((cookie) => cy.request({
+          method: "PUT", url: `${root()}${packageId}/pool/`, headers: { "X-CSRFToken": cookie?.value ?? "" },
+          body: { expected_revision: body.revision, candidate_ids: body.candidate_ids,
+            enabled: body.enabled, priority: body.priority, due_at: dueAt },
+        })).its("status").should("eq", 200);
+      });
+    };
+    setDeadline(new Date(Date.now() - 60_000).toISOString());
+    cy.loginAs("issue86-annotator@example.test", password, `/projects/${project}/data`);
+    cy.get('[data-testid="open-task-packages"]').should("be.visible").click();
+    cy.contains(zh ? "逾期工作提醒" : "Overdue work notices").should("be.visible");
+    cy.contains(zh ? "逾期的已领取任务：1" : "Overdue claimed tasks: 1").should("be.visible");
+    cy.loginAs("issue86-manager@example.test", password, `/projects/${project}/data`);
+    setDeadline(null);
     cy.getCookie("csrftoken", { log: false }).then((cookie) => {
       for (const id of assignmentIds) cy.request({ method: "DELETE", url: `/api/task-assignments/${id}/`,
         headers: { "X-CSRFToken": cookie?.value ?? "" } }).its("status").should("eq", 204);

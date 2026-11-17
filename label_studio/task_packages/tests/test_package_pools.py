@@ -7,13 +7,13 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from django.core.management import call_command
-from django.db import close_old_connections, connection, transaction
+from django.db import DatabaseError, close_old_connections, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from projects.models import ProjectMember
 from rest_framework.test import APIClient, APITestCase
-from task_packages.models import TaskPackageClaim, TaskPackageOverdueNotice, TaskPackagePool
+from task_packages.models import TaskPackageClaim, TaskPackageClaimHistory, TaskPackageOverdueNotice, TaskPackagePool
 from task_packages.tests.test_packages import PackageFixture
 from tasks.models import Task, TaskAssignment
 
@@ -254,6 +254,58 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
             )
         assert response.status_code == 500
         assert TaskPackageClaim.objects.count() == 1 and not pool.claim_history.exists()
+
+    def test_reopen_recovers_after_database_connection_is_killed(self):
+        assert self.configure().status_code == 200
+        assert self.claim().status_code == 201
+        pool = TaskPackagePool.objects.get(package_id=self.package_id)
+        for item in TaskAssignment.objects.all():
+            item.cancel()
+        body = {'expected_revision': pool.revision, 'claim_id': pool.claim.pk}
+        key = uuid4()
+        ready, resume = Event(), Event()
+        pids = []
+        create_history = TaskPackageClaimHistory.objects.create
+
+        def pause_after_history(**kwargs):
+            history = create_history(**kwargs)
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_backend_pid()')
+                pids.append(cursor.fetchone()[0])
+            ready.set()
+            assert resume.wait(20)
+            return history
+
+        def worker():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(self.manager)
+                try:
+                    return client.post(
+                        f'{self.url}{self.package_id}/reopen/', body, format='json', HTTP_IDEMPOTENCY_KEY=str(key)
+                    ).status_code
+                except DatabaseError:
+                    return 500
+            finally:
+                close_old_connections()
+
+        with patch('task_packages.pools.TaskPackageClaimHistory.objects.create', side_effect=pause_after_history):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(worker)
+                try:
+                    assert ready.wait(20)
+                    with connection.cursor() as cursor:
+                        cursor.execute('SELECT pg_terminate_backend(%s)', [pids[0]])
+                        assert cursor.fetchone()[0] is True
+                finally:
+                    resume.set()
+                assert future.result(timeout=30) == 500
+        assert TaskPackageClaim.objects.count() == 1 and not pool.claim_history.exists()
+        retry = self.client.post(
+            f'{self.url}{self.package_id}/reopen/', body, format='json', HTTP_IDEMPOTENCY_KEY=str(key)
+        )
+        assert retry.status_code == 200
 
     def test_balanced_assignment_uses_current_load_and_is_idempotent(self):
         assert self.configure().status_code == 200
