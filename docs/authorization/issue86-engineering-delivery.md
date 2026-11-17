@@ -79,6 +79,9 @@ if the label configuration changes between parsing and commit. The isolated
 PostgreSQL next-task regressions include a request waiting on a paused project;
 the background-import regressions run against PostgreSQL and SQLite. Hosted CI
 must be checked again after these changes rather than reusing an earlier head.
+Custom reimport post-processing hooks are rejected while lifecycle admission
+is active until their effects have an explicit admission and recovery contract;
+the built-in no-op hook remains available.
 
 ## Review limitations
 

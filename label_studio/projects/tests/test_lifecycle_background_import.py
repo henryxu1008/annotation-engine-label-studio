@@ -121,6 +121,24 @@ class StreamingReimportAtomicTests(TestCase):
     def run_job(self):
         _async_reimport_background_streaming(self.job, self.project, self.org.pk, self.actor)
 
+    @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
+    def test_unenrolled_reimport_hook_is_denied_before_replacing_tasks(self):
+        with patch('data_import.functions.post_process_reimport') as hook:
+            with self.assertRaisesRegex(Exception, 'post-processing is unavailable'):
+                self.run_job()
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, ProjectReimport.Status.FAILED)
+        self.assertTrue(Task.objects.filter(pk=self.old_task.pk).exists())
+        self.assertEqual(Task.objects.filter(project=self.project).count(), 1)
+        hook.assert_not_called()
+
+    @override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True)
+    def test_default_reimport_hook_remains_available_during_lifecycle_admission(self):
+        self.run_job()
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, ProjectReimport.Status.COMPLETED)
+        self.assertEqual(Task.objects.filter(project=self.project).count(), 2)
+
     def test_legacy_nonstream_worker_rolls_back_failed_commit(self):
         with patch('data_import.functions.flag_set', return_value=False), patch.object(
             ProjectSummary, 'update_data_columns', side_effect=RuntimeError('summary failed')

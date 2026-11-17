@@ -6,9 +6,14 @@ import traceback
 from typing import Callable, Optional
 
 from access_control.authorization import authorization
-from access_control.project_operations import MANAGE_TASKS, local_principal, lock_project_operation
+from access_control.project_operations import (
+    MANAGE_TASKS,
+    lifecycle_background_fence_enabled,
+    local_principal,
+    lock_project_operation,
+)
 from core.feature_flags import flag_set
-from core.utils.common import load_func
+from core.utils.common import empty, load_func
 from data_import.uploader import load_tasks_for_async_import_streaming
 from django.apps import apps
 from django.conf import settings
@@ -411,6 +416,11 @@ def _async_reimport_background_streaming(reimport, project, organization_id, use
 def _commit_streaming_reimport(reimport, project, organization_id, user, staged_batches):
     """Streaming version of reimport that processes tasks in batches to reduce memory usage"""
     try:
+        # An arbitrary post-commit hook is not enrolled in the project fence or
+        # durable outbox. Reject it before replacing any tasks, rather than
+        # execute unknown writes after a lifecycle transition.
+        if lifecycle_background_fence_enabled() and post_process_reimport is not empty:
+            raise ValidationError('Custom reimport post-processing is unavailable during lifecycle admission.')
         # Initialize counters
         total_task_count = 0
         total_annotation_count = 0
