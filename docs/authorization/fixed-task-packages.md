@@ -70,7 +70,7 @@ assignments remain eligible, and managers retain unavailable fixed members.
 
 | Project role | Visible scope | Actions |
 | --- | --- | --- |
-| Manager / creator | Full fixed membership, unavailable items, active assignment states and pending review counts | Create fixed list only |
+| Manager / creator | Full fixed membership, unavailable items, active assignment states and pending review counts | Create fixed list; optional API dispatch |
 | Annotator | Only packages containing own active assignments; rows/counts restricted to those assignments | Existing Editor link if EDIT is allowed |
 | Reviewer | Only packages containing pending, non-self submissions eligible for the existing review queue | Existing review queue if REVIEW is allowed |
 
@@ -99,10 +99,21 @@ deny it independently. Missing/unknown providers fail closed. No state is inferr
 from `is_draft` or `is_published`.
 
 #86 owns authoritative project states, transitions and the full operation matrix.
-This slice is not #86 completion. Batch dispatch, claim pools, load balancing,
-overlap allocation, priority/deadline enforcement and automatic overdue handling
-remain unavailable. No dispatch route is registered. Existing single-task
-assignment, submit/rework and review authorization remain authoritative.
+An additional, independently disabled `ANNOTATION_PACKAGE_DISPATCH_ENABLED`
+gate permits `POST /api/projects/{project}/task-packages/{package}/dispatch/`
+with a UUID `Idempotency-Key` and a single integer `assignee_id`. This API
+requires PostgreSQL, a current manager, an eligible project member and both
+`BATCH_ASSIGN` and `ASSIGN` policy operations. It locks the project and member
+identities, validates and locks every fixed task, then commits assignments and
+an idempotency receipt in one transaction. Any missing or moved member or
+already active assignment rejects the entire request. Retries return the original
+receipt even if an assignment was subsequently cancelled; they do not recreate
+work. Receipts follow project/package cascade deletion and their migration cannot
+be reversed while receipts exist. They are not an independent audit archive.
+
+Claim pools, load balancing, overlap allocation, priority/deadline enforcement,
+automatic overdue handling, and a dispatch UI remain unavailable. Existing
+single-task assignment, submit/rework and review authorization remain authoritative.
 
 ## Regression coverage
 
@@ -117,7 +128,8 @@ The bilingual React workspace reuses ApiProvider, i18n and existing work links.
 It clears stale rows on refresh failure, ignores disposed responses, and retries
 an out-of-range page once by its specific machine code. Creation retries retain
 the request key/body. `fixed-task-packages.cy.ts` covers real browser creation
-and manager/annotator/reviewer views in en-US and zh-CN, including no dispatch.
+and manager/annotator/reviewer views in en-US and zh-CN. The existing UI does not
+expose dispatch.
 
 The feature defaults off; retained-pilot activation and production deployment
 remain separate work. IAM recovery and Core business integration are out of scope.

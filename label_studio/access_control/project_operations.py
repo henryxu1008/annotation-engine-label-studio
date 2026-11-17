@@ -1,8 +1,8 @@
 """Project-first write fence and the versioned boundary for #86 operation policy.
 
 Call inside an atomic transaction, before locking tasks/assignments/drafts.
-Legacy mode preserves single-task workflows; it never enables batch dispatch
-or claims that the project has an authoritative lifecycle state.
+Legacy mode preserves single-task workflows. Batch dispatch requires its own
+explicit opt-in; legacy mode does not claim an authoritative lifecycle state.
 """
 
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ EDIT = 'edit'
 SUBMIT = 'submit'
 REVIEW = 'review'
 ASSIGN = 'assign'
+BATCH_ASSIGN = 'batch_assign'
 MANAGE_TASKS = 'manage_tasks'
 SYNC_STORAGE = 'sync_storage'
 ORGANIZE_WORK = 'organize_work'
@@ -94,6 +95,8 @@ class LegacyProjectOperationProvider:
         if getattr(settings, 'ANNOTATION_NER_ARBITRATION_ENABLED', False):
             operations = operations | {ORGANIZE_NER_ARBITRATION, ARBITRATE_NER}
         if getattr(settings, 'ANNOTATION_FIXED_PACKAGES_ENABLED', False):
+            if getattr(settings, 'ANNOTATION_PACKAGE_DISPATCH_ENABLED', False):
+                operations = operations | {BATCH_ASSIGN}
             return ProjectOperationPolicy('legacy-fixed-list-v1', 'legacy', operations | {ORGANIZE_WORK})
         return ProjectOperationPolicy('legacy-single-task-v1', 'legacy', operations)
 

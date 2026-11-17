@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestVersionDelete, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence, [switch]$TestWebhookRecovery, [switch]$TestWebhookMixed, [switch]$TestRqRecovery)
+param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestS3Fence, [switch]$TestVersionDelete, [switch]$TestEngineering, [switch]$TestExportFence, [switch]$TestImportFence, [switch]$TestNextTaskFence, [switch]$TestWebhookRecovery, [switch]$TestWebhookMixed, [switch]$TestRqRecovery, [switch]$TestPackageDispatch)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -34,8 +34,10 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable PostgreSQL did not become ready.' }
-    if (@($TestS3Fence, $TestVersionDelete, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
-    if ($TestEngineering) {
+    if (@($TestS3Fence, $TestVersionDelete, $TestEngineering, $TestExportFence, $TestImportFence, $TestNextTaskFence, $TestWebhookRecovery, $TestWebhookMixed, $TestRqRecovery, $TestPackageDispatch).Where({ $_ }).Count -gt 1) { throw 'Select only one test group.' }
+    if ($TestPackageDispatch) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider task_packages/tests/test_package_dispatch.py task_packages/tests/test_packages.py
+    } elseif ($TestEngineering) {
         docker exec $runner /opt/venv/bin/python -m pytest -q -x -p no:cacheprovider `
             projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_background_import.py `
             projects/tests/test_lifecycle_migration.py io_storages/tests/test_project_operation_fence.py `

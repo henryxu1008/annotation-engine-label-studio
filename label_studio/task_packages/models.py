@@ -31,3 +31,22 @@ class TaskPackageItem(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['package', 'original_task_id'], name='package_task_unique')]
+
+
+class TaskPackageDispatch(models.Model):
+    """Receipt of a committed request, not a live assignment projection."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    package = models.ForeignKey(TaskPackage, on_delete=models.CASCADE, related_name='dispatches')
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    assignee_id_snapshot = models.PositiveBigIntegerField()
+    actor_id_snapshot = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    assignment_ids = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['project', 'idempotency_key'], name='package_dispatch_key_unique')]

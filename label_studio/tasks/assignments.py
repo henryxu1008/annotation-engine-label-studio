@@ -1,4 +1,4 @@
-"""Shared single-assignment mutations; no batch dispatch endpoint is enabled."""
+"""Shared assignment eligibility and single-assignment mutations."""
 
 from access_control.authorization import authorization
 from access_control.project_operations import ASSIGN, SECURITY_CANCEL, lock_project_operation

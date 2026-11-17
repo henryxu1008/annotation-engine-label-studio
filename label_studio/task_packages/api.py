@@ -28,6 +28,7 @@ from tasks.models import Task
 from tasks.my_work import work_projects
 
 from .access import current_read_policy, fail, visible_packages
+from .dispatch import dispatch_package
 from .models import TaskPackage, TaskPackageItem
 from .progress import PackageWork, filter_states, requested_state
 
@@ -185,6 +186,29 @@ class PackageListAPI(PackageAPIBase):
                 ]
             )
         return Response({**package_metadata(package, 'manager'), 'replayed': False}, status=201)
+
+
+class PackageDispatchAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED:
+            raise NotFound()
+        if (not isinstance(request.data, dict) or set(request.data) != {'assignee_id'}
+                or type(request.data['assignee_id']) is not int or request.data['assignee_id'] < 1):
+            fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'Provide only a positive integer assignee_id.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        assignee_id = request.data['assignee_id']
+        receipt, replayed = dispatch_package(
+            project_id=pk, package_id=package_id, assignee_id=assignee_id, principal=principal, key=key,
+            request_hash=digest({'package_id': package_id, 'assignee_id': assignee_id}),
+        )
+        return Response({'dispatch_id': receipt.pk, 'package_id': receipt.package_id,
+                         'assignee_id': receipt.assignee_id_snapshot, 'assignment_ids': receipt.assignment_ids,
+                         'assignment_count': len(receipt.assignment_ids), 'replayed': replayed},
+                        status=200 if replayed else 201)
 
 
 class PackageDetailAPI(PackageAPIBase):
