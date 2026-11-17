@@ -19,6 +19,7 @@ from core.permissions import all_permissions
 
 from . import approved as service
 from .approved_models import ApprovedDatasetRelease as Release, ApprovedDatasetReleaseAttempt as Attempt
+from .lifecycle_fence import require_enrolled_export_effect
 
 
 class BoundedRangeReader(RangedFileReader):
@@ -310,6 +311,8 @@ class ApprovedExportAPI(GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         action = kwargs.get("action", "list")
+        if action in ("list", "retry"):
+            require_enrolled_export_effect()
         if action == "preview":
             normalized = service.normalize(self.body())
             rows, xml = service.selected_records(self.project, normalized, self.policy["source_namespace"])

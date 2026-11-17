@@ -13,6 +13,7 @@ from access_control.project_access import (
     managed_projects_for_user,
     require_project_manager,
 )
+from access_control.project_operations import MANAGE_TASKS, lock_project_operation
 from core.decorators import override_report_only_csp
 from core.feature_flags import flag_set
 from core.permissions import ViewClassPermission, all_permissions
@@ -48,6 +49,7 @@ from webhooks.utils import emit_webhooks_for_instance
 from label_studio.core.utils.common import load_func
 
 from .functions import (
+    _require_no_external_export_links,
     async_import_background,
     async_reimport_background,
     reformat_predictions,
@@ -283,9 +285,16 @@ class ImportAPI(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         task_instances = serializer.save(project_id=self.kwargs['pk'])
         project = get_managed_project_or_404(self.request, self.kwargs['pk'])
-        emit_webhooks_for_instance(
-            self.request.user.active_organization, project, WebhookAction.TASKS_CREATED, task_instances
-        )
+        organization = self.request.user.active_organization
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_task_created_webhooks
+
+            queue_task_created_webhooks(project, task_instances)
+        else:
+            transaction.on_commit(
+                lambda: emit_webhooks_for_instance(organization, project, WebhookAction.TASKS_CREATED, task_instances),
+                robust=True,
+            )
         return task_instances, serializer
 
     def sync_import(self, request, project, preannotated_from_fields, commit_to_project, return_task_ids):
@@ -331,31 +340,41 @@ class ImportAPI(generics.CreateAPIView):
                     )
 
         if commit_to_project:
-            # Immediately create project tasks and update project states and counters
-            tasks, serializer = self._save(parsed_data)
-            task_count = len(tasks)
-            annotation_count = len(serializer.db_annotations)
-            prediction_count = len(serializer.db_predictions)
+            with transaction.atomic():
+                principal, _ = resolve_actor(request)
+                locked_project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+                authorization.require(
+                    authorization.can_manage_project(principal, locked_project),
+                    'Project manager role is required to import tasks.',
+                )
+                if locked_project.label_config != project.label_config:
+                    raise ValidationError('Project label configuration changed during import; retry.')
+                project = locked_project
+                # Immediately create project tasks and update project states and counters
+                tasks, serializer = self._save(parsed_data)
+                task_count = len(tasks)
+                annotation_count = len(serializer.db_annotations)
+                prediction_count = len(serializer.db_predictions)
 
-            recalculate_stats_counts = {
-                'task_count': task_count,
-                'annotation_count': annotation_count,
-                'prediction_count': prediction_count,
-            }
+                recalculate_stats_counts = {
+                    'task_count': task_count,
+                    'annotation_count': annotation_count,
+                    'prediction_count': prediction_count,
+                }
 
-            # Update counters (like total_annotations) for new tasks and after bulk update tasks stats. It should be a
-            # single operation as counters affect bulk is_labeled update
-            project.update_tasks_counters_and_task_states(
-                tasks_queryset=tasks,
-                maximum_annotations_changed=False,
-                overlap_cohort_percentage_changed=False,
-                tasks_number_changed=True,
-                recalculate_stats_counts=recalculate_stats_counts,
-            )
-            logger.info('Tasks bulk_update finished (sync import)')
+                # Update counters (like total_annotations) for new tasks and after bulk update tasks stats. It should be a
+                # single operation as counters affect bulk is_labeled update
+                project.update_tasks_counters_and_task_states(
+                    tasks_queryset=tasks,
+                    maximum_annotations_changed=False,
+                    overlap_cohort_percentage_changed=False,
+                    tasks_number_changed=True,
+                    recalculate_stats_counts=recalculate_stats_counts,
+                )
+                logger.info('Tasks bulk_update finished (sync import)')
 
-            project.summary.update_data_columns(parsed_data)
-            # TODO: project.summary.update_created_annotations_and_labels
+                project.summary.update_data_columns(parsed_data)
+                # TODO: project.summary.update_created_annotations_and_labels
         else:
             # Do nothing - just output file upload ids for further use
             task_count = len(parsed_data)
@@ -519,11 +538,12 @@ class ImportPredictionsAPI(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         # check project permissions
         project = self.get_object()
-
-        # Use feature flag to control memory-efficient implementation rollout
-        if flag_set('fflag_fix_back_4620_memory_efficient_predictions_import_08012025_short', user=self.request.user):
-            return self._create_memory_efficient(project)
-        else:
+        principal, _ = resolve_actor(request)
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+            if flag_set('fflag_fix_back_4620_memory_efficient_predictions_import_08012025_short', user=self.request.user):
+                return self._create_memory_efficient(project)
             return self._create_legacy(project)
 
     def _create_memory_efficient(self, project):
@@ -590,7 +610,9 @@ class ImportPredictionsAPI(generics.CreateAPIView):
         # Update task counters for all affected tasks
         # Only pass the unique task IDs that were actually processed
         if all_task_ids:
-            start_job_async_or_sync(update_tasks_counters, Task.objects.filter(id__in=all_task_ids))
+            transaction.on_commit(lambda: start_job_async_or_sync(
+                update_tasks_counters, Task.objects.filter(id__in=all_task_ids)
+            ), robust=True)
 
         return Response({'created': total_created}, status=status.HTTP_201_CREATED)
 
@@ -662,7 +684,9 @@ class ImportPredictionsAPI(generics.CreateAPIView):
                 logger.error(f'Prediction validation failed ({len(validation_errors)} errors):\n{validation_errors}')
 
         predictions_obj = Prediction.objects.bulk_create(predictions, batch_size=settings.BATCH_SIZE)
-        start_job_async_or_sync(update_tasks_counters, Task.objects.filter(id__in=tasks_ids))
+        transaction.on_commit(lambda: start_job_async_or_sync(
+            update_tasks_counters, Task.objects.filter(id__in=tasks_ids)
+        ), robust=True)
         return Response({'created': len(predictions_obj)}, status=status.HTTP_201_CREATED)
 
 
@@ -677,36 +701,60 @@ class ReImportAPI(ImportAPI):
 
     def sync_reimport(self, project, file_upload_ids, files_as_tasks_list):
         start = time.time()
+        if not isinstance(file_upload_ids, list) or any(
+            isinstance(value, bool) or not isinstance(value, (int, str)) for value in file_upload_ids
+        ):
+            raise ValidationError('A list of file upload IDs is required.')
+        try:
+            requested_ids = {int(value) for value in file_upload_ids}
+        except (TypeError, ValueError, OverflowError):
+            raise ValidationError('Invalid file upload ID.')
+        if any(value < 1 for value in requested_ids):
+            raise ValidationError('Invalid file upload ID.')
+        source_config = project.label_config
+        source_files = dict(FileUpload.objects.filter(project=project, pk__in=requested_ids).values_list('pk', 'file'))
+        if set(source_files) != requested_ids:
+            raise ValidationError('Reimport files are missing or outside the project.')
         tasks, found_formats, data_columns = FileUpload.load_tasks_from_uploaded_files(
             project, file_upload_ids, files_as_tasks_list=files_as_tasks_list
         )
 
         with transaction.atomic():
+            principal, _ = resolve_actor(self.request)
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+            current_files = dict(
+                FileUpload.objects.select_for_update().filter(project=project, pk__in=requested_ids)
+                .order_by('pk').values_list('pk', 'file')
+            )
+            if current_files != source_files or project.label_config != source_config:
+                raise ValidationError('Reimport files or project configuration changed during staging.')
+            _require_no_external_export_links(project, file_upload_ids)
             project.remove_tasks_by_file_uploads(file_upload_ids)
             tasks, serializer = self._save(tasks)
-        duration = time.time() - start
+            duration = time.time() - start
 
-        task_count = len(tasks)
-        annotation_count = len(serializer.db_annotations)
-        prediction_count = len(serializer.db_predictions)
+            task_count = len(tasks)
+            annotation_count = len(serializer.db_annotations)
+            prediction_count = len(serializer.db_predictions)
 
-        # Update counters (like total_annotations) for new tasks and after bulk update tasks stats. It should be a
-        # single operation as counters affect bulk is_labeled update
-        project.update_tasks_counters_and_task_states(
-            tasks_queryset=tasks,
-            maximum_annotations_changed=False,
-            overlap_cohort_percentage_changed=False,
-            tasks_number_changed=True,
-            recalculate_stats_counts={
-                'task_count': task_count,
-                'annotation_count': annotation_count,
-                'prediction_count': prediction_count,
-            },
-        )
-        logger.info('Tasks bulk_update finished (sync reimport)')
+            # Update counters (like total_annotations) for new tasks and after bulk update tasks stats. It should be a
+            # single operation as counters affect bulk is_labeled update
+            project.update_tasks_counters_and_task_states(
+                tasks_queryset=tasks,
+                maximum_annotations_changed=False,
+                overlap_cohort_percentage_changed=False,
+                tasks_number_changed=True,
+                recalculate_stats_counts={
+                    'task_count': task_count,
+                    'annotation_count': annotation_count,
+                    'prediction_count': prediction_count,
+                },
+            )
+            logger.info('Tasks bulk_update finished (sync reimport)')
 
-        project.summary.update_data_columns(tasks)
-        # TODO: project.summary.update_created_annotations_and_labels
+            project.summary.update_data_columns(tasks)
+            # TODO: project.summary.update_created_annotations_and_labels
 
         return Response(
             {
@@ -863,12 +911,16 @@ class FileUploadListAPI(generics.mixins.ListModelMixin, generics.mixins.DestroyM
     def delete(self, request, *args, **kwargs):
         project = get_managed_project_or_404(self.request, self.kwargs['pk'])
         ids = self.request.data.get('file_upload_ids')
-        if ids is None:
-            deleted, _ = FileUpload.objects.filter(project=project).delete()
-        elif isinstance(ids, list):
-            deleted, _ = FileUpload.objects.filter(project=project, id__in=ids).delete()
-        else:
-            raise ValueError('"file_upload_ids" parameter must be a list of integers')
+        if ids is not None and not isinstance(ids, list):
+            raise ValidationError('"file_upload_ids" parameter must be a list of integers')
+        with transaction.atomic():
+            principal, _ = resolve_actor(request)
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            require_project_manager(request, project)
+            uploads = FileUpload.objects.filter(project=project)
+            if ids is not None:
+                uploads = uploads.filter(id__in=ids)
+            deleted, _ = uploads.delete()
         return Response({'deleted': deleted}, status=status.HTTP_200_OK)
 
 
@@ -928,6 +980,21 @@ class FileUploadAPI(generics.RetrieveUpdateDestroyAPIView):
         file_upload = self.get_object()
         require_project_manager(self.request, file_upload.project)
         return file_upload
+
+    def _lock_upload(self, instance):
+        principal, _ = resolve_actor(self.request)
+        project, _ = lock_project_operation(instance.project_id, principal, MANAGE_TASKS)
+        require_project_manager(self.request, project)
+        return generics.get_object_or_404(FileUpload.objects.select_for_update(), pk=instance.pk, project=project)
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            serializer.instance = self._lock_upload(serializer.instance)
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        with transaction.atomic():
+            self._lock_upload(instance).delete()
 
     def patch(self, *args, **kwargs):
         self._require_manager()

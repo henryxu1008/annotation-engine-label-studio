@@ -9,6 +9,7 @@ from access_control.project_access import (
     require_project_manager,
     visible_projects_for_actor,
 )
+from access_control.project_operations import EDIT, lifecycle_background_fence_enabled, lock_project_operation
 from asgiref.sync import async_to_sync, sync_to_async
 from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
@@ -27,6 +28,7 @@ from data_manager.serializers import (
     ViewSerializer,
 )
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils.decorators import method_decorator
@@ -37,6 +39,7 @@ from projects.models import Project
 from projects.serializers import ProjectSerializer
 from rest_framework import generics, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -455,7 +458,7 @@ class TaskListAPI(generics.ListCreateAPIView):
             page = [tasks_by_ids[_id] for _id in ids]
 
             # retrieve ML predictions if tasks don't have them
-            if not review and project.evaluate_predictions_automatically:
+            if not review and project.evaluate_predictions_automatically and not lifecycle_background_fence_enabled():
                 # TODO MM TODO this needs a discussion, because I'd expect
                 # people to retrieve manually instead on DM load, plus it
                 # will slow down initial DM load
@@ -468,7 +471,7 @@ class TaskListAPI(generics.ListCreateAPIView):
             serializer = self.task_serializer_class(page, many=True, context=context)
             return self.get_paginated_response(serializer.data)
         # all tasks
-        if project.evaluate_predictions_automatically:
+        if project.evaluate_predictions_automatically and not lifecycle_background_fence_enabled():
             evaluate_predictions(queryset.filter(predictions__isnull=True))
         queryset = Task.prepared.annotate_queryset(
             queryset, fields_for_evaluation=fields_for_evaluation, all_fields=all_fields, request=request
@@ -745,6 +748,16 @@ class ProjectActionsAPI(APIView):
         return Response(get_all_actions(request.user, project))
 
     def post(self, request):
+        if lifecycle_background_fence_enabled():
+            if request.GET.get('id') != 'next_task':
+                raise PermissionDenied('This action is unavailable while lifecycle admission is enabled.')
+            project_id = int_from_request(request.GET, 'project', 0)
+            with transaction.atomic():
+                lock_project_operation(project_id, resolve_principal(request), EDIT)
+                return self._perform_project_action(request)
+        return self._perform_project_action(request)
+
+    def _perform_project_action(self, request):
         from task_packages.scope import PackageScope
 
         pk = int_from_request(request.GET, 'project', 0)

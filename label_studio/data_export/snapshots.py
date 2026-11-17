@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit
 
 import rfc8785
+from access_control.project_operations import lifecycle_background_fence_enabled
 from data_import.models import FileUpload
 from django.conf import settings
 from django.db import transaction
@@ -23,6 +24,7 @@ from rest_framework.exceptions import APIException
 
 from . import approved as base
 from .approved_models import ApprovedDatasetReleaseAccessEvent as AccessEvent
+from .lifecycle_fence import require_enrolled_export_effect
 from .release_manifest import media_fields as profile_media_fields
 from .release_manifest import validator
 from .snapshot_models import ReleaseSnapshot as Snapshot
@@ -265,6 +267,7 @@ def inventory(artifacts):
 
 
 def create(release, principal, actor, key, body):
+    require_enrolled_export_effect()
     if (
         body != {}
         or not isinstance(body, dict)
@@ -301,6 +304,8 @@ def create(release, principal, actor, key, body):
 
 
 def dispatch(snapshot_id):
+    if lifecycle_background_fence_enabled():
+        return
     from .approved import api_queue
 
     try:
@@ -319,6 +324,7 @@ def dispatch(snapshot_id):
 
 
 def retry(snapshot, actor):
+    require_enrolled_export_effect()
     with transaction.atomic():
         current = Snapshot.objects.select_for_update().get(pk=snapshot.pk)
         identity(current, current.release.project)
@@ -341,6 +347,7 @@ def retry(snapshot, actor):
 
 
 def generate(snapshot_id, token):
+    require_enrolled_export_effect()
     with transaction.atomic():
         current = Snapshot.objects.select_for_update().get(pk=snapshot_id)
         if str(current.token) != token or current.state != "queued":

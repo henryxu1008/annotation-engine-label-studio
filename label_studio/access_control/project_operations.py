@@ -23,6 +23,8 @@ EDIT = 'edit'
 SUBMIT = 'submit'
 REVIEW = 'review'
 ASSIGN = 'assign'
+MANAGE_TASKS = 'manage_tasks'
+SYNC_STORAGE = 'sync_storage'
 ORGANIZE_WORK = 'organize_work'
 ORGANIZE_REVIEW = 'organize_review'
 ORGANIZE_SECOND_REVIEW = 'organize_second_review'
@@ -44,7 +46,17 @@ ARBITRATE_NER = 'arbitrate_ner'
 ORGANIZE_FIELD_ARBITRATION = 'organize_field_arbitration'
 ARBITRATE_FIELD = 'arbitrate_field'
 SECURITY_CANCEL = 'security_cancel'
-LEGACY_OPERATIONS = frozenset({READ_WORK, EDIT, SUBMIT, REVIEW, ASSIGN})
+LEGACY_OPERATIONS = frozenset({READ_WORK, EDIT, SUBMIT, REVIEW, ASSIGN, MANAGE_TASKS, SYNC_STORAGE})
+
+
+def lifecycle_background_fence_enabled():
+    """Unenrolled background effects cannot run during experimental admission."""
+    return bool(
+        getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False)
+        or getattr(settings, 'ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED', False)
+        or getattr(settings, 'ANNOTATION_PROJECT_OPERATION_PROVIDER', None)
+        == 'access_control.project_operations.LifecycleProjectOperationProvider'
+    )
 
 
 @dataclass(frozen=True)
@@ -86,11 +98,33 @@ class LegacyProjectOperationProvider:
         return ProjectOperationPolicy('legacy-single-task-v1', 'legacy', operations)
 
 
+class LifecycleProjectOperationProvider:
+    """Opt-in provider; not safe to enable until all write paths are fenced."""
+
+    def evaluate(self, project):
+        state = project.lifecycle_state
+        if state == 'legacy':
+            return LegacyProjectOperationProvider().evaluate(project)
+        if state == 'active':
+            operations = LegacyProjectOperationProvider().evaluate(project).allowed_operations
+        elif state == 'draft':
+            operations = frozenset({READ_WORK, MANAGE_TASKS})
+        elif state in {'paused', 'completed', 'archived'}:
+            operations = frozenset({READ_WORK})
+        else:
+            return ProjectOperationPolicy('lifecycle-v1', 'unknown', frozenset(), 'POLICY_UNAVAILABLE')
+        return ProjectOperationPolicy('lifecycle-v1', state, operations, f'PROJECT_{state.upper()}')
+
+
 def project_operation_policy(project):
     path = getattr(settings, 'ANNOTATION_PROJECT_OPERATION_PROVIDER', None)
     if not path:
         return ProjectOperationPolicy('unavailable-v1', 'unknown', frozenset(), 'POLICY_UNAVAILABLE')
     policy = import_string(path)().evaluate(project)
+    # Once an authoritative state exists, a legacy provider cannot be used as a
+    # rollback shortcut that silently reopens paused work on compatible code.
+    if getattr(project, 'lifecycle_state', 'legacy') != 'legacy' and getattr(policy, 'state', None) == 'legacy':
+        return ProjectOperationPolicy('provider-mismatch-v1', 'unknown', frozenset(), 'POLICY_UNAVAILABLE')
     if (
         not isinstance(policy, ProjectOperationPolicy)
         or not policy.version

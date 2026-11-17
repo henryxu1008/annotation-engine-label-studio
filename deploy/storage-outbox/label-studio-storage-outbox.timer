@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule Label Studio pending storage replay
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=label-studio-storage-outbox.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Replay Label Studio pending storage operations
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/label-studio/storage-outbox.env
+ExecStart=/usr/bin/docker compose --project-directory ${STORAGE_OUTBOX_COMPOSE_DIRECTORY} --file ${STORAGE_OUTBOX_COMPOSE_FILE} run --rm --no-deps -T app python3 /label-studio/label_studio/manage.py replay_storage_outbox --limit 50
+TimeoutStartSec=240

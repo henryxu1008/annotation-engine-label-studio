@@ -11,12 +11,24 @@ from users.models import User
 
 from label_studio.core.utils.common import load_func
 
+_SERVER_STORAGE_FIELDS = frozenset({'status', 'last_sync', 'last_sync_count', 'last_sync_job', 'traceback', 'meta'})
+
+
+def _reject_storage_state_override(serializer):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        supplied = set(serializer.initial_data) & _SERVER_STORAGE_FIELDS
+        if supplied:
+            raise serializers.ValidationError(
+                {name: 'This field is managed by the server.' for name in sorted(supplied)}
+            )
+
 
 class ImportStorageSerializer(serializers.ModelSerializer):
     type = serializers.ReadOnlyField(default=os.path.basename(os.path.dirname(__file__)))
     synchronizable = serializers.BooleanField(required=False, default=True)
 
     def validate(self, data):
+        _reject_storage_state_override(self)
         data = super(ImportStorageSerializer, self).validate(data)
         if settings.IMPORT_STORAGE_SERIALIZER_VALIDATE:
             validate_func = load_func(settings.IMPORT_STORAGE_SERIALIZER_VALIDATE)
@@ -31,6 +43,10 @@ class ImportStorageSerializer(serializers.ModelSerializer):
 class ExportStorageSerializer(serializers.ModelSerializer):
     type = serializers.ReadOnlyField(default=os.path.basename(os.path.dirname(__file__)))
     synchronizable = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, data):
+        _reject_storage_state_override(self)
+        return super().validate(data)
 
     class Meta:
         model = ExportStorage

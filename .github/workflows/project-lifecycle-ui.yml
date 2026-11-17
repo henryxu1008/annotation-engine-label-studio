@@ -1,0 +1,242 @@
+name: Project lifecycle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/apps/labelstudio/src/pages/Settings/**'
+      - 'web/apps/labelstudio/src/config/ApiConfig.js'
+      - 'web/libs/i18n/**'
+      - 'web/package.json'
+      - 'web/yarn.lock'
+      - 'web/apps/labelstudio-e2e/**'
+      - 'label_studio/access_control/**'
+      - 'label_studio/projects/**'
+      - 'label_studio/io_storages/**'
+      - 'label_studio/tasks/**'
+      - 'label_studio/webhooks/**'
+      - 'label_studio/data_import/**'
+      - 'label_studio/data_export/**'
+      - 'label_studio/data_manager/**'
+      - 'label_studio/labels_manager/**'
+      - 'label_studio/ml/**'
+      - 'label_studio/core/settings/**'
+      - 'scripts/issue86_ui_fixture.py'
+      - '.github/workflows/project-lifecycle-ui.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web/apps/labelstudio/src/pages/Settings/**'
+      - 'web/apps/labelstudio/src/config/ApiConfig.js'
+      - 'web/libs/i18n/**'
+      - 'web/package.json'
+      - 'web/yarn.lock'
+      - 'web/apps/labelstudio-e2e/**'
+      - 'label_studio/access_control/**'
+      - 'label_studio/projects/**'
+      - 'label_studio/io_storages/**'
+      - 'label_studio/tasks/**'
+      - 'label_studio/webhooks/**'
+      - 'label_studio/data_import/**'
+      - 'label_studio/data_export/**'
+      - 'label_studio/data_manager/**'
+      - 'label_studio/labels_manager/**'
+      - 'label_studio/ml/**'
+      - 'label_studio/core/settings/**'
+      - 'scripts/issue86_ui_fixture.py'
+      - '.github/workflows/project-lifecycle-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle-ui:
+    name: Lifecycle UI and bilingual catalogs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Install frontend dependencies
+        working-directory: web
+        run: yarn install --frozen-lockfile
+      - name: Test lifecycle UI and catalogs
+        working-directory: web
+        run: |
+          NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
+            apps/labelstudio/src/pages/Settings/LifecycleSettings.test.jsx \
+            apps/labelstudio/src/pages/Settings/LifecycleSettings.locale.test.jsx \
+            apps/labelstudio/src/pages/Settings/lifecycleState.test.js \
+            apps/labelstudio/src/pages/Settings/routeTitleKeys.test.js
+          yarn i18n:catalogs
+          yarn i18n:literals
+
+  lifecycle-backend:
+    name: Lifecycle backend regressions / ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgresql]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-issue86-password
+          POSTGRES_DB: issue86_backend_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DJANGO_SETTINGS_MODULE: core.settings.label_studio
+      DJANGO_DB: ${{ matrix.database }}
+      POSTGRE_HOST: 127.0.0.1
+      POSTGRE_NAME: issue86_backend_test
+      POSTGRE_USER: postgres
+      POSTGRE_PASSWORD: synthetic-issue86-password
+      SECRET_KEY: synthetic-issue86-secret
+      LOG_DIR: /tmp/issue86-backend-logs
+      COLLECT_ANALYTICS: 'false'
+      LATEST_VERSION_CHECK: 'false'
+      SENTRY_RATE: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install 'poetry==2.3.2'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          poetry install --with test
+          poetry run python label_studio/core/version.py
+      - name: Run lifecycle and storage regressions
+        working-directory: label_studio
+        run: |
+          poetry run pytest -q \
+            projects/tests/test_lifecycle_task_fence.py projects/tests/test_lifecycle_migration.py \
+            projects/tests/test_lifecycle_background_import.py io_storages/tests/test_project_operation_fence.py \
+            io_storages/tests/test_storage_admission.py io_storages/tests/test_webhook_outbox.py \
+            io_storages/tests/test_s3_version_provenance.py io_storages/tests/test_s3_delete_key_fence.py \
+            io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_legacy_iam_inventory.py \
+            io_storages/tests/test_s3_write_retry_policy.py io_storages/tests/test_upgrade_queue_inventory.py \
+            data_export/tests/test_api.py data_export/tests/test_lifecycle_worker_fence.py \
+            tests/webhooks/test_webhooks.py tests/data_import/test_streaming_import.py \
+            tasks/tests/test_project_operation_policy.py
+      - name: Run PostgreSQL release and snapshot fences
+        if: matrix.database == 'postgresql'
+        working-directory: label_studio
+        run: |
+          poetry run pytest -q \
+            data_export/tests/test_approved_exports.py::TestApprovedExports::test_lifecycle_admission_blocks_release_creation_and_retry \
+            data_export/tests/test_release_snapshots.py::TestReleaseSnapshots::test_lifecycle_admission_blocks_snapshot_creation_and_retry
+
+  lifecycle-browser:
+    name: Lifecycle browser journeys / PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-issue86-password
+          POSTGRES_DB: issue86_ui_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_ENVIRONMENT: '1'
+      ISSUE86_DISPOSABLE_UI_FIXTURE: '1'
+      DJANGO_SETTINGS_MODULE: core.settings.label_studio
+      DJANGO_DB: postgresql
+      POSTGRE_HOST: 127.0.0.1
+      POSTGRE_NAME: issue86_ui_test
+      POSTGRE_USER: postgres
+      POSTGRE_PASSWORD: synthetic-issue86-password
+      SECRET_KEY: synthetic-issue86-secret
+      LABEL_STUDIO_BASE_DATA_DIR: /tmp/issue86-ui-data
+      LOG_DIR: /tmp/issue86-ui-logs
+      SENTRY_DSN: ''
+      SENTRY_RATE: '0'
+      LATEST_VERSION_CHECK: 'false'
+      COLLECT_ANALYTICS: 'false'
+      DEBUG: 'true'
+      HOST: http://127.0.0.1:8080
+      CSRF_TRUSTED_ORIGINS: http://127.0.0.1:8080
+      ANNOTATION_STORAGE_ADMISSION_ENABLED: 'true'
+      ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED: 'true'
+      ANNOTATION_LIFECYCLE_PUBLIC_API_ENABLED: 'true'
+      ANNOTATION_PROJECT_OPERATION_PROVIDER: access_control.project_operations.LifecycleProjectOperationProvider
+      ISSUE86_E2E_URL: http://127.0.0.1:8080
+      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/label_studio
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install 'poetry==2.3.2'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          poetry install --with test
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: yarn
+          cache-dependency-path: web/yarn.lock
+      - name: Build frontend
+        working-directory: web
+        run: |
+          yarn install --frozen-lockfile
+          NX_DAEMON=false yarn ls:build
+      - name: Prepare isolated database and app
+        run: |
+          poetry run python label_studio/core/version.py
+          poetry run python label_studio/manage.py migrate --noinput
+          poetry run python label_studio/manage.py collectstatic --noinput
+          poetry run python scripts/issue86_ui_fixture.py > /tmp/issue86-ui-fixture.jsonl
+          python -c 'import json,os; lines=[line for line in open("/tmp/issue86-ui-fixture.jsonl") if line.startswith("ISSUE86_FIXTURE=")]; assert len(lines)==1; data=json.loads(lines[0].split("=",1)[1]); assert isinstance(data["project_id"],int) and data["project_id"]>0; open(os.environ["GITHUB_ENV"],"a").write("CYPRESS_issue86_project_id="+str(data["project_id"])+"\n")'
+          nohup poetry run python label_studio/manage.py runserver 127.0.0.1:8080 --noreload > /tmp/issue86-ui-server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/user/login/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo 'Synthetic lifecycle server did not start.' >&2
+          exit 1
+      - name: Run bilingual browser and authorization journeys
+        working-directory: web
+        run: yarn cypress run --project apps/labelstudio-e2e --config-file cypress.lifecycle.config.ts --browser electron --headless
