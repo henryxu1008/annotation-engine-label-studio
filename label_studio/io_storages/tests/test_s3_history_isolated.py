@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import boto3
 from botocore.exceptions import ClientError
 from django.test import SimpleTestCase
+from io_storages.s3.deletion_plan import describe_version_deletion
 from io_storages.s3.version_provenance import inspect_aws_deletion_history
 
 
@@ -96,7 +97,11 @@ class IsolatedS3HistoryTests(SimpleTestCase):
         old = put(b'old')
         current = put(b'current')
         self.assertEqual(inspect(current), 'current_with_other_object_versions')
+        plan = describe_version_deletion(inspect(current))
+        self.assertEqual(plan['visibility'], 'OLDER_OBJECT_MAY_BECOME_VISIBLE')
+        self.assertEqual(plan['automatic_execution'], 'BLOCKED')
         self.assertEqual(inspect(old), 'noncurrent')
+        self.assertEqual(describe_version_deletion(inspect(old))['automatic_execution'], 'BLOCKED')
         # A target-version DELETE without a marker exposes the old value.
         client.delete_object(Bucket=bucket, Key=key, VersionId=current)
         self.assertEqual(client.get_object(Bucket=bucket, Key=key)['Body'].read(), b'old')
@@ -106,6 +111,8 @@ class IsolatedS3HistoryTests(SimpleTestCase):
             inspect(current)
         replacement = put(b'replacement')
         self.assertEqual(inspect(old), 'noncurrent')
+        self.assertEqual(describe_version_deletion(inspect(old))['automatic_execution'], 'BLOCKED')
         client.delete_object(Bucket=bucket, Key=key, VersionId=old)
         self.assertEqual(client.get_object(Bucket=bucket, Key=key)['Body'].read(), b'replacement')
         self.assertEqual(inspect(replacement), 'current_without_other_object_versions')
+        self.assertEqual(describe_version_deletion(inspect(replacement))['automatic_execution'], 'BLOCKED')

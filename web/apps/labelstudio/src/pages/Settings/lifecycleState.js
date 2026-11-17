@@ -61,11 +61,22 @@ const canCancelS3Preflight = (entry) =>
 
 export const requiresVerifiedRecovery = (entry) =>
   (entry.state === "uncertain" && !canCancelS3Preflight(entry) && !supportsManualReconciliation(entry)) ||
+  (entry.state === "running" &&
+    entry.operation === "annotation_delete_pending" &&
+    entry.storage_model === "io_storages.s3exportstorage" &&
+    entry.can_recover_s3_delete_pre_effect !== true) ||
   (entry.state === "queued" &&
     entry.operation === "annotation_delete_pending" &&
     entry.storage_model !== "io_storages.localfilesexportstorage");
 
 export const resolutionFor = (entry) => {
+  if (
+    entry.can_recover_s3_delete_pre_effect === true &&
+    entry.storage_model === "io_storages.s3exportstorage" &&
+    entry.operation === "annotation_delete_pending" &&
+    entry.state === "running"
+  )
+    return "recover_s3_delete_pre_effect";
   if (
     entry.can_recover_webhook_pre_send === true &&
     entry.storage_model === "webhooks.webhook" &&

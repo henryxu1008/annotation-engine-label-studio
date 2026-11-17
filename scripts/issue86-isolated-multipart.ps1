@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$DependencyVenv)
+param([Parameter(Mandatory = $true)][string]$DependencyVenv, [switch]$TestHistory)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -29,9 +29,14 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Disposable object storage did not become ready.' }
-    docker exec $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
-        io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_multipart_isolated.py
-    if ($LASTEXITCODE -ne 0) { throw 'The isolated multipart inventory regressions failed.' }
+    if ($TestHistory) {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
+            io_storages/tests/test_s3_history_isolated.py::IsolatedS3HistoryTests::test_version_visibility_and_lost_response_reconciliation
+    } else {
+        docker exec $runner /opt/venv/bin/python -m pytest -q -p no:cacheprovider `
+            io_storages/tests/test_s3_multipart_inventory.py io_storages/tests/test_s3_multipart_isolated.py
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'The isolated S3 regressions failed.' }
 } finally {
     if ($created.Count -gt 0) {
         [array]::Reverse($created)

@@ -123,6 +123,12 @@ class StorageOperationResolveAPI(LifecycleBase):
             if data['attested'] is not False:
                 raise ValidationError('Recovery does not use an attestation.')
             recover_unstarted_storage(pk, operation_id, principal, reason=data['reason'])
+        elif data['action'] == 'recover_s3_delete_pre_effect':
+            if data['attested'] is not False:
+                raise ValidationError('Recovery does not use an attestation.')
+            from io_storages.s3.version_delete import recover_unsubmitted_delete
+
+            recover_unsubmitted_delete(pk, operation_id, principal, reason=data['reason'])
         elif data['action'] == 'confirm_deletion':
             reconcile_pending_deletion(
                 pk,
