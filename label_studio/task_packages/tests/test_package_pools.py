@@ -1,19 +1,21 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from io import StringIO
 from threading import Barrier, Event
 from unittest import skipUnless
 from unittest.mock import patch
 from uuid import uuid4
 
+from django.core.management import call_command
 from django.db import close_old_connections, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from projects.models import ProjectMember
 from rest_framework.test import APIClient, APITestCase
-from task_packages.models import TaskPackageClaim, TaskPackagePool
+from task_packages.models import TaskPackageClaim, TaskPackageOverdueNotice, TaskPackagePool
 from task_packages.tests.test_packages import PackageFixture
-from tasks.models import TaskAssignment
+from tasks.models import Task, TaskAssignment
 
 
 @skipUnless(connection.vendor == 'sqlite', 'This regression covers the unsupported SQLite backend.')
@@ -47,6 +49,8 @@ class TestUnsupportedPoolDatabase(PackageFixture, APITestCase):
 @override_settings(
     ANNOTATION_FIXED_PACKAGES_ENABLED=True,
     ANNOTATION_PACKAGE_CLAIM_ENABLED=True,
+    ANNOTATION_PACKAGE_DISPATCH_ENABLED=True,
+    ANNOTATION_PACKAGE_ADVANCED_ENABLED=True,
     ANNOTATION_PROJECT_OPERATION_PROVIDER='access_control.project_operations.LifecycleProjectOperationProvider',
 )
 class TestPackagePools(PackageFixture, TransactionTestCase):
@@ -112,6 +116,14 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
             assert self.claim().status_code == 404
             assert self.client.get(f'{self.url}claim-pools/').status_code == 404
         assert not TaskAssignment.objects.exists() and not TaskPackageClaim.objects.exists()
+
+    def test_advanced_operations_are_disabled_until_all_workers_are_upgraded(self):
+        assert self.configure().status_code == 200
+        with override_settings(ANNOTATION_PACKAGE_ADVANCED_ENABLED=False):
+            url = f'{self.url}{self.package_id}/balance/'
+            assert self.client.post(url, {}, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())).status_code == 404
+            assert self.configure(expected_revision=1, priority=4).status_code == 404
+        assert not TaskAssignment.objects.exists()
 
     def test_deadline_is_enforced_and_does_not_cancel_existing_work(self):
         assert self.configure(due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code == 200
@@ -204,3 +216,166 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
         with self.assertRaisesRegex(RuntimeError, 'pool configuration or claims'):
             MigrationExecutor(connection).migrate([('task_packages', '0002_taskpackagedispatch')])
         assert TaskPackagePool.objects.count() == 1
+
+    def test_reopen_requires_cancelled_original_and_replays_history_safely(self):
+        assert self.configure().status_code == 200
+        claim_key = uuid4()
+        assert self.claim(key=claim_key).status_code == 201
+        pool = TaskPackagePool.objects.get(package_id=self.package_id)
+        original_claim_id = pool.claim.pk
+        url = f'{self.url}{self.package_id}/reopen/'
+        key = uuid4()
+        body = {'expected_revision': pool.revision, 'claim_id': original_claim_id}
+        assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=str(key)).status_code == 409
+        for item in TaskAssignment.objects.all():
+            item.cancel()
+        first = self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=str(key))
+        assert first.status_code == 200, first.content
+        assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=str(key)).json()['replayed']
+        new_claim = self.claim(self.other)
+        assert new_claim.status_code == 201, new_claim.content
+        old = self.claim(key=claim_key)
+        assert old.status_code == 200 and old.json()['released'] is True
+        replay = self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=str(key))
+        assert replay.status_code == 200 and TaskPackageClaim.objects.get().actor_id_snapshot == self.other.pk
+
+    def test_reopen_rolls_back_history_on_failure(self):
+        assert self.configure().status_code == 200
+        assert self.claim().status_code == 201
+        pool = TaskPackagePool.objects.get(package_id=self.package_id)
+        for item in TaskAssignment.objects.all():
+            item.cancel()
+        with patch('task_packages.pools.TaskPackageClaim.delete', side_effect=RuntimeError('failure')):
+            response = self.client.post(
+                f'{self.url}{self.package_id}/reopen/',
+                {'expected_revision': pool.revision, 'claim_id': pool.claim.pk},
+                format='json',
+                HTTP_IDEMPOTENCY_KEY=str(uuid4()),
+            )
+        assert response.status_code == 500
+        assert TaskPackageClaim.objects.count() == 1 and not pool.claim_history.exists()
+
+    def test_balanced_assignment_uses_current_load_and_is_idempotent(self):
+        assert self.configure().status_code == 200
+        extra_task = Task.objects.create(project=self.project, data={})
+        self.assignment(task=extra_task, user=self.annotator)
+        key = uuid4()
+        url = f'{self.url}{self.package_id}/balance/'
+        first = self.client.post(url, {}, format='json', HTTP_IDEMPOTENCY_KEY=str(key))
+        assert first.status_code == 201, first.content
+        assert first.json()['assignee_id'] == self.other.pk
+        second = self.client.post(url, {}, format='json', HTTP_IDEMPOTENCY_KEY=str(key))
+        assert second.status_code == 200 and second.json()['replayed']
+        assert TaskAssignment.objects.count() == 4
+        self.client.force_authenticate(self.annotator)
+        assert self.client.get(f'{self.url}claim-pools/').json()['results'] == []
+
+    def test_discovery_prioritizes_higher_priority_and_old_clients_preserve_it(self):
+        assert self.configure(priority=9).status_code == 200
+        assert self.configure(expected_revision=1).status_code == 200
+        assert TaskPackagePool.objects.get(package_id=self.package_id).priority == 9
+        second = self.create(task_ids=[self.tasks[0].pk])
+        other_id = second.json()['id']
+        self.pool_url = f'{self.url}{other_id}/pool/'
+        assert self.configure(priority=30).status_code == 200
+        self.client.force_authenticate(self.annotator)
+        rows = self.client.get(f'{self.url}claim-pools/').json()['results']
+        assert [row['priority'] for row in rows] == [30, 9]
+
+    def test_overdue_notice_is_durable_scoped_and_reconciled_idempotently(self):
+        assert self.configure(due_at=None).status_code == 200
+        assert self.claim().status_code == 201
+        assert (
+            self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code
+            == 200
+        )
+        url = f'{self.url}overdue-notices/'
+        self.client.force_authenticate(self.other)
+        assert self.client.post(url, {}, format='json').json()['results'] == []
+        self.client.force_authenticate(self.annotator)
+        first = self.client.post(url, {}, format='json')
+        assert first.status_code == 200, first.content
+        assert first.json()['results'][0]['overdue_count'] == 3
+        assert self.client.post(url, {}, format='json').json()['results'][0]['id'] == first.json()['results'][0]['id']
+        assert TaskPackageOverdueNotice.objects.count() == 1
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+        assert self.client.post(url, {}, format='json').status_code in (403, 404)
+        assert TaskPackageOverdueNotice.objects.count() == 1
+
+    def test_notice_failure_rolls_back_without_losing_existing_claim(self):
+        assert self.configure(due_at=None).status_code == 200
+        assert self.claim().status_code == 201
+        assert (
+            self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code
+            == 200
+        )
+        self.client.force_authenticate(self.annotator)
+        with patch(
+            'task_packages.api.TaskPackageOverdueNotice.objects.get_or_create', side_effect=RuntimeError('failure')
+        ):
+            assert self.client.post(f'{self.url}overdue-notices/', {}, format='json').status_code == 500
+        assert not TaskPackageOverdueNotice.objects.exists() and TaskPackageClaim.objects.count() == 1
+
+    def test_scheduled_reconciliation_is_idempotent_and_skips_revoked_users(self):
+        assert self.configure(due_at=None).status_code == 200
+        assert self.claim().status_code == 201
+        assert (
+            self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code
+            == 200
+        )
+        out = StringIO()
+        call_command('reconcile_package_overdue', limit=1, stdout=out)
+        assert out.getvalue().strip() == 'next_after='
+        assert TaskPackageOverdueNotice.objects.count() == 1
+        call_command('reconcile_package_overdue', limit=1, stdout=StringIO())
+        assert TaskPackageOverdueNotice.objects.count() == 1
+        ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+        call_command('reconcile_package_overdue', limit=1, stdout=StringIO())
+        assert TaskPackageOverdueNotice.objects.count() == 1
+
+    def test_concurrent_reopen_only_archives_once(self):
+        assert self.configure().status_code == 200
+        assert self.claim().status_code == 201
+        pool = TaskPackagePool.objects.get(package_id=self.package_id)
+        for item in TaskAssignment.objects.all():
+            item.cancel()
+        body = {'expected_revision': pool.revision, 'claim_id': pool.claim.pk}
+        barrier = Barrier(2)
+
+        def worker(_):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(self.manager)
+                barrier.wait(timeout=10)
+                return client.post(
+                    f'{self.url}{self.package_id}/reopen/', body, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())
+                ).status_code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(worker, range(2)))
+        assert sorted(results) == [200, 409], results
+        assert pool.claim_history.count() == 1 and not TaskPackageClaim.objects.exists()
+
+    def test_concurrent_balancers_do_not_duplicate_work(self):
+        assert self.configure().status_code == 200
+        barrier = Barrier(2)
+
+        def worker(_):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(self.manager)
+                barrier.wait(timeout=10)
+                return client.post(
+                    f'{self.url}{self.package_id}/balance/', {}, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())
+                ).status_code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(worker, range(2)))
+        assert sorted(results) == [201, 409], results
+        assert TaskAssignment.objects.count() == 3

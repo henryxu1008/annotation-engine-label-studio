@@ -20,7 +20,7 @@ from access_control.project_operations import (
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from projects.models import Project, ProjectMember
 from rest_framework import generics, serializers
@@ -32,8 +32,8 @@ from tasks.my_work import annotate_assignment_work, work_projects
 
 from .access import current_read_policy, fail, visible_packages
 from .dispatch import dispatch_package
-from .models import TaskPackage, TaskPackageItem, TaskPackagePool
-from .pools import claim_pool, configure_pool
+from .models import TaskPackage, TaskPackageItem, TaskPackageOverdueNotice, TaskPackagePool
+from .pools import balanced_dispatch, claim_pool, configure_pool, postgres_required, reopen_pool
 from .progress import PackageWork, filter_states, requested_state
 
 
@@ -63,15 +63,22 @@ class PoolConfiguration(serializers.Serializer):
     candidate_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), min_length=1, max_length=100)
     due_at = serializers.DateTimeField(allow_null=True)
     enabled = serializers.BooleanField()
+    priority = serializers.IntegerField(min_value=0, max_value=100, required=False)
 
     def to_internal_value(self, data):
-        if not isinstance(data, dict) or set(data) != set(self.fields):
+        if (
+            not isinstance(data, dict)
+            or set(data) - set(self.fields)
+            or not {'expected_revision', 'candidate_ids', 'due_at', 'enabled'} <= set(data)
+        ):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'All pool configuration fields are required.')
         due = data.get('due_at')
         if due is not None and (not isinstance(due, str) or not re.search(r'(Z|[+-]\d\d:\d\d)$', due)):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Deadline must include a UTC offset.')
         if type(data['expected_revision']) is not int or type(data['enabled']) is not bool:
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid revision or enabled value.')
+        if 'priority' in data and type(data['priority']) is not int:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Priority must be an integer.')
         ids = data['candidate_ids']
         if not isinstance(ids, list) or any(type(value) is not int for value in ids) or len(ids) != len(set(ids)):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'Candidate IDs must be distinct positive integers.')
@@ -272,6 +279,9 @@ class PackagePoolAPI(PackageAPIBase):
                 'candidate_ids': list(pool.candidates.order_by('pk').values_list('pk', flat=True)) if pool else [],
                 'due_at': pool.due_at if pool else None,
                 'claimed': hasattr(pool, 'claim') if pool else False,
+                'claim_id': pool.claim.pk if pool and hasattr(pool, 'claim') else None,
+                'priority': pool.priority if pool else 0,
+                'advanced_enabled': settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED,
                 'overdue_count': overdue.get(pool.pk, 0) if pool else 0,
             }
         )
@@ -282,11 +292,14 @@ class PackagePoolAPI(PackageAPIBase):
             raise NotFound()
         serializer = PoolConfiguration(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if 'priority' in serializer.validated_data and not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED:
+            raise NotFound()
         pool = configure_pool(project_id=pk, package_id=package_id, principal=principal, **serializer.validated_data)
         return Response(
             {
                 'revision': pool.revision,
                 'enabled': pool.enabled,
+                'priority': pool.priority,
                 'due_at': pool.due_at,
                 'candidate_ids': sorted(serializer.validated_data['candidate_ids']),
             }
@@ -321,13 +334,17 @@ class AvailablePoolsAPI(PackageAPIBase):
             raise NotFound()
         if role not in ('annotator', 'manager'):
             raise PermissionDenied()
+        occupied = TaskAssignment.objects.filter(
+            task__package_items__package_id=OuterRef('package_id'), status__in=TaskAssignment.ACTIVE_STATUSES
+        )
         pools = (
             TaskPackagePool.objects.filter(
                 package__project=project, candidates=actor, package__project_id__in=work_projects(actor, [role])
             )
-            .filter(Q(enabled=True, claim__isnull=True) | Q(claim__actor=actor))
+            .annotate(occupied=Exists(occupied))
+            .filter(Q(enabled=True, claim__isnull=True, occupied=False) | Q(claim__actor=actor))
             .select_related('package', 'claim')
-            .order_by('pk')
+            .order_by('-priority', 'pk')
         )
         page = self.paginate_queryset(pools)
         now = timezone.now()
@@ -338,7 +355,8 @@ class AvailablePoolsAPI(PackageAPIBase):
                 candidates=actor,
                 package__project_id__in=work_projects(actor, [role]),
             )
-            .filter(Q(enabled=True, claim__isnull=True) | Q(claim__actor=actor))
+            .annotate(occupied=Exists(occupied))
+            .filter(Q(enabled=True, claim__isnull=True, occupied=False) | Q(claim__actor=actor))
             .values_list('pk', flat=True)
         )
         if current != {pool.pk for pool in page} or authorization.project_role(principal, project) != role:
@@ -349,6 +367,7 @@ class AvailablePoolsAPI(PackageAPIBase):
                     'package_id': pool.package_id,
                     'name': pool.package.name,
                     'due_at': pool.due_at,
+                    'priority': pool.priority,
                     'claimed': hasattr(pool, 'claim'),
                     'deadline_passed': bool(pool.due_at and pool.due_at <= now),
                     'overdue_count': overdue.get(pool.pk, 0),
@@ -375,16 +394,130 @@ class PackageClaimAPI(PackageAPIBase):
             key = UUID(request.headers.get('Idempotency-Key', ''))
         except (ValueError, AttributeError):
             fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
-        claim, replayed = claim_pool(project_id=pk, package_id=package_id, principal=principal, key=key)
+        claim, replayed, released = claim_pool(project_id=pk, package_id=package_id, principal=principal, key=key)
         return Response(
             {
                 'package_id': package_id,
                 'assignment_ids': claim.assignment_ids,
                 'assignment_count': len(claim.assignment_ids),
                 'replayed': replayed,
+                'released': released,
             },
             status=200 if replayed else 201,
         )
+
+
+class PackageReopenAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED:
+            raise NotFound()
+        data = request.data
+        if (
+            not isinstance(data, dict)
+            or set(data) != {'expected_revision', 'claim_id'}
+            or type(data['expected_revision']) is not int
+            or data['expected_revision'] < 1
+            or type(data['claim_id']) is not int
+            or data['claim_id'] < 1
+        ):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Provide the current revision and claim ID.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        history, replayed = reopen_pool(
+            project_id=pk,
+            package_id=package_id,
+            principal=principal,
+            expected_revision=data['expected_revision'],
+            claim_id=data['claim_id'],
+            key=key,
+        )
+        return Response({'claim_id': history.original_claim_id, 'replayed': replayed})
+
+
+class PackageBalancedDispatchAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if (
+            not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            or not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+        ):
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No allocation fields are accepted.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        receipt, replayed = balanced_dispatch(
+            project_id=pk,
+            package_id=package_id,
+            principal=principal,
+            key=key,
+            request_hash=digest({'package_id': package_id, 'mode': 'balanced'}),
+        )
+        return Response(
+            {
+                'dispatch_id': receipt.pk,
+                'assignee_id': receipt.assignee_id_snapshot,
+                'assignment_ids': receipt.assignment_ids,
+                'assignment_count': len(receipt.assignment_ids),
+                'replayed': replayed,
+            },
+            status=200 if replayed else 201,
+        )
+
+
+class PackageOverdueNoticeAPI(PackageAPIBase):
+    def post(self, request, pk):
+        principal, _, _, _, _ = self.context(request, pk, filters=('after',))
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No notification fields are accepted.')
+        after = request.query_params.get('after', '0')
+        if not after.isdigit() or len(after) > 18:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid notification cursor.')
+        postgres_required()
+        with transaction.atomic():
+            project, actor = lock_project_operation(pk, principal, READ_WORK)
+            if authorization.project_role(principal, project) not in ('annotator', 'manager'):
+                raise PermissionDenied()
+            pools = list(
+                TaskPackagePool.objects.filter(
+                    package__project=project, claim__actor=actor, due_at__lte=timezone.now(), pk__gt=int(after)
+                )
+                .select_related('claim', 'package')
+                .order_by('pk')[:51]
+            )
+            page, has_next = pools[:50], len(pools) > 50
+            counts = overdue_counts(page, project)
+            notices = []
+            for pool in page:
+                count = counts.get(pool.pk, 0)
+                if not count:
+                    continue
+                notice, _ = TaskPackageOverdueNotice.objects.get_or_create(
+                    pool=pool,
+                    claim_id_snapshot=pool.claim.pk,
+                    due_at=pool.due_at,
+                    defaults={'recipient': actor, 'overdue_count': count},
+                )
+                if notice.recipient_id != actor.pk:
+                    raise PermissionDenied()
+                notices.append(
+                    {
+                        'id': notice.pk,
+                        'package_id': pool.package_id,
+                        'name': pool.package.name,
+                        'due_at': pool.due_at,
+                        'overdue_count': count,
+                    }
+                )
+        return Response({'results': notices, 'next_after': page[-1].pk if has_next else None})
 
 
 class PackageDetailAPI(PackageAPIBase):

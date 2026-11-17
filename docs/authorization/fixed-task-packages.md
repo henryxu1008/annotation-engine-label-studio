@@ -125,6 +125,25 @@ An existing active assignment on any member rejects the whole claim. Later
 manager-directed overlapping assignments remain possible through the existing
 assignment APIs; the pool does not globally reserve task IDs forever.
 
+With `ANNOTATION_PACKAGE_ADVANCED_ENABLED` separately enabled, managers may
+set priority 0–100 and explicitly request balanced assignment of the whole
+package to the eligible candidate with the fewest active project assignments
+(ties use the lowest user ID). This is an on-demand decision, not a background
+rebalance; the decision and assignment are transactionally recorded. Discovery
+sorts higher-priority pools first. Managers can reopen a claimed pool only
+after each original assignment can be verified as cancelled and the package has
+no active assignments. The immutable historical receipt remains bound to the
+original principal and idempotency key; retries return `released`, and a stale
+reopen retry cannot release a subsequent claim. Cancellation itself continues
+to use the existing assignment API and version fencing.
+
+The advanced flag defaults off. All web/API and worker processes must be
+upgraded and old processes drained before enabling it: an older claim endpoint
+does not know about historical receipts and cannot safely honor old retries
+after a reopen. This code alone cannot verify deployment-wide process isolation.
+Rollback of the new migrations refuses any nonempty pool, preventing partial
+loss of priority or historical receipts.
+
 The deadline closes new claims and marks active claimed assignments still in
 assigned, in-progress, rework, or conflict state as overdue. Submission and
 approval are not considered overdue annotation work. Expiry neither cancels
@@ -135,10 +154,19 @@ pool-created assignments rather than direct dispatch. Pool configuration and
 claim receipts follow package deletion and must not be treated as an independent
 audit archive; migration rollback refuses to discard nonempty pools.
 
-The existing task-package workspace offers managers assignment and pool
-configuration, and offers eligible users pool discovery and claiming. The UI
-accepts project user IDs; a member picker and automated load balancing, claim
-reservations, priorities and automatic overdue notifications remain unavailable.
+When an authenticated recipient opens the pool workspace, a bounded,
+cursor-paginated reconciliation transaction creates idempotent, persistent
+in-app overdue notices and returns only currently visible, still-overdue work.
+It does not send email, push messages, or proactively notify offline users;
+the bounded `reconcile_package_overdue --after <cursor> --limit <n>` command
+can be scheduled by operators to create inbox records while users are away,
+but no deployment scheduler is installed by this change. Start each sweep at
+zero and continue with `next_after` until empty; rerunning a page is idempotent.
+The existing task-package
+workspace offers a paginated project-member picker, assignment and pool
+configuration, and eligible users pool discovery and claiming. Automatic
+background balancing, claim reservations, and external overdue delivery remain
+unavailable.
 Existing single-task assignment, submit/rework and review authorization remain authoritative.
 
 ## Regression coverage
