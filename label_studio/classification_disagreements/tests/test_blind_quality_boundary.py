@@ -763,7 +763,7 @@ class TestBlindQualityBoundary(APITestCase):
             assert self.client.post(url, [1, 2], format='json').status_code == 400
             assert self.client.post(url, {**token, 'result': [], 'task': self.task.pk}, format='json').status_code == 400
             assert self.client.post(url, {**token, 'result': [], 'parent_annotation': 1}, format='json').status_code == 400
-            with patch('classification_disagreements.blind_editor_writes.issue_resource_handle',
+            with patch('classification_disagreements.blind_editor_writes._issue_for_locked_assignment',
                        side_effect=NotFound('Work is unavailable.')):
                 assert self.client.post(url, {**token, 'result': []}, format='json').status_code == 404
             assert not AnnotationDraft.objects.filter(assignment=self.assignment).exists()

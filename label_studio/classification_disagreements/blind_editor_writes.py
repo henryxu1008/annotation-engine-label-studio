@@ -13,8 +13,7 @@ from rest_framework.exceptions import APIException, NotFound, ValidationError
 from tasks.api import AnnotationAPI, AnnotationDraftAPI, AnnotationDraftListAPI, AnnotationsListAPI
 
 from .blind_participant_projection import sensitive_nonmanager
-from .blind_resource_handles import issue_resource_handle, resolve_resource_handle
-from .blind_task_handles import resolve_handle
+from .blind_resource_handles import _issue_for_locked_assignment, resolve_resource_handle
 
 
 class BlindWriteMixin:
@@ -50,6 +49,7 @@ class BlindWriteMixin:
         ).first()
         if record is None:
             raise NotFound('Work is unavailable.')
+        self.blind_record = record
         project, _ = lock_project_operation(record.project_id_frozen, self.blind_principal, READ_WORK)
         if not sensitive_nonmanager(project, self.blind_principal):
             raise NotFound('Work is unavailable.')
@@ -122,10 +122,23 @@ class BlindWriteMixin:
     def _project_response(self, response, kind):
         if not 200 <= response.status_code < 300 or response.data is None:
             return response
+        from tasks.models import TaskAssignment
+        from .blind_task_handles import _lock_bounded_task, validate_locked_handle
+
         raw = response.data
-        resource = issue_resource_handle(principal=self.blind_principal, assignment_id=self.blind_assignment.pk,
-                                         kind=kind, object_id=raw['id'])
-        current = resolve_handle(principal=self.blind_principal, task_handle=self.blind_task_handle)
+        project = self.blind_assignment.project
+        task = _lock_bounded_task(project_id=project.pk, task_id=self.blind_assignment.task_id)
+        current = TaskAssignment.objects.select_for_update().filter(
+            pk=self.blind_assignment.pk, task=task, project=project,
+            assignee_id=self.blind_principal.local_user_id, status__in=TaskAssignment.ACTIVE_STATUSES,
+        ).first()
+        if current is None:
+            raise NotFound('Work is unavailable.')
+        task.project = project
+        current.task, current.project = task, project
+        validate_locked_handle(principal=self.blind_principal, record=self.blind_record, assignment=current)
+        resource = _issue_for_locked_assignment(principal=self.blind_principal, assignment=current,
+                                                kind=kind, object_id=raw['id'])
         fields = ('result', 'was_cancelled') if kind == 'annotation' else ('result', 'revision', 'was_postponed')
         response.data = {key: raw[key] for key in fields if key in raw}
         response.data.update({'id': resource.handle, 'task': self.blind_task_handle,

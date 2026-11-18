@@ -476,6 +476,10 @@ epoch fence before locking a task. The `lock_handle_for_write` check validates
 the locked assignment once, including the full quality proof where applicable;
 the enclosing editor adapter still has its own entry and response checks. This
 does not yet make the evidence or timing of ordinary and quality reads uniform.
+After a write, the adapter re-locks the bounded task and current assignment,
+revalidates the same immutable handle, and issues the response resource under
+those locks. A failed projection rolls back the write; it does not turn a
+previously validated handle into lasting authorization.
 
 The bounded reads do not eliminate the timing side channel. On an isolated
 PostgreSQL synthetic fixture, 14 warm paired API reads after two warm-ups had
