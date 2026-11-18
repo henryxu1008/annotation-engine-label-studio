@@ -1,5 +1,5 @@
 # Explicit opt-in; set all five flags to true only after old API and worker
-# processes are upgraded and drained. This file does not enable the service by default.
+# processes are upgraded and drained. This file does not start a worker.
 services:
   app:
     environment:
@@ -8,17 +8,3 @@ services:
       ANNOTATION_PACKAGE_DISPATCH_ENABLED: ${ANNOTATION_PACKAGE_DISPATCH_ENABLED:-false}
       ANNOTATION_PACKAGE_ADVANCED_ENABLED: ${ANNOTATION_PACKAGE_ADVANCED_ENABLED:-false}
       ANNOTATION_PACKAGE_AUTOMATION_ENABLED: ${ANNOTATION_PACKAGE_AUTOMATION_ENABLED:-false}
-  package-automation:
-    extends:
-      file: docker-compose.yml
-      service: app
-    profiles: ["package-automation"]
-    stdin_open: false
-    tty: false
-    environment:
-      ANNOTATION_FIXED_PACKAGES_ENABLED: ${ANNOTATION_FIXED_PACKAGES_ENABLED:-false}
-      ANNOTATION_PACKAGE_CLAIM_ENABLED: ${ANNOTATION_PACKAGE_CLAIM_ENABLED:-false}
-      ANNOTATION_PACKAGE_DISPATCH_ENABLED: ${ANNOTATION_PACKAGE_DISPATCH_ENABLED:-false}
-      ANNOTATION_PACKAGE_ADVANCED_ENABLED: ${ANNOTATION_PACKAGE_ADVANCED_ENABLED:-false}
-      ANNOTATION_PACKAGE_AUTOMATION_ENABLED: ${ANNOTATION_PACKAGE_AUTOMATION_ENABLED:-false}
-    command: ["python3", "/label-studio/label_studio/manage.py", "run_package_automation"]

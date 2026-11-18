@@ -30,6 +30,7 @@
   "noticeFailed": "逾期提醒刷新失败，请重新加载重试。",
   "moreNotices": "加载更多逾期提醒",
   "poolSave": "保存领取设置",
+  "poolAllocated": "已分配给你",
   "poolReload": "重新加载",
   "poolInvalid": "请输入不重复的正整数用户 ID 和有效截止时间。",
   "poolLoadFailed": "无法加载领取设置或可领取任务包，请重新加载。",

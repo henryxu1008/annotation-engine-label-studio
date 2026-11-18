@@ -253,6 +253,24 @@ class TestPackageAutomation(PackageFixture, TransactionTestCase):
         call_command('run_package_automation', once=True, stdout=StringIO())
         assert TaskPackageOverdueNotice.objects.count() == 1
 
+    def test_automatic_allocation_produces_recoverable_overdue_notice(self):
+        assert self.configure().status_code == 200
+        assert scan_allocations()['allocated'] == 1
+        pool = TaskPackagePool.objects.get(package_id=self.package_id)
+        assert pool.allocation_id is not None
+        assert self.configure(
+            expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()
+        ).status_code == 200
+        with patch('task_packages.automation.call_command', side_effect=RuntimeError('failure')):
+            with self.assertRaises(CommandError):
+                call_command('run_package_automation', once=True, stdout=StringIO())
+        assert not TaskPackageOverdueNotice.objects.exists()
+        call_command('run_package_automation', once=True, stdout=StringIO())
+        call_command('run_package_automation', once=True, stdout=StringIO())
+        notice = TaskPackageOverdueNotice.objects.get()
+        assert notice.dispatch_id_snapshot == pool.allocation_id
+        assert notice.recipient_id == pool.allocation.assignee_id and notice.overdue_count == 3
+
     def test_priority_order_and_cursor_are_stable(self):
         assert self.configure(priority=1).status_code == 200
         task = Task.objects.create(project=self.project, data={})

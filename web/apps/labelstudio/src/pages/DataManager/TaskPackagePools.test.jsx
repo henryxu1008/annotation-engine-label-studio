@@ -17,6 +17,51 @@ const mount = (element, locale) => {
 };
 beforeEach(() => mockCallApi.mockReset());
 
+it.each(["en-US", "zh-CN"])("shows an automatically assigned pool in %s", async (locale) => {
+  mockCallApi.mockImplementation((name) =>
+    Promise.resolve(
+      name === "reconcilePackageOverdueNotices"
+        ? { results: [], next_after: null }
+        : {
+            results: [{ package_id: 7, name: "Package A", allocated: true, overdue_count: 1 }],
+            next: null,
+            previous: null,
+          },
+    ),
+  );
+  const { runtime, unmount } = mount(<PackagePoolList projectId={4} onClaimed={jest.fn()} />, locale);
+  expect(await screen.findByText(locale === "zh-CN" ? "已分配给你" : "Assigned to you")).not.toBeNull();
+  unmount();
+  runtime.destroy();
+});
+
+it("clears previously loaded management settings when access is revoked", async () => {
+  let loads = 0;
+  mockCallApi.mockImplementation((name) => {
+    if (name === "taskPackagePool") {
+      loads += 1;
+      return Promise.resolve(
+        loads === 1
+          ? { revision: 1, enabled: true, candidate_ids: [8], due_at: null, claimed: false }
+          : { error: true, status: 403 },
+      );
+    }
+    return Promise.resolve({ results: [], next: null, previous: null });
+  });
+  const { runtime, unmount } = mount(
+    <PackageManagement projectId={4} packageId={7} canManagePool onChanged={jest.fn()} />,
+    "en-US",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage assignment and claims" }));
+  const label = "Eligible user IDs, separated by commas (up to 100)";
+  expect((await screen.findByLabelText(label)).value).toBe("8");
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByLabelText(label)).toBeNull();
+  unmount();
+  runtime.destroy();
+});
+
 it.each(["en-US", "zh-CN"])("configures the pool using its current revision in %s", async (locale) => {
   mockCallApi.mockImplementation((name) =>
     Promise.resolve(

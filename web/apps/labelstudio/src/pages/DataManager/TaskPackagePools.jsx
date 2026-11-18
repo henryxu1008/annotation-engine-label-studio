@@ -120,6 +120,17 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
     [projectId, packageId],
   );
 
+  const clearAccess = () => {
+    setPool(null);
+    setOpened(false);
+    setCandidates("");
+    setDeadline("");
+    setAssignee("");
+    dispatchRequest.current = null;
+    reopenRequest.current = null;
+    balanceRequest.current = null;
+  };
+
   const open = async () => {
     setOpened(true);
     if (!canManagePool) return;
@@ -132,8 +143,10 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
         errorFilter: () => true,
       });
       if (current !== generation.current) return;
-      if (failed(response)) setError("poolLoadFailed");
-      else {
+      if (failed(response)) {
+        if (denied(response)) clearAccess();
+        setError("poolLoadFailed");
+      } else {
         setPool(response);
         setCandidates(response.candidate_ids.join(", "));
         setDeadline(localDate(response.due_at));
@@ -174,7 +187,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
       });
       if (current !== generation.current) return;
       if (failed(response)) {
-        if (denied(response)) setPool(null);
+        if (denied(response)) clearAccess();
         const reason = response?.response?.display_context?.reason;
         setError(
           reason === "POOL_AUTOMATION_OWNER_CHANGED"
@@ -222,9 +235,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
       if (current !== generation.current) return;
       if (failed(response)) {
         if (denied(response)) {
-          setPool(null);
-          setOpened(false);
-          dispatchRequest.current = null;
+          clearAccess();
         }
         if ([400, 409].includes(response?.status ?? response?.$meta?.status)) dispatchRequest.current = null;
         setError("dispatchFailed");
@@ -261,6 +272,7 @@ export const PackageManagement = ({ projectId, packageId, canDispatch, canManage
       });
       if (current !== generation.current) return;
       if (failed(response)) {
+        if (denied(response)) clearAccess();
         if ([400, 403, 404, 409].includes(response?.status ?? response?.$meta?.status)) ref.current = null;
         setError(kind === "reopen" ? "reopenFailed" : "balanceFailed");
       } else {
@@ -552,7 +564,9 @@ export const PackagePoolList = ({ projectId, onClaimed }) => {
                   {item.due_at ? t("poolDueAt", { time: new Date(item.due_at).toLocaleString() }) : t("poolNoDeadline")}
                 </span>{" "}
                 {item.overdue_count > 0 && <span>{t("poolOverdue", { count: item.overdue_count })} </span>}
-                {item.claimed ? (
+                {item.allocated ? (
+                  t("poolAllocated")
+                ) : item.claimed ? (
                   t("poolClaimed")
                 ) : item.deadline_passed ? (
                   t("poolExpired")

@@ -182,6 +182,9 @@ def claim_pool(*, project_id, package_id, principal, key):
             idempotency_key=key,
             assignment_ids=[item.pk for item in assignments],
         )
+        if pool.allocation_id is not None:
+            pool.allocation = None
+            pool.save(update_fields=['allocation', 'updated_at'])
         return claim, False, False
 
 
@@ -253,13 +256,24 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
     """Assign the whole package to the eligible member with the fewest active tasks."""
     postgres_required()
     with transaction.atomic():
-        project, actor = lock_project_operation(project_id, principal, BATCH_ASSIGN)
+        # Snapshot without acquiring identity locks; all identities must then be
+        # locked together in the shared order, even across different projects.
+        candidate_ids = list(
+            TaskPackagePool.candidates.through.objects.filter(
+                taskpackagepool__package_id=package_id, taskpackagepool__package__project_id=project_id
+            ).order_by('user_id').values_list('user_id', flat=True)
+        )
+        project, actor = lock_project_operation(
+            project_id, principal, BATCH_ASSIGN, related_user_ids=candidate_ids
+        )
         require_project_operation(project, ASSIGN)
         if not authorization.can_manage_project(principal, project):
             raise PermissionDenied()
         pool = get_object_or_404(
             TaskPackagePool.objects.select_for_update(), package_id=package_id, package__project=project
         )
+        if candidate_ids != list(pool.candidates.order_by('pk').values_list('pk', flat=True)):
+            fail(DispatchConflict, 'POOL_CANDIDATES_CHANGED', 'Candidate configuration changed; retry.')
         if automation_revision is not None and (
             not settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED
             or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
@@ -286,8 +300,6 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
             or TaskPackageClaim.objects.filter(pool=pool).exists()
         ):
             fail(DispatchConflict, 'POOL_CLOSED', 'This package is not open for allocation.')
-        candidate_ids = list(pool.candidates.order_by('pk').values_list('pk', flat=True))
-        project, actor = lock_project_operation(project_id, principal, BATCH_ASSIGN, related_user_ids=candidate_ids)
         eligible_org = OrganizationMember.objects.filter(
             organization_id=project.organization_id,
             user_id__in=candidate_ids,
@@ -322,7 +334,7 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
             .annotate(total=Count('pk'))
         }
         target = min(eligible_role, key=lambda user_id: (loads.get(user_id, 0), user_id))
-        return dispatch_package(
+        receipt, replayed = dispatch_package(
             project_id=project_id,
             package_id=package_id,
             assignee_id=target,
@@ -330,3 +342,7 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
             key=key,
             request_hash=request_hash,
         )
+        if not replayed:
+            pool.allocation = receipt
+            pool.save(update_fields=['allocation', 'updated_at'])
+        return receipt, replayed

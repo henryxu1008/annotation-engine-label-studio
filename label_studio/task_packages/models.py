@@ -62,6 +62,9 @@ class TaskPackagePool(models.Model):
     priority = models.PositiveSmallIntegerField(default=0)
     automatic = models.BooleanField(default=False)
     automation_generation = models.PositiveIntegerField(default=0)
+    allocation = models.ForeignKey(
+        TaskPackageDispatch, null=True, blank=True, on_delete=models.RESTRICT, related_name='allocated_pools'
+    )
     automation_actor = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+'
     )
@@ -102,7 +105,8 @@ class TaskPackageClaimHistory(models.Model):
 
 class TaskPackageOverdueNotice(models.Model):
     pool = models.ForeignKey(TaskPackagePool, on_delete=models.CASCADE, related_name='overdue_notices')
-    claim_id_snapshot = models.PositiveBigIntegerField()
+    claim_id_snapshot = models.PositiveBigIntegerField(null=True)
+    dispatch_id_snapshot = models.PositiveBigIntegerField(null=True)
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
     due_at = models.DateTimeField()
     overdue_count = models.PositiveIntegerField()
@@ -112,5 +116,13 @@ class TaskPackageOverdueNotice(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=['pool', 'claim_id_snapshot', 'due_at'], name='package_overdue_notice_unique'
-            )
+            ),
+            models.UniqueConstraint(
+                fields=['pool', 'dispatch_id_snapshot', 'due_at'], name='package_dispatch_notice_unique'
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(claim_id_snapshot__isnull=False, dispatch_id_snapshot__isnull=True)
+                           | models.Q(claim_id_snapshot__isnull=True, dispatch_id_snapshot__isnull=False)),
+                name='package_notice_one_source',
+            ),
         ]

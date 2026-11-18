@@ -324,13 +324,35 @@ class PackagePoolAPI(PackageAPIBase):
         )
 
 
+def overdue_source(pool):
+    """Return the current pool-owned receipt, never an arbitrary direct dispatch."""
+    if hasattr(pool, 'claim'):
+        claim = pool.claim
+        if claim.actor_id is not None and claim.actor_id == claim.actor_id_snapshot:
+            return claim.actor_id, claim.assignment_ids, {'claim_id_snapshot': claim.pk}
+        return None
+    if pool.allocation_id:
+        allocation = pool.allocation
+        if (
+            allocation.package_id == pool.package_id
+            and allocation.project_id == pool.package.project_id
+            and allocation.assignee_id is not None
+            and allocation.assignee_id == allocation.assignee_id_snapshot
+        ):
+            return allocation.assignee_id, allocation.assignment_ids, {'dispatch_id_snapshot': allocation.pk}
+    return None
+
+
 def overdue_counts(pools, project):
-    """Count claimed, active work still requiring submission after the deadline."""
+    """Count unfinished work belonging to the current pool receipt."""
     now = timezone.now()
     by_assignment = {}
     for pool in pools:
-        if pool.due_at and pool.due_at <= now and hasattr(pool, 'claim'):
-            by_assignment.update({assignment_id: pool.pk for assignment_id in pool.claim.assignment_ids})
+        source = overdue_source(pool) if pool.due_at and pool.due_at <= now else None
+        if source:
+            actor_id, assignment_ids, _ = source
+            for assignment_id in assignment_ids:
+                by_assignment.setdefault(assignment_id, []).append((pool.pk, actor_id))
     counts = {}
     if by_assignment:
         assignments = TaskAssignment.objects.filter(
@@ -339,9 +361,10 @@ def overdue_counts(pools, project):
         unfinished = annotate_assignment_work(assignments).filter(
             work_state__in=['assigned', 'in_progress', 'rework', 'conflict']
         )
-        for assignment_id in unfinished.values_list('pk', flat=True):
-            pool_id = by_assignment[assignment_id]
-            counts[pool_id] = counts.get(pool_id, 0) + 1
+        for assignment_id, assignee_id in unfinished.values_list('pk', 'assignee_id'):
+            for pool_id, owner_id in by_assignment[assignment_id]:
+                if owner_id == assignee_id:
+                    counts[pool_id] = counts.get(pool_id, 0) + 1
     return counts
 
 
@@ -355,13 +378,20 @@ class AvailablePoolsAPI(PackageAPIBase):
         occupied = TaskAssignment.objects.filter(
             task__package_items__package_id=OuterRef('package_id'), status__in=TaskAssignment.ACTIVE_STATUSES
         )
+        personal_work = occupied.filter(assignee=actor)
+        visible = (
+            Q(candidates=actor, enabled=True, claim__isnull=True, occupied=False)
+            | Q(candidates=actor, claim__actor=actor)
+            | Q(claim__isnull=True, allocation__assignee=actor, personal_work=True)
+        )
         pools = (
             TaskPackagePool.objects.filter(
-                package__project=project, candidates=actor, package__project_id__in=work_projects(actor, [role])
+                package__project=project, package__project_id__in=work_projects(actor, [role])
             )
-            .annotate(occupied=Exists(occupied))
-            .filter(Q(enabled=True, claim__isnull=True, occupied=False) | Q(claim__actor=actor))
-            .select_related('package', 'claim')
+            .annotate(occupied=Exists(occupied), personal_work=Exists(personal_work))
+            .filter(visible)
+            .distinct()
+            .select_related('package', 'claim', 'allocation')
             .order_by('-priority', 'pk')
         )
         page = self.paginate_queryset(pools)
@@ -370,11 +400,11 @@ class AvailablePoolsAPI(PackageAPIBase):
         current = set(
             TaskPackagePool.objects.filter(
                 pk__in=[pool.pk for pool in page],
-                candidates=actor,
                 package__project_id__in=work_projects(actor, [role]),
             )
-            .annotate(occupied=Exists(occupied))
-            .filter(Q(enabled=True, claim__isnull=True, occupied=False) | Q(claim__actor=actor))
+            .annotate(occupied=Exists(occupied), personal_work=Exists(personal_work))
+            .filter(visible)
+            .distinct()
             .values_list('pk', flat=True)
         )
         if current != {pool.pk for pool in page} or authorization.project_role(principal, project) != role:
@@ -387,9 +417,14 @@ class AvailablePoolsAPI(PackageAPIBase):
                     'due_at': pool.due_at,
                     'priority': pool.priority,
                     'claimed': hasattr(pool, 'claim'),
+                    'allocated': not hasattr(pool, 'claim')
+                    and pool.allocation_id is not None
+                    and pool.allocation.assignee_id == actor.pk
+                    and pool.personal_work,
                     'deadline_passed': bool(pool.due_at and pool.due_at <= now),
                     'overdue_count': overdue.get(pool.pk, 0),
                     'can_claim': not hasattr(pool, 'claim')
+                    and not pool.occupied
                     and pool.enabled
                     and (not pool.due_at or pool.due_at > now)
                     and policy.allows(BATCH_ASSIGN)
@@ -506,9 +541,10 @@ class PackageOverdueNoticeAPI(PackageAPIBase):
                 raise PermissionDenied()
             pools = list(
                 TaskPackagePool.objects.filter(
-                    package__project=project, claim__actor=actor, due_at__lte=timezone.now(), pk__gt=int(after)
+                    Q(claim__actor=actor) | Q(claim__isnull=True, allocation__assignee=actor),
+                    package__project=project, due_at__lte=timezone.now(), pk__gt=int(after)
                 )
-                .select_related('claim', 'package')
+                .select_related('claim', 'allocation', 'package')
                 .order_by('pk')[:51]
             )
             page, has_next = pools[:50], len(pools) > 50
@@ -516,11 +552,12 @@ class PackageOverdueNoticeAPI(PackageAPIBase):
             notices = []
             for pool in page:
                 count = counts.get(pool.pk, 0)
-                if not count:
+                source = overdue_source(pool)
+                if not count or not source or source[0] != actor.pk:
                     continue
                 notice, _ = TaskPackageOverdueNotice.objects.get_or_create(
                     pool=pool,
-                    claim_id_snapshot=pool.claim.pk,
+                    **source[2],
                     due_at=pool.due_at,
                     defaults={'recipient': actor, 'overdue_count': count},
                 )

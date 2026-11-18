@@ -5,10 +5,11 @@ from access_control.project_operations import READ_WORK, local_principal, lock_p
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
-from task_packages.api import overdue_counts
+from task_packages.api import overdue_counts, overdue_source
 from task_packages.models import TaskPackageOverdueNotice, TaskPackagePool
 from task_packages.pools import postgres_required
 
@@ -28,11 +29,14 @@ class Command(BaseCommand):
             raise CommandError('Expected a nonnegative cursor and a limit from 1 to 500.')
         postgres_required()
         rows = list(
-            TaskPackagePool.objects.filter(pk__gt=after, due_at__lte=timezone.now(), claim__isnull=False)
-            .values_list('pk', 'package__project_id', 'claim__actor_id')
+            TaskPackagePool.objects.filter(
+                Q(claim__isnull=False) | Q(allocation__isnull=False), pk__gt=after, due_at__lte=timezone.now()
+            )
+            .values_list('pk', 'package__project_id', 'claim__actor_id', 'allocation__assignee_id')
             .order_by('pk')[: limit + 1]
         )
-        for pool_id, project_id, actor_id in rows[:limit]:
+        for pool_id, project_id, claim_actor_id, allocation_actor_id in rows[:limit]:
+            actor_id = claim_actor_id or allocation_actor_id
             if actor_id is None:
                 continue
             from users.models import User
@@ -48,18 +52,20 @@ class Command(BaseCommand):
                         continue
                     pool = (
                         TaskPackagePool.objects.filter(
-                            pk=pool_id, package__project=project, claim__actor=actor, due_at__lte=timezone.now()
+                            Q(claim__actor=actor) | Q(claim__isnull=True, allocation__assignee=actor),
+                            pk=pool_id, package__project=project, due_at__lte=timezone.now()
                         )
-                        .select_related('claim')
+                        .select_related('claim', 'allocation', 'package')
                         .first()
                     )
                     if pool is None:
                         continue
                     count = overdue_counts([pool], project).get(pool.pk, 0)
-                    if count:
+                    source = overdue_source(pool)
+                    if count and source and source[0] == actor.pk:
                         TaskPackageOverdueNotice.objects.get_or_create(
                             pool=pool,
-                            claim_id_snapshot=pool.claim.pk,
+                            **source[2],
                             due_at=pool.due_at,
                             defaults={'recipient': actor, 'overdue_count': count},
                         )

@@ -106,7 +106,8 @@ requires PostgreSQL, a current manager, an eligible project member and both
 `BATCH_ASSIGN` and `ASSIGN` policy operations. It locks the project and member
 identities, validates and locks every fixed task, then commits assignments and
 an idempotency receipt in one transaction. Any missing or moved member or
-already active assignment rejects the entire request. Retries return the original
+already active assignment for the target assignee rejects the entire request;
+assignments to other members may coexist for overlapping annotation. Retries return the original
 receipt even if an assignment was subsequently cancelled; they do not recreate
 work. Receipts follow project/package cascade deletion and their migration cannot
 be reversed while receipts exist. They are not an independent audit archive.
@@ -143,7 +144,7 @@ after a reopen. This code alone cannot verify deployment-wide process isolation.
 Rollback of the new migrations refuses any nonempty pool, preventing partial
 loss of priority or historical receipts.
 
-The deadline closes new claims and marks active claimed assignments still in
+The deadline closes new claims and marks active pool-claimed or balanced assignments still in
 assigned, in-progress, rework, or conflict state as overdue. Submission and
 approval are not considered overdue annotation work. Expiry neither cancels
 assignments nor prevents existing work from being submitted. Managers can change
@@ -152,6 +153,15 @@ live projections, not immutable events or a general SLA engine, and apply to
 pool-created assignments rather than direct dispatch. Pool configuration and
 claim receipts follow package deletion and must not be treated as an independent
 audit archive; migration rollback refuses to discard nonempty pools.
+The allocation migration refuses to upgrade if an existing pool already has
+dispatch receipts: older code did not distinguish balanced allocation from
+direct dispatch, so their ownership cannot be safely inferred. Preserve those
+receipts and reconcile the deployment before upgrading; the migration does not
+delete or silently backfill them. Stop and isolate every older web/API and
+background writer, and drain their in-flight transactions **before running the
+migration**; the preflight cannot fence a writer that continues after its check.
+Likewise stop and drain all newer writers before rollback. This does not affect
+a first installation.
 
 When an authenticated recipient opens the pool workspace, a bounded,
 cursor-paginated reconciliation transaction creates idempotent, persistent
@@ -160,7 +170,10 @@ It does not send email, push messages, or proactively notify offline users;
 the bounded `reconcile_package_overdue --after <cursor> --limit <n>` command
 can be scheduled by operators to create inbox records while users are away,
 and the opt-in `run_package_automation` worker runs bounded allocation and
-notice scans continuously. A manager must explicitly enable automatic
+notice scans continuously. The background scan skips a recipient whose active
+organization is not the project's organization, even if their membership remains
+valid; opening the project after switching back triggers reconciliation. It is
+not a cross-organization offline notification service. A manager must explicitly enable automatic
 allocation per pool. The worker rechecks the manager, candidates, project state,
 configuration revision and live assignments while holding the project lock.
 It uses a deterministic request key per automation generation: edits to a
@@ -170,11 +183,28 @@ cannot silently modify an automatically allocated pool. Initial automation is
 restricted to locally authenticated managers; externally mapped identities need
 a host-platform service identity and revocation contract before use.
 
-An optional Compose overlay `docker-compose.task-packages.yml` supplies a
-`package-automation` profile. Enabling the five flags and starting that profile
-are deployment actions, not part of this change. The process retains bounded
+The optional Compose overlay `docker-compose.task-packages.yml` only supplies
+the five disabled-by-default flags to `app`; it does not define a separate
+worker service. For the standard Compose app entrypoint, an operator may run
+the long-lived management command using `docker compose` with the exact same
+complete file set and environment as the running app: `docker compose ... run
+--rm --no-deps -T app python3 /label-studio/label_studio/manage.py
+run_package_automation`. Before starting it, verify that every running app and
+worker's actual image digest, database, identity, operation-policy and five
+feature flags match that final Compose configuration. If they cannot be
+verified, do not start it. `compose run` uses the current desired configuration;
+it cannot prove that already running containers match it. Custom entrypoints or runtime-injected
+configuration require a separately verified equivalent; do not bypass the
+entrypoint's environment injection. Verify that the same database has already
+been migrated to the selected code revision and the app is ready: this one-off
+command does not run the app startup migrations. Upgrade and drain all old workers first.
+Enabling flags and starting the command are deployment actions, not part of
+this change. Do not schedule repeated `--once` runs as a fair full sweep: each
+starts at the first page. The continuously running process retains bounded
 scan cursors while running; a restart begins another idempotent sweep. It does
-not send email, push messages, or notify users outside the application.
+not send email, push messages, or notify users outside the application. The
+example runs in the foreground; supervision and automatic restart must be
+configured and verified separately for the target deployment.
 For an externally scheduled sweep, start `reconcile_package_overdue` at zero
 and continue with `next_after` until empty; rerunning a page is idempotent.
 The existing task-package

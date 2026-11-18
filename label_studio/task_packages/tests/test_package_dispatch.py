@@ -60,6 +60,15 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         assert self.post().status_code == 409
         assert TaskAssignment.objects.count() == 1 and TaskPackageDispatch.objects.count() == 0
 
+    def test_existing_assignment_for_another_member_allows_overlap(self):
+        self.assignment(task=self.tasks[1], user=self.other)
+        key = uuid4()
+        first = self.post(key=key)
+        assert first.status_code == 201, first.content
+        assert first.json()['assignment_count'] == 3
+        assert self.post(key=key).json()['assignment_ids'] == first.json()['assignment_ids']
+        assert TaskAssignment.objects.filter(task=self.tasks[1], status__in=TaskAssignment.ACTIVE_STATUSES).count() == 2
+
     def test_transaction_failure_rolls_back_assignments(self):
         with patch('task_packages.dispatch.TaskPackageDispatch.objects.create', side_effect=RuntimeError('failure')):
             assert self.post().status_code == 500
@@ -88,10 +97,15 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         with self.assertRaisesRegex(RuntimeError, 'committed receipts'):
             executor.migrate([('task_packages', '0001_initial')])
         assert TaskPackageDispatch.objects.count() == 1
-        TaskPackageDispatch.objects.all().delete()
+        # Later migrations may already have been reversed before the receipt
+        # guard fires; use that historical model for cleanup and restoration.
+        historical = MigrationExecutor(connection).loader.project_state(
+            [('task_packages', '0002_taskpackagedispatch')]
+        ).apps.get_model('task_packages', 'TaskPackageDispatch')
+        historical.objects.all().delete()
         executor = MigrationExecutor(connection)
         executor.migrate([('task_packages', '0001_initial')])
-        MigrationExecutor(connection).migrate([('task_packages', '0006_pool_automation')])
+        MigrationExecutor(connection).migrate([('task_packages', '0007_pool_allocation_notices')])
 
     def test_paused_project_blocks_even_replay(self):
         key = uuid4()

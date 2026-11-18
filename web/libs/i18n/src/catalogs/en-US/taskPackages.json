@@ -30,6 +30,7 @@
   "noticeFailed": "Overdue notices could not be refreshed. Reload to retry.",
   "moreNotices": "Load more overdue notices",
   "poolSave": "Save claim settings",
+  "poolAllocated": "Assigned to you",
   "poolReload": "Reload",
   "poolInvalid": "Enter distinct positive user IDs and a valid deadline.",
   "poolLoadFailed": "Could not load claim settings or available packages. Reload to try again.",
