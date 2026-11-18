@@ -147,6 +147,19 @@ class TestPackageBatch(PackageFixture, TransactionTestCase):
         assert self.post_batch({**payload, 'project_import_id': other_job.pk}).status_code == 400
         assert not TaskPackageBatch.objects.exists() and not TaskPackage.objects.exists()
 
+    def test_source_validation_does_not_read_original_import_payload(self):
+        from django.test.utils import CaptureQueriesContext
+        from projects.models import ProjectImport
+
+        job, tasks = self.imported_tasks()
+        ProjectImport.objects.filter(pk=job.pk).update(tasks=[{'data': {'text': 'x' * 1000000}}])
+        with CaptureQueriesContext(connection) as queries:
+            result = self.post_batch({**self.payload, 'project_import_id': job.pk, 'task_ids': [tasks[0].pk]})
+        assert result.status_code == 201, result.content
+        source_queries = [q['sql'] for q in queries if 'FROM "projects_projectimport"' in q['sql']]
+        assert len(source_queries) == 1
+        assert '"projects_projectimport"."tasks"' not in source_queries[0].split(' FROM ')[0]
+
     def test_oversized_import_receipt_is_rejected_without_creating_packages(self):
         from projects.models import ProjectImport
 

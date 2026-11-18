@@ -275,6 +275,10 @@ class PackageBatchAPI(PackageAPIBase):
             if 'project_import_id' in payload:
                 imported = (
                     ProjectImport.objects.select_for_update()
+                    .only(
+                        'id', 'project_id', 'status', 'commit_to_project', 'return_task_ids',
+                        'created_at', 'finished_at', 'task_ids', 'task_count',
+                    )
                     .alias(
                         provenance_count=RawSQL(
                             "CASE WHEN jsonb_typeof(task_ids) = 'array' "

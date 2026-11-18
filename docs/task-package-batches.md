@@ -20,4 +20,4 @@ For example, provide a completed import ID and an explicit subset of its recorde
 
 The task IDs and import ID above are illustrative, not existing records. Clients must keep the original request and UUID key for recovery; a missing receipt or an access denial is not evidence of rollback.
 
-To bound project-lock work and application memory, import records with more than 10,000 task IDs are rejected before their task ID JSON is fetched by the application. This does not bound the database storage occupied by existing imports. A larger source requires a separately designed bounded provenance ledger.
+To bound project-lock work and application memory, import records with more than 10,000 task IDs are rejected before their task ID JSON is fetched by the application. The validation query selects only required metadata and does not retrieve the original import payload. This does not bound the database storage occupied by existing imports. A larger source requires a separately designed bounded provenance ledger.
