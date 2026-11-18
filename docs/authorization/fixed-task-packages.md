@@ -70,7 +70,7 @@ assignments remain eligible, and managers retain unavailable fixed members.
 
 | Project role | Visible scope | Actions |
 | --- | --- | --- |
-| Manager / creator | Full fixed membership, unavailable items, active assignment states and pending review counts | Create fixed list only |
+| Manager / creator | Full fixed membership, unavailable items, active assignment states and pending review counts | Create fixed list; optional API dispatch |
 | Annotator | Only packages containing own active assignments; rows/counts restricted to those assignments | Existing Editor link if EDIT is allowed |
 | Reviewer | Only packages containing pending, non-self submissions eligible for the existing review queue | Existing review queue if REVIEW is allowed |
 
@@ -99,10 +99,120 @@ deny it independently. Missing/unknown providers fail closed. No state is inferr
 from `is_draft` or `is_published`.
 
 #86 owns authoritative project states, transitions and the full operation matrix.
-This slice is not #86 completion. Batch dispatch, claim pools, load balancing,
-overlap allocation, priority/deadline enforcement and automatic overdue handling
-remain unavailable. No dispatch route is registered. Existing single-task
-assignment, submit/rework and review authorization remain authoritative.
+An additional, independently disabled `ANNOTATION_PACKAGE_DISPATCH_ENABLED`
+gate permits `POST /api/projects/{project}/task-packages/{package}/dispatch/`
+with a UUID `Idempotency-Key` and a single integer `assignee_id`. This API
+requires PostgreSQL, a current manager, an eligible project member and both
+`BATCH_ASSIGN` and `ASSIGN` policy operations. It locks the project and member
+identities, validates and locks every fixed task, then commits assignments and
+an idempotency receipt in one transaction. Any missing or moved member or
+already active assignment for the target assignee rejects the entire request;
+assignments to other members may coexist for overlapping annotation. Retries return the original
+receipt even if an assignment was subsequently cancelled; they do not recreate
+work. Receipts follow project/package cascade deletion and their migration cannot
+be reversed while receipts exist. They are not an independent audit archive.
+
+`ANNOTATION_PACKAGE_CLAIM_ENABLED` independently enables a PostgreSQL-only
+claim pool for a fixed package. Managers specify 1–100 existing eligible
+project users, an optional timezone-aware deadline, and whether the pool is
+open. Configuration uses an expected revision; stale updates are rejected.
+Candidate changes are refused after a claim. A claimant is derived from the
+authenticated principal, must still be an active eligible member, and may
+claim only an explicitly offered package. The project lock serializes pool
+changes, claims, and supported assignment writers. The first successful claim
+atomically creates all assignments and a durable receipt. Same-key retries by
+the same principal return that receipt; other claims cannot acquire the package.
+An existing active assignment on any member rejects the whole claim. Later
+manager-directed overlapping assignments remain possible through the existing
+assignment APIs; the pool does not globally reserve task IDs forever.
+
+With `ANNOTATION_PACKAGE_ADVANCED_ENABLED` separately enabled, managers may
+set priority 0–100 and explicitly request balanced assignment of the whole
+package to the eligible candidate with the fewest active project assignments
+(ties use the lowest user ID). The decision and assignment are transactionally recorded. Discovery
+sorts higher-priority pools first. Managers can reopen a claimed pool only
+after each original assignment can be verified as cancelled and the package has
+no active assignments. The immutable historical receipt remains bound to the
+original principal and idempotency key; retries return `released`, and a stale
+reopen retry cannot release a subsequent claim. Cancellation itself continues
+to use the existing assignment API and version fencing.
+
+The advanced and `ANNOTATION_PACKAGE_AUTOMATION_ENABLED` flags default off. All web/API and worker processes must be
+upgraded and old processes drained before enabling it: an older claim endpoint
+does not know about historical receipts and cannot safely honor old retries
+after a reopen. This code alone cannot verify deployment-wide process isolation.
+Rollback of the new migrations refuses any nonempty pool, preventing partial
+loss of priority or historical receipts.
+
+The deadline closes new claims and marks active pool-claimed or balanced assignments still in
+assigned, in-progress, rework, or conflict state as overdue. Submission and
+approval are not considered overdue annotation work. Expiry neither cancels
+assignments nor prevents existing work from being submitted. Managers can change
+the deadline after a claim; candidate membership stays fixed. These counts are
+live projections, not immutable events or a general SLA engine, and apply to
+pool-created assignments rather than direct dispatch. Pool configuration and
+claim receipts follow package deletion and must not be treated as an independent
+audit archive; migration rollback refuses to discard nonempty pools.
+The allocation migration refuses to upgrade if an existing pool already has
+dispatch receipts: older code did not distinguish balanced allocation from
+direct dispatch, so their ownership cannot be safely inferred. Preserve those
+receipts and reconcile the deployment before upgrading; the migration does not
+delete or silently backfill them. Stop and isolate every older web/API and
+background writer, and drain their in-flight transactions **before running the
+migration**; the preflight cannot fence a writer that continues after its check.
+Likewise stop and drain all newer writers before rollback. This does not affect
+a first installation.
+
+When an authenticated recipient opens the pool workspace, a bounded,
+cursor-paginated reconciliation transaction creates idempotent, persistent
+in-app overdue notices and returns only currently visible, still-overdue work.
+It does not send email, push messages, or proactively notify offline users;
+the bounded `reconcile_package_overdue --after <cursor> --limit <n>` command
+can be scheduled by operators to create inbox records while users are away,
+and the opt-in `run_package_automation` worker runs bounded allocation and
+notice scans continuously. The background scan skips a recipient whose active
+organization is not the project's organization, even if their membership remains
+valid; opening the project after switching back triggers reconciliation. It is
+not a cross-organization offline notification service. A manager must explicitly enable automatic
+allocation per pool. The worker rechecks the manager, candidates, project state,
+configuration revision and live assignments while holding the project lock.
+It uses a deterministic request key per automation generation: edits to a
+deadline or priority do not reassign previously cancelled work. Reopening a
+claim turns automation off, and a manager must enable it again. Older clients
+cannot silently modify an automatically allocated pool. Initial automation is
+restricted to locally authenticated managers; externally mapped identities need
+a host-platform service identity and revocation contract before use.
+
+The optional Compose overlay `docker-compose.task-packages.yml` only supplies
+the five disabled-by-default flags to `app`; it does not define a separate
+worker service. For the standard Compose app entrypoint, an operator may run
+the long-lived management command using `docker compose` with the exact same
+complete file set and environment as the running app: `docker compose ... run
+--rm --no-deps -T app python3 /label-studio/label_studio/manage.py
+run_package_automation`. Before starting it, verify that every running app and
+worker's actual image digest, database, identity, operation-policy and five
+feature flags match that final Compose configuration. If they cannot be
+verified, do not start it. `compose run` uses the current desired configuration;
+it cannot prove that already running containers match it. Custom entrypoints or runtime-injected
+configuration require a separately verified equivalent; do not bypass the
+entrypoint's environment injection. Verify that the same database has already
+been migrated to the selected code revision and the app is ready: this one-off
+command does not run the app startup migrations. Upgrade and drain all old workers first.
+Enabling flags and starting the command are deployment actions, not part of
+this change. Do not schedule repeated `--once` runs as a fair full sweep: each
+starts at the first page. The continuously running process retains bounded
+scan cursors while running; a restart begins another idempotent sweep. It does
+not send email, push messages, or notify users outside the application. The
+example runs in the foreground; supervision and automatic restart must be
+configured and verified separately for the target deployment.
+For an externally scheduled sweep, start `reconcile_package_overdue` at zero
+and continue with `next_after` until empty; rerunning a page is idempotent.
+The existing task-package
+workspace offers a paginated project-member picker, assignment and pool
+configuration, and eligible users pool discovery and claiming. Claim reservations
+and external overdue delivery remain
+unavailable.
+Existing single-task assignment, submit/rework and review authorization remain authoritative.
 
 ## Regression coverage
 
@@ -117,7 +227,8 @@ The bilingual React workspace reuses ApiProvider, i18n and existing work links.
 It clears stale rows on refresh failure, ignores disposed responses, and retries
 an out-of-range page once by its specific machine code. Creation retries retain
 the request key/body. `fixed-task-packages.cy.ts` covers real browser creation
-and manager/annotator/reviewer views in en-US and zh-CN, including no dispatch.
+and manager/annotator/reviewer views in en-US and zh-CN. Pool and dispatch
+controls are feature-gated separately from package discovery.
 
 The feature defaults off; retained-pilot activation and production deployment
 remain separate work. IAM recovery and Core business integration are out of scope.

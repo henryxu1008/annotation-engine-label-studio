@@ -109,7 +109,7 @@ export const AppStore = types
     },
 
     get currentSelection() {
-      return self.currentView.selected.snapshot;
+      return self.currentView?.selected?.snapshot ?? null;
     },
 
     get currentFilter() {

@@ -31,3 +31,100 @@ class TaskPackageItem(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['package', 'original_task_id'], name='package_task_unique')]
+
+
+class TaskPackageDispatch(models.Model):
+    """Receipt of a committed request, not a live assignment projection."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE)
+    package = models.ForeignKey(TaskPackage, on_delete=models.CASCADE, related_name='dispatches')
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    assignee_id_snapshot = models.PositiveBigIntegerField()
+    actor_id_snapshot = models.PositiveBigIntegerField()
+    creator_principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    assignment_ids = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='package_dispatch_key_unique')
+        ]
+
+
+class TaskPackagePool(models.Model):
+    package = models.OneToOneField(TaskPackage, on_delete=models.CASCADE, related_name='pool')
+    candidates = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='+')
+    enabled = models.BooleanField(default=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    priority = models.PositiveSmallIntegerField(default=0)
+    automatic = models.BooleanField(default=False)
+    automation_generation = models.PositiveIntegerField(default=0)
+    allocation = models.ForeignKey(
+        TaskPackageDispatch, null=True, blank=True, on_delete=models.RESTRICT, related_name='allocated_pools'
+    )
+    automation_actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    revision = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TaskPackageClaim(models.Model):
+    pool = models.OneToOneField(TaskPackagePool, on_delete=models.CASCADE, related_name='claim')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    actor_id_snapshot = models.PositiveBigIntegerField()
+    principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    assignment_ids = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class TaskPackageClaimHistory(models.Model):
+    pool = models.ForeignKey(TaskPackagePool, on_delete=models.CASCADE, related_name='claim_history')
+    original_claim_id = models.PositiveBigIntegerField()
+    actor_id_snapshot = models.PositiveBigIntegerField()
+    principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    assignment_ids = models.JSONField()
+    claimed_at = models.DateTimeField()
+    reopened_at = models.DateTimeField(auto_now_add=True)
+    reopened_by_id_snapshot = models.PositiveBigIntegerField()
+    reopened_by_principal = models.CharField(max_length=512)
+    reopen_key = models.UUIDField()
+    reopen_revision = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['pool', 'original_claim_id'], name='package_history_claim_unique'),
+            models.UniqueConstraint(fields=['pool', 'reopen_key'], name='package_history_reopen_key_unique'),
+        ]
+
+
+class TaskPackageOverdueNotice(models.Model):
+    pool = models.ForeignKey(TaskPackagePool, on_delete=models.CASCADE, related_name='overdue_notices')
+    claim_id_snapshot = models.PositiveBigIntegerField(null=True)
+    dispatch_id_snapshot = models.PositiveBigIntegerField(null=True)
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    due_at = models.DateTimeField()
+    overdue_count = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['pool', 'claim_id_snapshot', 'due_at'], name='package_overdue_notice_unique'
+            ),
+            models.UniqueConstraint(
+                fields=['pool', 'dispatch_id_snapshot', 'due_at'], name='package_dispatch_notice_unique'
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(claim_id_snapshot__isnull=False, dispatch_id_snapshot__isnull=True)
+                    | models.Q(claim_id_snapshot__isnull=True, dispatch_id_snapshot__isnull=False)
+                ),
+                name='package_notice_one_source',
+            ),
+        ]

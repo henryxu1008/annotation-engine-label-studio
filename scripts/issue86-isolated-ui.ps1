@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$DependencyVenv,
     [Parameter(Mandatory = $true)][string]$FrontendBuild,
     [Parameter(Mandatory = $true)][string]$FrontendNodeModules,
-    [string]$Subnet = '10.252.93.0/28'
+    [string]$Subnet = '10.252.93.0/28',
+    [switch]$TestPackage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +63,7 @@ backend application
     docker run -d --pull never --name $redis --network "container:$db" redis:7-alpine --save '' --appendonly no | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start disposable Redis.' }
     $created += $redis
+    $packageFlag = $TestPackage.IsPresent.ToString().ToLowerInvariant()
     docker run -d --pull never --name $runner --network "container:$db" `
         -v "${repoRoot}:/work:ro" -v "${venvPath}:/opt/venv:ro" -v "${buildPath}:/work/web/dist/apps/labelstudio:ro" `
         -w /work/label_studio -e PYTHONPATH=/work:/work/label_studio -e DJANGO_SETTINGS_MODULE=core.settings.label_studio `
@@ -73,6 +75,9 @@ backend application
         -e DEBUG=true -e "HOST=$baseUrl" -e "CSRF_TRUSTED_ORIGINS=$baseUrl" `
         -e ANNOTATION_STORAGE_ADMISSION_ENABLED=true -e ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=true `
         -e ANNOTATION_LIFECYCLE_PUBLIC_API_ENABLED=true `
+        -e "ANNOTATION_FIXED_PACKAGES_ENABLED=$packageFlag" -e "ANNOTATION_PACKAGE_CLAIM_ENABLED=$packageFlag" `
+        -e "ANNOTATION_PACKAGE_DISPATCH_ENABLED=$packageFlag" -e "ANNOTATION_PACKAGE_ADVANCED_ENABLED=$packageFlag" `
+        -e "ANNOTATION_PACKAGE_AUTOMATION_ENABLED=$packageFlag" `
         -e ANNOTATION_PROJECT_OPERATION_PROVIDER=access_control.project_operations.LifecycleProjectOperationProvider `
         python:3.11-slim-bookworm sleep 1800 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start disposable app runner.' }
@@ -94,6 +99,10 @@ backend application
     if ($fixture.project_id -lt 1 -or $fixture.manager -ne 'issue86-manager@example.test') { throw 'Invalid fixture scope.' }
     docker exec -d $runner /opt/venv/bin/python manage.py runserver 0.0.0.0:8080 --noreload
     if ($LASTEXITCODE -ne 0) { throw 'Could not start the local app.' }
+    if ($TestPackage) {
+        docker exec -d $runner /opt/venv/bin/python manage.py run_package_automation --interval 1
+        if ($LASTEXITCODE -ne 0) { throw 'Could not start the isolated package automation worker.' }
+    }
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
         try { Invoke-WebRequest -Uri "$baseUrl/user/login/" -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
@@ -102,12 +111,15 @@ backend application
     $env:NODE_PATH = $modulesPath
     $env:ISSUE86_E2E_URL = $baseUrl
     $env:CYPRESS_issue86_project_id = [string]$fixture.project_id
+    $env:CYPRESS_issue83_task_id = [string]$fixture.task_id
+    $env:CYPRESS_issue83_annotator_id = [string]$fixture.annotator_id
     $artifactConfig = 'screenshotsFolder=' + ($artifactRoot.Replace('\', '/') + '/screenshots') +
         ',videosFolder=' + ($artifactRoot.Replace('\', '/') + '/videos') +
         ',downloadsFolder=' + ($artifactRoot.Replace('\', '/') + '/downloads')
     Push-Location (Join-Path $repoRoot 'web/apps/labelstudio-e2e')
     try {
-        & node (Join-Path $modulesPath 'cypress/bin/cypress') run --project . --config-file cypress.lifecycle.config.ts `
+        $configFile = if ($TestPackage) { 'cypress.issue83.config.ts' } else { 'cypress.lifecycle.config.ts' }
+        & node (Join-Path $modulesPath 'cypress/bin/cypress') run --project . --config-file $configFile `
             --browser electron --headless --config $artifactConfig
         if ($LASTEXITCODE -ne 0) { throw "Lifecycle browser regression failed; artifacts: $artifactRoot" }
     } finally { Pop-Location }
