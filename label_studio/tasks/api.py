@@ -96,6 +96,10 @@ def lock_active_assignment(request, principal, task, *, require_token=True):
     )
     if bool_from_request(request.data, 'submit_for_review', False):
         require_project_operation(project, SUBMIT)
+    if require_token and 'task_handle' in request.data:
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_write
+
+        lock_capture_epoch_for_write()
     # Never use the pre-lock project's configuration or a moved task's scope.
     task = generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
     task.project = project

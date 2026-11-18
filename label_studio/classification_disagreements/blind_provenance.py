@@ -114,6 +114,19 @@ def record_uploaded_file_access(*, account_id, upload):
     return record_project_file_accesses(account_id=account_id, project_ids=project_ids)
 
 
+def lock_capture_epoch_for_write(using='default'):
+    """Serialize a participant write with admission and exposure recording.
+
+    Take this after the project lock and before task or assignment locks. Both
+    ordinary and quality writes use the same fence, including direct handle
+    callers that do not go through the blind editor adapter.
+    """
+    connection = connections[using]
+    if not connection.in_atomic_block:
+        raise RuntimeError('Capture write fencing requires an atomic transaction.')
+    return BlindCaptureEpoch.objects.using(using).select_for_update().filter(pk=1).first()
+
+
 def lock_capture_epoch_for_read(using='default'):
     """Fence exposure/revocation until the participant response is assembled.
 

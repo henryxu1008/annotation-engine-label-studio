@@ -471,6 +471,11 @@ into an already-rendered page. Writers acquire the capture epoch exclusively
 before task locks, avoiding shared-to-exclusive lock upgrades across projects;
 this also serializes participant writes across the capture epoch and needs
 throughput evaluation before any rollout.
+Direct handle writes and transitional handle adapters use the same exclusive
+epoch fence before locking a task. The `lock_handle_for_write` check validates
+the locked assignment once, including the full quality proof where applicable;
+the enclosing editor adapter still has its own entry and response checks. This
+does not yet make the evidence or timing of ordinary and quality reads uniform.
 
 The bounded reads do not eliminate the timing side channel. On an isolated
 PostgreSQL synthetic fixture, 14 warm paired API reads after two warm-ups had

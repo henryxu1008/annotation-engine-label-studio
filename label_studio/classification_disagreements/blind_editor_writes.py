@@ -39,8 +39,9 @@ class BlindWriteMixin:
         super().initial(request, *args, **kwargs)
         from access_control.project_operations import READ_WORK, lock_project_operation
         from tasks.models import TaskAssignment
-        from .blind_task_handles import _lock_bounded_task
-        from .models import BlindCaptureEpoch, BlindTaskHandle
+        from .blind_provenance import lock_capture_epoch_for_write
+        from .blind_task_handles import _lock_bounded_task, validate_locked_handle
+        from .models import BlindTaskHandle
 
         self.blind_principal = resolve_principal(request)
         self.blind_task_handle = self.kwargs['task_handle']
@@ -55,14 +56,19 @@ class BlindWriteMixin:
         # Writers can later validate quality evidence under an exclusive epoch
         # lock. Acquire that lock now, rather than upgrading a shared read lock
         # while another project's writer does the same.
-        BlindCaptureEpoch.objects.select_for_update().filter(pk=1).first()
+        lock_capture_epoch_for_write()
         task = _lock_bounded_task(project_id=project.pk, task_id=record.task_id_frozen)
-        if not TaskAssignment.objects.select_for_update().filter(
+        assignment = TaskAssignment.objects.select_for_update().filter(
                 pk=record.assignment_id_frozen, project=project, task=task,
                 assignee_id=self.blind_principal.local_user_id, status__in=TaskAssignment.ACTIVE_STATUSES,
-        ).exists():
+        ).first()
+        if assignment is None:
             raise NotFound('Work is unavailable.')
-        self.blind_assignment = resolve_handle(principal=self.blind_principal, task_handle=self.blind_task_handle)
+        task.project = project
+        assignment.task, assignment.project = task, project
+        self.blind_assignment = validate_locked_handle(
+            principal=self.blind_principal, record=record, assignment=assignment,
+        )
         if not sensitive_nonmanager(self.blind_assignment.project, self.blind_principal):
             raise NotFound('Work is unavailable.')
         if self.task_parent:

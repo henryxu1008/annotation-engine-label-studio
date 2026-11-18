@@ -150,9 +150,7 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
     """
     from access_control.project_operations import EDIT, lock_project_operation
     from tasks.exceptions import AssignmentConflictError
-    from .blind_provenance import checked_quality_proof
-    from .models import BlindQualityAssignment
-    from rest_framework.exceptions import ValidationError
+    from .blind_provenance import lock_capture_epoch_for_write
 
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError('Handle-based writes require an open transaction.')
@@ -173,6 +171,7 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
             or (expected_project_id is not None and record.project_id_frozen != expected_project_id)):
         raise AssignmentConflictError()
     project, _ = lock_project_operation(record.project_id_frozen, principal, EDIT)
+    lock_capture_epoch_for_write()
     task = _lock_bounded_task(task_id=record.task_id_frozen, project_id=project.pk)
     assignment = TaskAssignment.objects.select_for_update().filter(
         pk=record.assignment_id_frozen, task=task, project=project,
@@ -182,14 +181,9 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
     task.project = project
     assignment.task, assignment.project = task, project
     _validate(principal, assignment, record)
-    if not authorization.can_label_task(principal, task) or assignment.version != assignment_version:
+    # _validate already checks the live role, active assignment and complete
+    # quality proof while the project and epoch fences are held. The EDIT
+    # operation was checked when the project lock was acquired.
+    if assignment.version != assignment_version:
         raise AssignmentConflictError()
-    if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
-        marker = BlindQualityAssignment.objects.filter(assignment_id=assignment.pk, task_id=task.pk).first()
-        if marker is None:
-            raise AssignmentConflictError()
-        try:
-            checked_quality_proof(assignment=assignment, marker=marker)
-        except ValidationError:
-            raise AssignmentConflictError()
     return assignment

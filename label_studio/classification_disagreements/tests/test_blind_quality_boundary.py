@@ -835,6 +835,52 @@ class TestBlindQualityBoundary(APITestCase):
         assert second.pk == first.pk
         assert check.call_count == 1
 
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL row-lock order test')
+    def test_transitional_handle_write_fences_epoch_before_task(self):
+        from types import SimpleNamespace
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindCaptureEpoch
+        from tasks.api import lock_active_assignment
+
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        request = SimpleNamespace(user=self.annotator, data={
+            'task_handle': handle.task_handle, 'assignment_id': handle.assignment_handle,
+            'assignment_version': self.assignment.version,
+        })
+        locks = []
+
+        def capture(execute, sql, params, many, context):
+            if 'FOR UPDATE' in sql.upper():
+                locks.append(sql)
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(capture), transaction.atomic():
+            assert lock_active_assignment(request, principal, self.task).pk == self.assignment.pk
+        epoch = next(i for i, sql in enumerate(locks) if f'"{BlindCaptureEpoch._meta.db_table}"' in sql)
+        task = next(i for i, sql in enumerate(locks) if f'"{Task._meta.db_table}"' in sql)
+        assert epoch < task
+
+    def test_locked_quality_write_checks_full_proof_once(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_provenance
+        from classification_disagreements.blind_task_handles import issue_handle, lock_handle_for_write
+        from classification_disagreements.tests.test_gold_scoring import answer
+
+        self.qualified_submission(answer('Positive'))
+        self.assignment.refresh_from_db()
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        with patch.object(blind_provenance, 'checked_quality_proof', wraps=blind_provenance.checked_quality_proof) as check:
+            with transaction.atomic():
+                assignment = lock_handle_for_write(
+                    principal=principal, task_handle=handle.task_handle, assignment_handle=handle.assignment_handle,
+                    assignment_version=self.assignment.version,
+                )
+                assert assignment.pk == self.assignment.pk
+        assert check.call_count == 1
+
     def test_editor_checks_quality_once_before_issuing_annotation_and_draft_handles(self):
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_provenance
@@ -3619,6 +3665,91 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             for reader in readers:
                 reader.result(timeout=20)
             writer.result(timeout=20)
+
+    def test_ordinary_and_quality_handle_writes_fence_concurrent_exposure(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_task_handles
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_provenance import record_label_metadata_access
+        from classification_disagreements.blind_task_handles import issue_handle, lock_handle_for_write
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        ordinary_task = TaskFactory(project=self.project, data={'text': 'ordinary independent write'})
+        ordinary = TaskAssignment.objects.create(task=ordinary_task, project=self.project, assignee=members[0],
+                                                 assigned_by=self.manager)
+        carrier = TaskFactory(project=self.project, data={'text': 'independent quality write carrier'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            quality = create_mixed_assignment(task=carrier, assignee=members[1],
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(self.manager), key=uuid4())
+            for member, assignment in zip(members, (ordinary, quality)):
+                with self.subTest(work_type='quality' if assignment.pk == quality.pk else 'ordinary'):
+                    principal = local_principal(member)
+                    handle = issue_handle(principal=principal, assignment_id=assignment.pk)
+                    args = {'principal': principal, 'task_handle': handle.task_handle,
+                            'assignment_handle': handle.assignment_handle, 'assignment_version': assignment.version}
+                    entered, release, exposure_started = Event(), Event(), Event()
+                    original = blind_task_handles._validate
+
+                    def pause(*args, **kwargs):
+                        entered.set()
+                        if not release.wait(15):
+                            raise AssertionError('handle write was not released')
+                        return original(*args, **kwargs)
+
+                    def write():
+                        close_old_connections()
+                        try:
+                            with transaction.atomic():
+                                return lock_handle_for_write(**args).pk
+                        finally:
+                            close_old_connections()
+
+                    def expose():
+                        close_old_connections()
+                        try:
+                            exposure_started.set()
+                            record_label_metadata_access(account_id=member.pk)
+                        finally:
+                            close_old_connections()
+
+                    with patch.object(blind_task_handles, '_validate', side_effect=pause):
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            writing = pool.submit(write)
+                            try:
+                                assert entered.wait(10)
+                                exposing = pool.submit(expose)
+                                assert exposure_started.wait(10)
+                                with self.assertRaises(TimeoutError):
+                                    exposing.result(timeout=0.3)
+                            finally:
+                                release.set()
+                            assert writing.result(timeout=20) == assignment.pk
+                            exposing.result(timeout=20)
+                    if assignment.pk == quality.pk:
+                        with transaction.atomic(), self.assertRaises(NotFound):
+                            lock_handle_for_write(**args)
+                    else:
+                        with transaction.atomic():
+                            assert lock_handle_for_write(**args).pk == assignment.pk
 
     def test_mixed_replay_fences_concurrent_reference_exposure(self):
         from access_control.identity import LocalIdentityProvider
