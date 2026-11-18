@@ -137,7 +137,18 @@ class TestPackageOverlap(PackageFixture, TransactionTestCase):
             replay = self.dispatch(user, keys[index])
             assert replay.status_code == 200
             assert replay.json()['assignment_ids'] == results[index][1]['assignment_ids']
-        work = [self.annotate(user) for user in [self.annotator, self.other]]
+        annotation_barrier = Barrier(2)
+
+        def create_work(user):
+            close_old_connections()
+            try:
+                annotation_barrier.wait(timeout=10)
+                return self.annotate(user)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            work = list(executor.map(create_work, [self.annotator, self.other]))
         assert work[0][0] != work[1][0]
 
     def test_package_id_cannot_be_used_from_another_real_project(self):
