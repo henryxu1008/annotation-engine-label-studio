@@ -20,7 +20,8 @@ from access_control.project_operations import (
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, IntegerField, OuterRef, Q
+from django.db.models.expressions import RawSQL
 from django.utils import timezone
 from projects.models import Project, ProjectImport, ProjectMember
 from rest_framework import generics, serializers
@@ -274,7 +275,15 @@ class PackageBatchAPI(PackageAPIBase):
             if 'project_import_id' in payload:
                 imported = (
                     ProjectImport.objects.select_for_update()
-                    .filter(pk=payload['project_import_id'], project=project)
+                    .alias(
+                        provenance_count=RawSQL(
+                            "CASE WHEN jsonb_typeof(task_ids) = 'array' "
+                            "THEN jsonb_array_length(task_ids) ELSE NULL END",
+                            [],
+                            output_field=IntegerField(),
+                        )
+                    )
+                    .filter(pk=payload['project_import_id'], project=project, provenance_count__lte=10000)
                     .first()
                 )
                 if (

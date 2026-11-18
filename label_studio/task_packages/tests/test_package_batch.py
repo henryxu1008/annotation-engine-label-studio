@@ -147,6 +147,16 @@ class TestPackageBatch(PackageFixture, TransactionTestCase):
         assert self.post_batch({**payload, 'project_import_id': other_job.pk}).status_code == 400
         assert not TaskPackageBatch.objects.exists() and not TaskPackage.objects.exists()
 
+    def test_oversized_import_receipt_is_rejected_without_creating_packages(self):
+        from projects.models import ProjectImport
+
+        job, tasks = self.imported_tasks()
+        ids = [tasks[0].pk] + list(range(100000000, 100010000))
+        ProjectImport.objects.filter(pk=job.pk).update(task_ids=ids, task_count=len(ids))
+        result = self.post_batch({**self.payload, 'project_import_id': job.pk, 'task_ids': [tasks[0].pk]})
+        assert result.status_code == 400, result.content
+        assert not TaskPackageBatch.objects.exists() and not TaskPackage.objects.exists()
+
     def test_import_state_is_rechecked_after_concurrent_update(self):
         from projects.models import ProjectImport
 
