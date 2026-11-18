@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor
@@ -19,10 +19,10 @@ from access_control.project_operations import (
 )
 from core.permissions import all_permissions
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
-from projects.models import Project, ProjectMember
+from projects.models import Project, ProjectImport, ProjectMember
 from rest_framework import generics, serializers
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -32,7 +32,7 @@ from tasks.my_work import annotate_assignment_work, work_projects
 
 from .access import current_read_policy, fail, visible_packages
 from .dispatch import dispatch_package
-from .models import TaskPackage, TaskPackageItem, TaskPackageOverdueNotice, TaskPackagePool
+from .models import TaskPackage, TaskPackageBatch, TaskPackageItem, TaskPackageOverdueNotice, TaskPackagePool
 from .pools import (
     balanced_dispatch,
     claim_pool,
@@ -63,6 +63,16 @@ class CreatePackage(serializers.Serializer):
         if len(value) != len(set(value)):
             fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'Task IDs must be unique.')
         return sorted(value)
+
+
+class CreatePackageBatch(CreatePackage):
+    batch_size = serializers.IntegerField(min_value=1, max_value=1000)
+    project_import_id = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        if (len(attrs['task_ids']) + attrs['batch_size'] - 1) // attrs['batch_size'] > 100:
+            fail(ValidationError, 'PACKAGE_BATCH_LIMIT', 'A split may create at most 100 packages.')
+        return attrs
 
 
 class PoolConfiguration(serializers.Serializer):
@@ -230,6 +240,133 @@ class PackageListAPI(PackageAPIBase):
                 ]
             )
         return Response({**package_metadata(package, 'manager'), 'replayed': False}, status=201)
+
+
+class PackageBatchAPI(PackageAPIBase):
+    """Create all packages and the replay receipt in one database transaction."""
+
+    def post(self, request, pk):
+        principal, _, _, _, _ = self.context(request, pk)
+        if connection.vendor != 'postgresql':
+            fail(Conflict, 'PACKAGE_BATCH_DATABASE_UNSUPPORTED', 'Batch creation requires PostgreSQL locking.')
+        serializer = CreatePackageBatch(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        payload = serializer.validated_data
+        request_hash = digest(payload)
+        with transaction.atomic():
+            project, actor = lock_project_operation(pk, principal, ORGANIZE_WORK)
+            if not authorization.can_manage_project(principal, project):
+                raise PermissionDenied()
+            previous = TaskPackageBatch.objects.filter(project=project, idempotency_key=key).first()
+            if previous:
+                if (
+                    previous.request_hash != request_hash
+                    or previous.creator_principal != principal.principal_id
+                    or previous.created_by_id != actor.pk
+                ):
+                    fail(Conflict, 'PACKAGE_KEY_CONFLICT', 'This key already identifies another creation request.')
+                return Response({**previous.receipt, 'replayed': True}, status=200)
+            source = None
+            if 'project_import_id' in payload:
+                imported = (
+                    ProjectImport.objects.select_for_update()
+                    .filter(pk=payload['project_import_id'], project=project)
+                    .first()
+                )
+                if (
+                    imported is None
+                    or imported.status != ProjectImport.Status.COMPLETED
+                    or not imported.commit_to_project
+                    or not imported.return_task_ids
+                    or imported.created_at is None
+                    or imported.finished_at is None
+                    or not isinstance(imported.task_ids, list)
+                    or not imported.task_ids
+                    or any(type(value) is not int or value < 1 for value in imported.task_ids)
+                    or len(set(imported.task_ids)) != len(imported.task_ids)
+                    or len(imported.task_ids) != imported.task_count
+                    or not set(payload['task_ids']).issubset(imported.task_ids)
+                ):
+                    fail(
+                        ValidationError,
+                        'PACKAGE_IMPORT_UNVERIFIABLE',
+                        'The selected import provenance cannot be verified.',
+                    )
+                source = {
+                    'type': 'project_import_task_ids_v1',
+                    'id': imported.pk,
+                    'created_at': imported.created_at.isoformat(),
+                    'finished_at': imported.finished_at.isoformat(),
+                    'task_count': imported.task_count,
+                    'task_ids_hash': digest(sorted(imported.task_ids)),
+                }
+            tasks = list(
+                Task.objects.select_for_update().filter(project=project, pk__in=payload['task_ids']).order_by('pk')
+            )
+            if len(tasks) != len(payload['task_ids']):
+                fail(
+                    ValidationError,
+                    'PACKAGE_TASKS_UNAVAILABLE',
+                    'Some selected tasks are unavailable in this project.',
+                )
+            if source and any(
+                task.created_at is None
+                or task.created_at < imported.created_at
+                or task.created_at > imported.finished_at
+                for task in tasks
+            ):
+                fail(
+                    ValidationError,
+                    'PACKAGE_IMPORT_UNVERIFIABLE',
+                    'The selected import provenance cannot be verified.',
+                )
+            entries = []
+            size = payload['batch_size']
+            total = (len(tasks) + size - 1) // size
+            for start in range(0, len(tasks), size):
+                members = tasks[start : start + size]
+                suffix = f' [{start // size + 1}/{total}]'
+                name = payload['name'][: 160 - len(suffix)] + suffix
+                ids = [task.pk for task in members]
+                package = TaskPackage.objects.create(
+                    project=project,
+                    created_by=actor,
+                    creator_principal=principal.principal_id,
+                    idempotency_key=uuid4(),
+                    request_hash=request_hash,
+                    membership_hash=digest(ids),
+                    name=name,
+                    instructions=payload['instructions'],
+                    source_note=payload['source_note'],
+                )
+                TaskPackageItem.objects.bulk_create(
+                    [
+                        TaskPackageItem(
+                            package=package, task=task, original_task_id=task.pk, original_created_at=task.created_at
+                        )
+                        for task in members
+                    ]
+                )
+                entries.append({'id': package.pk, 'task_ids': ids})
+            receipt = {'rule': 'task-id-ascending-v1', 'batch_size': size, 'packages': entries}
+            if source:
+                receipt['source'] = source
+            batch = TaskPackageBatch.objects.create(
+                project=project,
+                created_by=actor,
+                creator_principal=principal.principal_id,
+                idempotency_key=key,
+                request_hash=request_hash,
+                receipt=receipt,
+            )
+            receipt['batch_id'] = batch.pk
+            batch.receipt = receipt
+            batch.save(update_fields=['receipt'])
+        return Response({**receipt, 'replayed': False}, status=201)
 
 
 class PackageDispatchAPI(PackageAPIBase):
