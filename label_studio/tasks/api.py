@@ -5,7 +5,14 @@ import logging
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
 from access_control.project_access import visible_projects_for_actor
-from access_control.project_operations import EDIT, SUBMIT, lock_project_operation, require_project_operation
+from access_control.project_operations import (
+    EDIT,
+    MANAGE_TASKS,
+    SUBMIT,
+    lifecycle_background_fence_enabled,
+    lock_project_operation,
+    require_project_operation,
+)
 from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.mixins import GetParentObjectMixin
@@ -16,6 +23,7 @@ from data_manager.api import TaskListAPI as DMTaskListAPI
 from data_manager.functions import evaluate_predictions
 from data_manager.models import PrepareParams
 from data_manager.serializers import DataManagerTaskSerializer
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
@@ -316,14 +324,23 @@ class TaskListAPI(DMTaskListAPI):
         project_id = self.request.data.get('project')
         project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=project_id)
         principal = resolve_principal(self.request)
-        authorization.require(
-            authorization.can_manage_project(principal, project),
-            'Project manager role is required to create tasks.',
-        )
-        instance = serializer.save(project=project)
-        emit_webhooks_for_instance(
-            self.request.user.active_organization, project, WebhookAction.TASKS_CREATED, [instance]
-        )
+        with transaction.atomic():
+            project, _ = lock_project_operation(project.pk, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project),
+                'Project manager role is required to create tasks.',
+            )
+            instance = serializer.save(project=project)
+            organization = self.request.user.active_organization
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_task_created_webhooks
+
+                queue_task_created_webhooks(project, [instance])
+            else:
+                transaction.on_commit(
+                    lambda: emit_webhooks_for_instance(organization, project, WebhookAction.TASKS_CREATED, [instance]),
+                    robust=True,
+                )
 
 
 @method_decorator(
@@ -461,7 +478,7 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         context['project'] = project = self.task.project
 
         # get prediction
-        if (
+        if not lifecycle_background_fence_enabled() and (
             project.evaluate_predictions_automatically or project.show_collab_predictions
         ) and not self.task.predictions.exists():
             evaluate_predictions([self.task])
@@ -557,6 +574,34 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
             authorization.can_manage_task(principal, self.task),
             'Project manager role is required to modify tasks.',
         )
+
+    def _lock_managed_task(self, task):
+        principal = resolve_principal(self.request)
+        project, _ = lock_project_operation(task.project_id, principal, MANAGE_TASKS)
+        authorization.require(
+            authorization.can_manage_project(principal, project),
+            'Project manager role is required to modify tasks.',
+        )
+        return generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            task = self._lock_managed_task(serializer.instance)
+            requested_project = serializer.validated_data.get('project')
+            if requested_project is not None and requested_project.pk != task.project_id:
+                raise ValidationError('Moving tasks between projects is not supported.')
+            serializer.instance = task
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        with transaction.atomic():
+            task = self._lock_managed_task(instance)
+            project, task_id = task.project, task.pk
+            task.delete()
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_project_event
+
+                queue_project_event(project, WebhookAction.TASKS_DELETED, [{'id': task_id}])
 
     def patch(self, request, *args, **kwargs):
         self._require_manager(request)
@@ -822,10 +867,14 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
         if assignment.annotation_id != annotation.id:
             raise PermissionDenied('Only the active assignment owner can delete this annotation.')
         check_submission_draft(self.request, assignment, actor, annotation)
-        task_id = annotation.task_id
+        task_id, annotation_id, project = annotation.task_id, annotation.pk, annotation.project
         annotation.delete()
         if task_id is not None:
             Task.objects.filter(id=task_id).update(updated_by=actor)
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_project_event
+
+            queue_project_event(project, WebhookAction.ANNOTATIONS_DELETED, [{'id': annotation_id}])
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
@@ -875,6 +924,10 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
         # Re-serialize the refreshed instance so the write response matches
         # the authoritative persisted audit identity.
         result.data = self.get_serializer(annotation).data
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_project_event
+
+            queue_project_event(annotation.project, WebhookAction.ANNOTATION_UPDATED, annotation)
         return result
 
     def get(self, request, *args, **kwargs):
@@ -1109,6 +1162,11 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
             annotation.task.ensure_unique_groundtruth(annotation_id=annotation.id)
 
         fill_history_annotation(user, task, annotation)
+
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_project_event
+
+            queue_project_event(annotation.project, WebhookAction.ANNOTATION_CREATED, annotation)
 
         return annotation
 
@@ -1771,9 +1829,12 @@ class PredictionAPI(viewsets.ModelViewSet):
 
     @staticmethod
     def _locked_write_scope(task, principal):
+        from classification_disagreements.blind_participant_projection import sensitive_project
         from classification_disagreements.models import BlindQualityAssignment
 
-        project, _ = lock_project_operation(task.project_id, principal, EDIT)
+        project, _ = lock_project_operation(task.project_id, principal, MANAGE_TASKS)
+        if sensitive_project(project):
+            require_project_operation(project, EDIT)
         authorization.require(authorization.can_manage_project(principal, project),
                               'Project manager role is required to manage predictions.')
         task = generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
@@ -1813,6 +1874,7 @@ class PredictionAPI(viewsets.ModelViewSet):
             Prediction.objects.select_for_update(), pk=instance.pk, task=task, project=project,
         )
         prediction.delete()
+
 
 
 @method_decorator(name='get', decorator=extend_schema(exclude=True))
@@ -1866,6 +1928,11 @@ class AnnotationConvertAPI(generics.RetrieveAPIView):
         annotation.delete()
 
         if not suppress_quality_webhook:
-            emit_webhooks_for_instance(organization, project, WebhookAction.ANNOTATIONS_DELETED, [pk])
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from webhooks.durable import queue_project_event
+
+                queue_project_event(project, WebhookAction.ANNOTATIONS_DELETED, [{'id': pk}])
+            else:
+                emit_webhooks_for_instance(organization, project, WebhookAction.ANNOTATIONS_DELETED, [pk])
         data = AnnotationDraftSerializer(instance=draft).data
         return Response(status=201, data=data)

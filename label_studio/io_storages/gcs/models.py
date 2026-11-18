@@ -15,6 +15,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 from google.auth.transport.requests import AuthorizedSession
+from io_storages.admission import admitted_annotation_effect
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
@@ -247,10 +248,15 @@ class GCSImportStorage(ProjectStorageMixin, GCSImportStorageBase):
 
 
 class GCSExportStorage(GCSStorageMixin, ExportStorage):
+    @admitted_annotation_effect('annotation_export')
     @serialize_mutable_delivery
     @transaction.atomic
     def save_annotation(self, annotation):
-        self.require_mutable_delivery_allowed(lock_project=True, annotation=annotation)
+        self.require_mutable_delivery_allowed(lock_project=True)
+        annotation = self.current_annotation_for_delivery(annotation)
+        if annotation is None:
+            return
+        self.require_annotation_delivery_allowed(annotation)
         bucket = self.get_bucket()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)
@@ -296,6 +302,11 @@ def _dispatch_gcs_annotation_export(annotation_id):
 
 @receiver(post_save, sender=Annotation)
 def export_annotation_to_gcs_storages(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        from io_storages.annotation_outbox import queue_annotation_exports
+
+        queue_annotation_exports(instance, GCSExportStorage)
+        return
     storages = getattr(instance.project, 'io_storages_gcsexportstorages', None)
     if storages and storages.exists():  # avoid excess jobs in rq
         annotation_id = instance.pk

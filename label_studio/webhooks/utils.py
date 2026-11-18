@@ -215,6 +215,15 @@ def api_webhook(action):
         def wrap(self, request, *args, **kwargs):
             response = func(self, request, *args, **kwargs)
 
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) and action in (
+                WebhookAction.ANNOTATION_CREATED,
+                WebhookAction.ANNOTATION_UPDATED,
+                WebhookAction.PROJECT_CREATED,
+                WebhookAction.PROJECT_UPDATED,
+                WebhookAction.LABEL_LINK_UPDATED,
+            ):
+                return response
+
             action_meta = WebhookAction.ACTIONS[action]
             many = action_meta['many']
             instance = action_meta['model'].objects.get(id=response.data.get('id'))
@@ -283,6 +292,13 @@ def api_webhook_for_delete(action):
 
             if suppress_quality:
                 return response
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) and action in (
+                WebhookAction.ANNOTATIONS_DELETED,
+                WebhookAction.TASKS_DELETED,
+                WebhookAction.LABEL_LINK_DELETED,
+            ):
+                return response
+
             emit_webhooks_for_instance(request.user.active_organization, project, action, obj)
             return response
 

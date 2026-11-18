@@ -16,6 +16,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+from io_storages.admission import admitted_annotation_effect
 from io_storages.base_models import (
     ExportStorage,
     ExportStorageLink,
@@ -196,10 +197,15 @@ class LocalFilesImportStorage(ProjectStorageMixin, LocalFilesImportStorageBase):
 
 
 class LocalFilesExportStorage(LocalFilesMixin, ExportStorage):
+    @admitted_annotation_effect('annotation_export')
     @serialize_mutable_delivery
     @transaction.atomic
     def save_annotation(self, annotation):
-        self.require_mutable_delivery_allowed(lock_project=True, annotation=annotation)
+        self.require_mutable_delivery_allowed(lock_project=True)
+        annotation = self.current_annotation_for_delivery(annotation)
+        if annotation is None:
+            return
+        self.require_annotation_delivery_allowed(annotation)
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)
 
@@ -218,6 +224,7 @@ class LocalFilesExportStorage(LocalFilesMixin, ExportStorage):
         # Create export storage link
         LocalFilesExportStorageLink.create(annotation, self)
 
+    @admitted_annotation_effect('annotation_delete')
     def delete_annotation(self, annotation):
         logger.debug(f'Deleting object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         key = LocalFilesExportStorageLink.get_key(annotation)
@@ -265,6 +272,11 @@ def _export_annotation_to_local_files(annotation_id):
 
 @receiver(post_save, sender=Annotation)
 def export_annotation_to_local_files(sender, instance, **kwargs):
+    if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+        from io_storages.annotation_outbox import queue_annotation_exports
+
+        queue_annotation_exports(instance, LocalFilesExportStorage)
+        return
     annotation_id = instance.pk
     transaction.on_commit(lambda annotation_id=annotation_id: _export_annotation_to_local_files(annotation_id))
 
@@ -275,5 +287,10 @@ def delete_annotation_from_local_files(sender, instance, **kwargs):
     for link in links:
         storage = link.storage
         if storage.can_delete_objects:
+            if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+                from io_storages.annotation_outbox import queue_annotation_deletion
+
+                queue_annotation_deletion(instance, storage, LocalFilesExportStorageLink.get_key(instance))
+                continue
             logger.debug(f'Delete {instance} from Local Storage {storage}')  # nosec
             storage.delete_annotation(instance)

@@ -17,6 +17,7 @@ from access_control.identity import (
 from access_control.project_operations import (
     EXPORT_REVIEW_AUDIT,
     READ_WORK,
+    lifecycle_background_fence_enabled,
     lock_project_operation,
     project_operation_policy,
 )
@@ -42,6 +43,7 @@ from .audit_models import (
     AuditPackage,
     AuditRetryReceipt,
 )
+from .lifecycle_fence import require_enrolled_export_effect
 
 PROFILE = c.PROFILE
 queue_available = approved.queue_available
@@ -382,6 +384,7 @@ def preview(request, ctx, body):
 
 
 def capture(request, ctx, body, key):
+    require_enrolled_export_effect()
     body = parse(body)
     if not c.uuid(key):
         c.fail('INVALID_KEY', 400)
@@ -572,6 +575,8 @@ def generate_bound_v1(package_id, token):
 
 def enqueue(package_id):
     """One producer token. Redis is outside the DB transaction; duplicate delivery is harmless."""
+    if lifecycle_background_fence_enabled():
+        return
     try:
         with transaction.atomic():
             hint = AuditPackage.objects.only('project_id').get(pk=package_id)
@@ -612,6 +617,7 @@ def enqueue(package_id):
 
 
 def retry(request, ctx, package, key):
+    require_enrolled_export_effect()
     if not c.uuid(key):
         c.fail('INVALID_KEY', 400)
     # Queue health and module fingerprints may read files/network, never while
@@ -679,6 +685,7 @@ def _retry(request, ctx, package, key, health, formatter):
 
 
 def generate(package_id, token):
+    require_enrolled_export_effect()
     from .audit_files import ScratchLease, storage_binding
 
     lease = path = None

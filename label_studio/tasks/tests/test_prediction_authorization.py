@@ -13,6 +13,23 @@ class TestPredictionAuthorization(APITestCase):
     setUpTestData = classmethod(fixtures.TestSubmissionReviewWorkflow.setUpTestData.__func__)
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
 
+    def test_draft_prediction_policy_preserves_ordinary_and_blind_boundaries(self):
+        self.project.lifecycle_state = 'draft'
+        self.project.save(update_fields=['lifecycle_state'])
+        self.client.force_authenticate(self.manager)
+        settings = {'ANNOTATION_PROJECT_OPERATION_PROVIDER':
+                    'access_control.project_operations.LifecycleProjectOperationProvider'}
+        with self.settings(**settings):
+            normal = self.client.post('/api/predictions/', {'task': self.task.pk, 'result': []}, format='json')
+            assert normal.status_code == 201, normal.content
+        with self.settings(**settings, ANNOTATION_CLASSIFICATION_BLIND_ENABLED=True,
+                           ANNOTATION_CLASSIFICATION_BLIND_PROJECTS={
+                               f'{self.organization.pk}:{self.project.pk}': True,
+                           }):
+            denied = self.client.post('/api/predictions/', {'task': self.task.pk, 'result': []}, format='json')
+            assert denied.status_code == 403, denied.content
+        assert Prediction.objects.filter(task=self.task).count() == 1
+
     def test_list_detail_write_and_revocation_follow_task_assignment(self):
         allowed = PredictionFactory(task=self.task, result=[])
         other_task = TaskFactory(project=self.project)

@@ -55,6 +55,20 @@ class TestReleaseSnapshots(APITestCase):
     def read(self, snapshot, suffix=""):
         return self.client.get(self.snapshot_url(snapshot.release, snapshot, suffix))
 
+    def test_lifecycle_admission_blocks_snapshot_creation_and_retry(self):
+        snapshot = self.capture()
+        with override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True), \
+             patch.object(service, 'dispatch') as dispatch:
+            create = self.client.post(self.snapshot_url(snapshot.release), {}, format='json',
+                                      HTTP_IDEMPOTENCY_KEY='lifecycle-blocked')
+            retry = self.client.post(self.snapshot_url(snapshot.release, snapshot, 'retry/'), {}, format='json')
+            manifest = self.read(snapshot, 'manifest/')
+        assert create.status_code == 403, create.content
+        assert retry.status_code == 403, retry.content
+        assert manifest.status_code == 200, manifest.content
+        assert Snapshot.objects.filter(release=snapshot.release).count() == 1
+        dispatch.assert_not_called()
+
     def test_snapshot_manifest_and_exact_download(self):
         snapshot = self.capture()
         assert snapshot.state == "ready", snapshot.error_code

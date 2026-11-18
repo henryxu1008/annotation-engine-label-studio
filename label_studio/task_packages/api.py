@@ -2,11 +2,14 @@
 
 import hashlib
 import json
+import re
 from uuid import UUID
 
 from access_control.authorization import authorization
 from access_control.identity import resolve_actor
 from access_control.project_operations import (
+    ASSIGN,
+    BATCH_ASSIGN,
     EDIT,
     ORGANIZE_WORK,
     READ_WORK,
@@ -17,18 +20,27 @@ from access_control.project_operations import (
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from projects.models import Project, ProjectMember
 from rest_framework import generics, serializers
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from tasks.models import Task
-from tasks.my_work import work_projects
+from tasks.models import Task, TaskAssignment
+from tasks.my_work import annotate_assignment_work, work_projects
 
 from .access import current_read_policy, fail, visible_packages
-from .models import TaskPackage, TaskPackageItem
+from .dispatch import dispatch_package
+from .models import TaskPackage, TaskPackageItem, TaskPackageOverdueNotice, TaskPackagePool
+from .pools import (
+    balanced_dispatch,
+    claim_pool,
+    configure_pool,
+    local_automation_identity,
+    postgres_required,
+    reopen_pool,
+)
 from .progress import PackageWork, filter_states, requested_state
 
 
@@ -51,6 +63,36 @@ class CreatePackage(serializers.Serializer):
         if len(value) != len(set(value)):
             fail(ValidationError, 'PACKAGE_INVALID_INPUT', 'Task IDs must be unique.')
         return sorted(value)
+
+
+class PoolConfiguration(serializers.Serializer):
+    expected_revision = serializers.IntegerField(min_value=0)
+    candidate_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), min_length=1, max_length=100)
+    due_at = serializers.DateTimeField(allow_null=True)
+    enabled = serializers.BooleanField()
+    priority = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    automatic = serializers.BooleanField(required=False)
+
+    def to_internal_value(self, data):
+        if (
+            not isinstance(data, dict)
+            or set(data) - set(self.fields)
+            or not {'expected_revision', 'candidate_ids', 'due_at', 'enabled'} <= set(data)
+        ):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'All pool configuration fields are required.')
+        due = data.get('due_at')
+        if due is not None and (not isinstance(due, str) or not re.search(r'(Z|[+-]\d\d:\d\d)$', due)):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Deadline must include a UTC offset.')
+        if type(data['expected_revision']) is not int or type(data['enabled']) is not bool:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid revision or enabled value.')
+        if 'priority' in data and type(data['priority']) is not int:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Priority must be an integer.')
+        if 'automatic' in data and type(data['automatic']) is not bool:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Automatic allocation must be a boolean.')
+        ids = data['candidate_ids']
+        if not isinstance(ids, list) or any(type(value) is not int for value in ids) or len(ids) != len(set(ids)):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Candidate IDs must be distinct positive integers.')
+        return super().to_internal_value(data)
 
 
 def digest(value):
@@ -136,7 +178,10 @@ class PackageListAPI(PackageAPIBase):
         )
         policy = current_read_policy(project, actor, role, package_ids=ids)
         response.data.update(
-            role=role, can_create=role == 'manager' and policy.allows(ORGANIZE_WORK), as_of=timezone.now()
+            role=role,
+            can_create=role == 'manager' and policy.allows(ORGANIZE_WORK),
+            as_of=timezone.now(),
+            can_discover_pools=settings.ANNOTATION_PACKAGE_CLAIM_ENABLED and role in ('annotator', 'manager'),
         )
         return response
 
@@ -202,6 +247,351 @@ class PackageListAPI(PackageAPIBase):
                 ]
             )
         return Response({**package_metadata(package, 'manager'), 'replayed': False}, status=201)
+
+
+class PackageDispatchAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED:
+            raise NotFound()
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data) != {'assignee_id'}
+            or type(request.data['assignee_id']) is not int
+            or request.data['assignee_id'] < 1
+        ):
+            fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'Provide only a positive integer assignee_id.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'DISPATCH_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        assignee_id = request.data['assignee_id']
+        receipt, replayed = dispatch_package(
+            project_id=pk,
+            package_id=package_id,
+            assignee_id=assignee_id,
+            principal=principal,
+            key=key,
+            request_hash=digest({'package_id': package_id, 'assignee_id': assignee_id}),
+        )
+        return Response(
+            {
+                'dispatch_id': receipt.pk,
+                'package_id': receipt.package_id,
+                'assignee_id': receipt.assignee_id_snapshot,
+                'assignment_ids': receipt.assignment_ids,
+                'assignment_count': len(receipt.assignment_ids),
+                'replayed': replayed,
+            },
+            status=200 if replayed else 201,
+        )
+
+
+class PackagePoolAPI(PackageAPIBase):
+    def get(self, request, pk, package_id):
+        principal, _, project, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if not authorization.can_manage_project(principal, project):
+            raise PermissionDenied()
+        package = generics.get_object_or_404(TaskPackage, pk=package_id, project=project)
+        pool = TaskPackagePool.objects.filter(package=package).first()
+        overdue = overdue_counts([pool], project) if pool else {}
+        if not authorization.can_manage_project(principal, project):
+            raise PermissionDenied()
+        return Response(
+            {
+                'revision': pool.revision if pool else 0,
+                'enabled': pool.enabled if pool else False,
+                'candidate_ids': list(pool.candidates.order_by('pk').values_list('pk', flat=True)) if pool else [],
+                'due_at': pool.due_at if pool else None,
+                'claimed': hasattr(pool, 'claim') if pool else False,
+                'claim_id': pool.claim.pk if pool and hasattr(pool, 'claim') else None,
+                'priority': pool.priority if pool else 0,
+                'advanced_enabled': settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED,
+                'automation_available': settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED
+                and settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+                and settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+                and local_automation_identity(),
+                'automatic': pool.automatic if pool else False,
+                'overdue_count': overdue.get(pool.pk, 0) if pool else 0,
+            }
+        )
+
+    def put(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        serializer = PoolConfiguration(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if 'priority' in serializer.validated_data and not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED:
+            raise NotFound()
+        if serializer.validated_data.get('automatic') and not settings.ANNOTATION_PACKAGE_AUTOMATION_ENABLED:
+            raise NotFound()
+        pool = configure_pool(project_id=pk, package_id=package_id, principal=principal, **serializer.validated_data)
+        return Response(
+            {
+                'revision': pool.revision,
+                'enabled': pool.enabled,
+                'priority': pool.priority,
+                'automatic': pool.automatic,
+                'due_at': pool.due_at,
+                'candidate_ids': sorted(serializer.validated_data['candidate_ids']),
+            }
+        )
+
+
+def overdue_source(pool):
+    """Return the current pool-owned receipt, never an arbitrary direct dispatch."""
+    if hasattr(pool, 'claim'):
+        claim = pool.claim
+        if claim.actor_id is not None and claim.actor_id == claim.actor_id_snapshot:
+            return claim.actor_id, claim.assignment_ids, {'claim_id_snapshot': claim.pk}
+        return None
+    if pool.allocation_id:
+        allocation = pool.allocation
+        if (
+            allocation.package_id == pool.package_id
+            and allocation.project_id == pool.package.project_id
+            and allocation.assignee_id is not None
+            and allocation.assignee_id == allocation.assignee_id_snapshot
+        ):
+            return allocation.assignee_id, allocation.assignment_ids, {'dispatch_id_snapshot': allocation.pk}
+    return None
+
+
+def overdue_counts(pools, project):
+    """Count unfinished work belonging to the current pool receipt."""
+    now = timezone.now()
+    by_assignment = {}
+    for pool in pools:
+        source = overdue_source(pool) if pool.due_at and pool.due_at <= now else None
+        if source:
+            actor_id, assignment_ids, _ = source
+            for assignment_id in assignment_ids:
+                by_assignment.setdefault(assignment_id, []).append((pool.pk, actor_id))
+    counts = {}
+    if by_assignment:
+        assignments = TaskAssignment.objects.filter(
+            project=project, pk__in=by_assignment, status__in=TaskAssignment.ACTIVE_STATUSES
+        )
+        unfinished = annotate_assignment_work(assignments).filter(
+            work_state__in=['assigned', 'in_progress', 'rework', 'conflict']
+        )
+        for assignment_id, assignee_id in unfinished.values_list('pk', 'assignee_id'):
+            for pool_id, owner_id in by_assignment[assignment_id]:
+                if owner_id == assignee_id:
+                    counts[pool_id] = counts.get(pool_id, 0) + 1
+    return counts
+
+
+class AvailablePoolsAPI(PackageAPIBase):
+    def get(self, request, pk):
+        principal, actor, project, role, policy = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if role not in ('annotator', 'manager'):
+            raise PermissionDenied()
+        occupied = TaskAssignment.objects.filter(
+            task__package_items__package_id=OuterRef('package_id'), status__in=TaskAssignment.ACTIVE_STATUSES
+        )
+        personal_work = occupied.filter(assignee=actor)
+        visible = (
+            Q(candidates=actor, enabled=True, claim__isnull=True, occupied=False)
+            | Q(candidates=actor, claim__actor=actor)
+            | Q(claim__isnull=True, allocation__assignee=actor, personal_work=True)
+        )
+        pools = (
+            TaskPackagePool.objects.filter(
+                package__project=project, package__project_id__in=work_projects(actor, [role])
+            )
+            .annotate(occupied=Exists(occupied), personal_work=Exists(personal_work))
+            .filter(visible)
+            .distinct()
+            .select_related('package', 'claim', 'allocation')
+            .order_by('-priority', 'pk')
+        )
+        page = self.paginate_queryset(pools)
+        now = timezone.now()
+        overdue = overdue_counts(page, project)
+        current = set(
+            TaskPackagePool.objects.filter(
+                pk__in=[pool.pk for pool in page],
+                package__project_id__in=work_projects(actor, [role]),
+            )
+            .annotate(occupied=Exists(occupied), personal_work=Exists(personal_work))
+            .filter(visible)
+            .distinct()
+            .values_list('pk', flat=True)
+        )
+        if current != {pool.pk for pool in page} or authorization.project_role(principal, project) != role:
+            fail(PermissionDenied, 'POOL_ACCESS_CHANGED', 'Claim pool access changed; refresh the page.')
+        return self.get_paginated_response(
+            [
+                {
+                    'package_id': pool.package_id,
+                    'name': pool.package.name,
+                    'due_at': pool.due_at,
+                    'priority': pool.priority,
+                    'claimed': hasattr(pool, 'claim'),
+                    'allocated': not hasattr(pool, 'claim')
+                    and pool.allocation_id is not None
+                    and pool.allocation.assignee_id == actor.pk
+                    and pool.personal_work,
+                    'deadline_passed': bool(pool.due_at and pool.due_at <= now),
+                    'overdue_count': overdue.get(pool.pk, 0),
+                    'can_claim': not hasattr(pool, 'claim')
+                    and not pool.occupied
+                    and pool.enabled
+                    and (not pool.due_at or pool.due_at > now)
+                    and policy.allows(BATCH_ASSIGN)
+                    and policy.allows(ASSIGN)
+                    and policy.allows(EDIT),
+                }
+                for pool in page
+            ]
+        )
+
+
+class PackageClaimAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No claim fields are accepted.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        claim, replayed, released = claim_pool(project_id=pk, package_id=package_id, principal=principal, key=key)
+        return Response(
+            {
+                'package_id': package_id,
+                'assignment_ids': claim.assignment_ids,
+                'assignment_count': len(claim.assignment_ids),
+                'replayed': replayed,
+                'released': released,
+            },
+            status=200 if replayed else 201,
+        )
+
+
+class PackageReopenAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED:
+            raise NotFound()
+        data = request.data
+        if (
+            not isinstance(data, dict)
+            or set(data) != {'expected_revision', 'claim_id'}
+            or type(data['expected_revision']) is not int
+            or data['expected_revision'] < 1
+            or type(data['claim_id']) is not int
+            or data['claim_id'] < 1
+        ):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Provide the current revision and claim ID.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        history, replayed = reopen_pool(
+            project_id=pk,
+            package_id=package_id,
+            principal=principal,
+            expected_revision=data['expected_revision'],
+            claim_id=data['claim_id'],
+            key=key,
+        )
+        return Response({'claim_id': history.original_claim_id, 'replayed': replayed})
+
+
+class PackageBalancedDispatchAPI(PackageAPIBase):
+    def post(self, request, pk, package_id):
+        principal, _, _, _, _ = self.context(request, pk)
+        if (
+            not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            or not settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            or not settings.ANNOTATION_PACKAGE_ADVANCED_ENABLED
+        ):
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No allocation fields are accepted.')
+        try:
+            key = UUID(request.headers.get('Idempotency-Key', ''))
+        except (ValueError, AttributeError):
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'A UUID Idempotency-Key header is required.')
+        receipt, replayed = balanced_dispatch(
+            project_id=pk,
+            package_id=package_id,
+            principal=principal,
+            key=key,
+            request_hash=digest({'package_id': package_id, 'mode': 'balanced'}),
+        )
+        return Response(
+            {
+                'dispatch_id': receipt.pk,
+                'assignee_id': receipt.assignee_id_snapshot,
+                'assignment_ids': receipt.assignment_ids,
+                'assignment_count': len(receipt.assignment_ids),
+                'replayed': replayed,
+            },
+            status=200 if replayed else 201,
+        )
+
+
+class PackageOverdueNoticeAPI(PackageAPIBase):
+    def post(self, request, pk):
+        principal, _, _, _, _ = self.context(request, pk, filters=('after',))
+        if not settings.ANNOTATION_PACKAGE_CLAIM_ENABLED:
+            raise NotFound()
+        if request.data:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'No notification fields are accepted.')
+        after = request.query_params.get('after', '0')
+        if not after.isdigit() or len(after) > 18:
+            fail(ValidationError, 'POOL_INVALID_INPUT', 'Invalid notification cursor.')
+        postgres_required()
+        with transaction.atomic():
+            project, actor = lock_project_operation(pk, principal, READ_WORK)
+            if authorization.project_role(principal, project) not in ('annotator', 'manager'):
+                raise PermissionDenied()
+            pools = list(
+                TaskPackagePool.objects.filter(
+                    Q(claim__actor=actor) | Q(claim__isnull=True, allocation__assignee=actor),
+                    package__project=project,
+                    due_at__lte=timezone.now(),
+                    pk__gt=int(after),
+                )
+                .select_related('claim', 'allocation', 'package')
+                .order_by('pk')[:51]
+            )
+            page, has_next = pools[:50], len(pools) > 50
+            counts = overdue_counts(page, project)
+            notices = []
+            for pool in page:
+                count = counts.get(pool.pk, 0)
+                source = overdue_source(pool)
+                if not count or not source or source[0] != actor.pk:
+                    continue
+                notice, _ = TaskPackageOverdueNotice.objects.get_or_create(
+                    pool=pool,
+                    **source[2],
+                    due_at=pool.due_at,
+                    defaults={'recipient': actor, 'overdue_count': count},
+                )
+                if notice.recipient_id != actor.pk:
+                    raise PermissionDenied()
+                notices.append(
+                    {
+                        'id': notice.pk,
+                        'package_id': pool.package_id,
+                        'name': pool.package.name,
+                        'due_at': pool.due_at,
+                        'overdue_count': count,
+                    }
+                )
+        return Response({'results': notices, 'next_after': page[-1].pk if has_next else None})
 
 
 class PackageDetailAPI(PackageAPIBase):
@@ -301,6 +691,14 @@ class PackageDetailAPI(PackageAPIBase):
             filter_states=filter_states(role),
             as_of=timezone.now(),
             can_review=role == 'reviewer' and policy.allows(REVIEW),
+            can_manage_pool=role == 'manager'
+            and settings.ANNOTATION_PACKAGE_CLAIM_ENABLED
+            and policy.allows(BATCH_ASSIGN)
+            and policy.allows(ASSIGN),
+            can_dispatch=role == 'manager'
+            and settings.ANNOTATION_PACKAGE_DISPATCH_ENABLED
+            and policy.allows(BATCH_ASSIGN)
+            and policy.allows(ASSIGN),
             continue_url=f'/projects/{pk}/data?labeling=1&task_package={package.pk}'
             if role == 'annotator' and policy.allows(EDIT) and not state
             else None,

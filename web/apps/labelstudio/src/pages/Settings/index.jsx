@@ -9,6 +9,7 @@ import { AnnotationSettings } from "./AnnotationSettings";
 import { LabelingSettings } from "./LabelingSettings";
 import { MachineLearningSettings } from "./MachineLearningSettings/MachineLearningSettings";
 import { MembersSettings } from "./MembersSettings";
+import { LifecycleSettings } from "./LifecycleSettings";
 import { PredictionsSettings } from "./PredictionsSettings/PredictionsSettings";
 import { StorageSettings } from "./StorageSettings/StorageSettings";
 import "./settings.scss";
@@ -21,10 +22,21 @@ export const MenuLayout = ({ children, ...routeProps }) => {
   const callApi = useRef(api.callApi).current;
   const { project } = useProject();
   const [canManageMembers, setCanManageMembers] = useState(false);
+  const [canManageLifecycle, setCanManageLifecycle] = useState(false);
 
   useEffect(() => {
     let active = true;
     setCanManageMembers(false);
+    setCanManageLifecycle(false);
+
+    const probeLifecycle = async () => {
+      if (!project?.id) return;
+      const result = await callApi("projectLifecycle", {
+        params: { pk: project.id },
+        errorFilter: () => true,
+      });
+      if (active) setCanManageLifecycle(Boolean(result?.state && !result?.error && result?.$meta?.ok !== false));
+    };
 
     const probeMemberManagement = async () => {
       if (!project?.id) return;
@@ -47,6 +59,7 @@ export const MenuLayout = ({ children, ...routeProps }) => {
     };
 
     probeMemberManagement();
+    probeLifecycle();
 
     return () => {
       active = false;
@@ -60,6 +73,7 @@ export const MenuLayout = ({ children, ...routeProps }) => {
         LabelingSettings,
         AnnotationSettings,
         canManageMembers && MembersSettings,
+        canManageLifecycle && LifecycleSettings,
         MachineLearningSettings,
         PredictionsSettings,
         StorageSettings,
@@ -79,6 +93,7 @@ const pages = {
   AnnotationSettings,
   LabelingSettings,
   MembersSettings,
+  LifecycleSettings,
   MachineLearningSettings,
   PredictionsSettings,
   StorageSettings,

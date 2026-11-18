@@ -1,7 +1,10 @@
 import logging
 
-from access_control.identity import resolve_actor
+from access_control import authorization
+from access_control.identity import resolve_actor, resolve_principal
+from access_control.project_operations import MANAGE_TASKS, lifecycle_background_fence_enabled, lock_project_operation
 from core.permissions import ViewClassPermission, all_permissions
+from django.conf import settings
 from django.db import transaction
 from django.db.models import CharField, Count, Q
 from django.db.models.functions import Cast
@@ -15,6 +18,7 @@ from labels_manager.serializers import (
     LabelSerializer,
 )
 from rest_framework import views, viewsets
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from webhooks.utils import api_webhook, api_webhook_for_delete
@@ -34,6 +38,21 @@ class BlindLabelExposureFence:
 
         _, actor = resolve_actor(request)
         record_label_metadata_access(account_id=actor.pk)
+
+
+class LifecycleLabelWriteFence:
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if request.method not in ('GET', 'HEAD', 'OPTIONS') and lifecycle_background_fence_enabled():
+            enrolled = getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False) and (
+                (
+                    isinstance(self, LabelLinkAPI)
+                    and getattr(self, 'action', None) in ('update', 'partial_update', 'destroy')
+                )
+                or (isinstance(self, LabelAPI) and getattr(self, 'action', None) == 'create')
+            )
+            if not enrolled:
+                raise PermissionDenied('Label changes are unavailable while lifecycle admission is enabled.')
 
 
 @method_decorator(
@@ -104,7 +123,7 @@ class BlindLabelExposureFence:
     ),
 )
 @method_decorator(name='update', decorator=extend_schema(exclude=True))
-class LabelAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
+class LabelAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, viewsets.ModelViewSet):
     pagination_class = PageNumberPagination
     serializer_class = LabelSerializer
     permission_required = ViewClassPermission(
@@ -120,8 +139,30 @@ class LabelAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
             kwargs['many'] = True
         return super().get_serializer(*args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return super().create(request, *args, **kwargs)
+        with transaction.atomic():
+            return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, organization=self.request.user.active_organization)
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            items = serializer.validated_data
+            if not items:
+                raise ValidationError('At least one label is required.')
+            project_id = items[0]['project'].pk
+            if any(item['project'].pk != project_id for item in items):
+                raise ValidationError('Creating labels across projects is unavailable.')
+            principal = resolve_principal(self.request)
+            project, actor = lock_project_operation(project_id, principal, MANAGE_TASKS)
+            authorization.require(
+                authorization.can_manage_project(principal, project), 'Project manager role is required.'
+            )
+            for item in items:
+                item['project'] = project
+            serializer.save(created_by=actor, organization=project.organization)
+        else:
+            serializer.save(created_by=self.request.user, organization=self.request.user.active_organization)
 
     def get_queryset(self):
         return Label.objects.filter(organization=self.request.user.active_organization).prefetch_related('links')
@@ -205,7 +246,7 @@ class LabelAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
     ),
 )
 @method_decorator(name='update', decorator=extend_schema(exclude=True))
-class LabelLinkAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
+class LabelLinkAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = {
         'project': ['exact'],
@@ -231,13 +272,55 @@ class LabelLinkAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
             )
         )
 
+    def _lock_enrolled_link(self, request):
+        link = self.get_object()
+        principal = resolve_principal(request)
+        project, _ = lock_project_operation(link.project_id, principal, MANAGE_TASKS)
+        authorization.require(
+            authorization.can_manage_project(principal, project), 'Project manager role is required.'
+        )
+        locked = LabelLink.objects.select_for_update().filter(pk=link.pk, project=project).first()
+        if locked is None:
+            raise ValidationError('The label link changed project; retry the request.')
+        return locked
+
+    def perform_update(self, serializer):
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            link = serializer.instance
+            for field in ('project', 'label'):
+                value = serializer.validated_data.get(field)
+                if value is not None and value.pk != getattr(link, f'{field}_id'):
+                    raise ValidationError('Changing a label link project or label is unavailable during admission.')
+        super().perform_update(serializer)
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_project_event
+            from webhooks.models import WebhookAction
+
+            queue_project_event(serializer.instance.project, WebhookAction.LABEL_LINK_UPDATED, serializer.instance)
+
+    def perform_destroy(self, instance):
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from webhooks.durable import queue_project_event
+            from webhooks.models import WebhookAction
+
+            queue_project_event(instance.project, WebhookAction.LABEL_LINK_DELETED, {'id': instance.pk})
+        super().perform_destroy(instance)
+
     @api_webhook('LABEL_LINK_UPDATED')
     def update(self, request, *args, **kwargs):
-        return super().update(request, *args, **kwargs)
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return super().update(request, *args, **kwargs)
+        with transaction.atomic():
+            self._lock_enrolled_link(request)
+            return super().update(request, *args, **kwargs)
 
     @api_webhook_for_delete('LABEL_LINK_DELETED')
     def destroy(self, request, *args, **kwargs):
-        return super().destroy(request, *args, **kwargs)
+        if not getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            return super().destroy(request, *args, **kwargs)
+        with transaction.atomic():
+            self._lock_enrolled_link(request)
+            return super().destroy(request, *args, **kwargs)
 
 
 @method_decorator(
@@ -255,7 +338,7 @@ class LabelLinkAPI(BlindLabelExposureFence, viewsets.ModelViewSet):
         },
     ),
 )
-class LabelBulkUpdateAPI(BlindLabelExposureFence, views.APIView):
+class LabelBulkUpdateAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, views.APIView):
     permission_required = all_permissions.labels_change
 
     @transaction.atomic

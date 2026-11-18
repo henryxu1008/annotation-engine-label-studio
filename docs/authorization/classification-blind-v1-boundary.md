@@ -499,6 +499,15 @@ isolated PostgreSQL fixture, 14 warm paired reads measured a median of 42.7 ms
 for ordinary work. The difference remains observable in this diagnostic; the
 common persisted evidence and live-revocation path is still required before
 public mixed delivery. These measurements are not a production benchmark.
+The optional fixed-package balanced allocator counts active assignments to
+choose a recipient. A sampled task and its deferred source can distort that
+count, revealing information through the chosen recipient. Balanced allocation
+therefore fails closed for opted-in or previously sampled projects, including
+scheduled allocation, until a common blind allocation contract is verified.
+Ordinary projects retain the existing balanced allocation behavior.
+Participant package claims recheck blind scope after acquiring the project
+lock, so a claim that started before a sample was bound cannot return raw
+assignment identities or create ordinary package work afterward.
 For repeatable local diagnostics, `measure_classification_blind_e2e` accepts
 the two outputs of the isolated synthetic seed commands, alternates the two
 reads and reports aggregate latency and query counts without returning handles.

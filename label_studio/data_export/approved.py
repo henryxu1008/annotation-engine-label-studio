@@ -24,6 +24,7 @@ from access_control.identity import (
     get_identity_provider,
     resolve_actor,
 )
+from access_control.project_operations import lifecycle_background_fence_enabled
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -32,6 +33,7 @@ from label_studio_sdk.converter import Converter
 from organizations.models import OrganizationMember
 from projects.models import Project, ProjectMember
 from rest_framework.exceptions import APIException
+from .lifecycle_fence import require_enrolled_export_effect
 from tasks.models import Submission
 
 from .approved_models import (
@@ -479,6 +481,7 @@ def summary(release, actor=None):
 
 
 def freeze(project, principal, actor, body, key):
+    require_enrolled_export_effect()
     normalized = normalize(body)
     if not isinstance(key, str) or not re.fullmatch(r"[\x21-\x7e]{1,128}", key):
         fail("INVALID_REQUEST", 400)
@@ -585,6 +588,8 @@ def freeze(project, principal, actor, body, key):
 
 
 def dispatch(release_id):
+    if lifecycle_background_fence_enabled():
+        return
     # DB receipt commits before enqueue. Crash/enqueue failures are recoverable via retry.
     with transaction.atomic():
         release = Release.objects.select_for_update().get(pk=release_id)
@@ -686,6 +691,7 @@ def discard_unpublished_attempt(release_id, attempt, directory, root):
 
 
 def generate(release_id, token):
+    require_enrolled_export_effect()
     with transaction.atomic():
         release = Release.objects.select_for_update().get(pk=release_id)
         attempt = Attempt.objects.get(release=release, token=token)

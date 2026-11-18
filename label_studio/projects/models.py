@@ -374,6 +374,11 @@ class Project(ProjectMixin, FsmHistoryStateModel):
     )
     purge_at = models.DateTimeField(_('purge at'), null=True, blank=True)
 
+    # Separate from the upstream creation/publication flags and task FSM.
+    # Legacy projects remain unclassified until an explicit migration decision.
+    lifecycle_state = models.CharField(max_length=16, default='legacy')
+    lifecycle_revision = models.PositiveBigIntegerField(default=0)
+
     def __init__(self, *args, **kwargs):
         super(Project, self).__init__(*args, **kwargs)
         # This check is required because deferred fields cause issues with evaluating lazy (deferred) fields if read directly, which means that any attempt to optimize a queryset involving projects
@@ -1357,6 +1362,12 @@ class Project(ProjectMixin, FsmHistoryStateModel):
 
     class Meta:
         db_table = 'project'
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(lifecycle_state__in=['legacy', 'draft', 'active', 'paused', 'completed', 'archived']),
+                name='valid_project_lifecycle_state',
+            ),
+        ]
         indexes = [
             models.Index(fields=['pinned_at', 'created_at']),
         ]
@@ -1420,6 +1431,20 @@ class LabelStreamHistory(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['user', 'project'], name='unique_history')]
+
+
+class ProjectLifecycleEvent(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name='lifecycle_events')
+    previous_state = models.CharField(max_length=16)
+    next_state = models.CharField(max_length=16)
+    revision = models.PositiveBigIntegerField()
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
+    actor_id_snapshot = models.BigIntegerField()
+    reason = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['project', 'revision'], name='unique_project_lifecycle_revision')]
 
 
 class ProjectMember(models.Model):

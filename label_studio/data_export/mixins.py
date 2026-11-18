@@ -27,6 +27,7 @@ from django.utils import dateformat, timezone
 from label_studio_sdk.converter import Converter
 from tasks.models import Annotation, AnnotationDraft, Task
 from .boundary import has_immutable_release_boundary
+from .lifecycle_fence import require_enrolled_export_effect
 
 ONLY = 'only'
 EXCLUDE = 'exclude'
@@ -290,6 +291,7 @@ class ExportMixin:
 
     @transaction.atomic
     def export_to_file(self, task_filter_options=None, annotation_filter_options=None, serialization_options=None):
+        require_enrolled_export_effect()
         logger.debug(
             f'Run export for {self.id} with params:\n'
             f'task_filter_options: {task_filter_options}\n'
@@ -334,6 +336,7 @@ class ExportMixin:
             self.save(update_fields=['finished_at'])
 
     def run_file_exporting(self, task_filter_options=None, annotation_filter_options=None, serialization_options=None):
+        require_enrolled_export_effect()
         if self.status == self.Status.IN_PROGRESS:
             logger.warning('Try to export with in progress stage')
             return
@@ -361,6 +364,7 @@ class ExportMixin:
 
     @transaction.atomic
     def convert_file(self, to_format, download_resources=False, hostname=None):
+        require_enrolled_export_effect()
         Project.objects.select_for_update().get(pk=self.project_id)
         if has_immutable_release_boundary(self.project_id):
             raise ValueError(
@@ -472,6 +476,7 @@ class ExportMixin:
 def export_background(
     export_id, task_filter_options, annotation_filter_options, serialization_options, *args, **kwargs
 ):
+    require_enrolled_export_effect()
     from data_export.models import Export
 
     Export.objects.get(id=export_id).export_to_file(

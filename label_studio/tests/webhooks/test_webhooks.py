@@ -148,7 +148,7 @@ def test_webhooks_for_projects(configured_project, business_client, organization
 
 # TASK CREATE/DELETE API
 # WE DON'T SUPPORT UPDATE FOR TASK
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_webhooks_for_tasks(configured_project, business_client, organization_webhook):
     webhook = organization_webhook
     # CREATE
@@ -189,7 +189,7 @@ def test_webhooks_for_tasks(configured_project, business_client, organization_we
 
 
 # TASK CREATE on IMPORT
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_webhooks_for_tasks_import(configured_project, business_client, organization_webhook):
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -221,9 +221,17 @@ def test_webhooks_for_tasks_import(configured_project, business_client, organiza
 # ANNOTATION CREATE/UPDATE/DELETE
 @pytest.mark.django_db
 def test_webhooks_for_annotation(configured_project, business_client, organization_webhook):
+    from tasks.models import TaskAssignment
 
     webhook = organization_webhook
     task = configured_project.tasks.all().first()
+    assignment = TaskAssignment.objects.create(
+        task=task,
+        project=configured_project,
+        assignee=business_client.user,
+        assigned_by=business_client.user,
+    )
+    token = {'assignment_id': assignment.pk, 'assignment_version': assignment.version}
     # CREATE
     with requests_mock.Mocker(real_http=True) as m:
         m.register_uri('POST', webhook.url)
@@ -231,6 +239,7 @@ def test_webhooks_for_annotation(configured_project, business_client, organizati
             f'/api/tasks/{task.id}/annotations?project={configured_project.id}',
             data=json.dumps(
                 {
+                    **token,
                     'result': [
                         {
                             'value': {'choices': ['class_A']},
@@ -264,6 +273,7 @@ def test_webhooks_for_annotation(configured_project, business_client, organizati
             f'/api/annotations/{annotation_id}?project={configured_project.id}&taskId={task.id}',
             data=json.dumps(
                 {
+                    **token,
                     'result': [],
                 }
             ),
@@ -275,6 +285,7 @@ def test_webhooks_for_annotation(configured_project, business_client, organizati
             f'/api/annotations/{annotation_id}?project={configured_project.id}&taskId={task.id}',
             data=json.dumps(
                 {
+                    **token,
                     'result': [
                         {
                             'value': {'choices': ['class_B']},
@@ -319,16 +330,32 @@ def test_webhooks_for_annotation(configured_project, business_client, organizati
 # ACTION: DELETE ANNOTATIONS
 @pytest.mark.django_db
 def test_webhooks_for_action_delete_tasks_annotations(configured_project, business_client, organization_webhook):
+    from tasks.models import TaskAssignment
+
     webhook = organization_webhook
 
     # create annotations for tasks
-    for task in configured_project.tasks.all():
-        response = business_client.post(
-            f'/api/tasks/{task.id}/annotations?project={configured_project.id}',
-            data=json.dumps({'result': [{'value': {'choices': ['class_B']}}]}),
-            content_type='application/json',
-        )
-        assert response.status_code == 201
+    with requests_mock.Mocker(real_http=True) as m:
+        m.register_uri('POST', webhook.url)
+        for task in configured_project.tasks.all():
+            assignment = TaskAssignment.objects.create(
+                task=task,
+                project=configured_project,
+                assignee=business_client.user,
+                assigned_by=business_client.user,
+            )
+            response = business_client.post(
+                f'/api/tasks/{task.id}/annotations?project={configured_project.id}',
+                data=json.dumps(
+                    {
+                        'assignment_id': assignment.pk,
+                        'assignment_version': assignment.version,
+                        'result': [{'value': {'choices': ['class_B']}}],
+                    }
+                ),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
 
     with requests_mock.Mocker(real_http=True) as m:
         m.register_uri('POST', webhook.url)

@@ -120,6 +120,19 @@ class TestApprovedExports(APITestCase):
     def detail(self, release, suffix=""):
         return self.url + str(release.pk) + "/" + suffix
 
+    def test_lifecycle_admission_blocks_release_creation_and_retry(self):
+        existing = self.frozen()
+        with override_settings(ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True), \
+             patch.object(service, 'dispatch') as dispatch:
+            created = self.create(key='lifecycle-blocked')
+            retry = self.client.post(self.detail(existing, 'retry/'), {}, format='json')
+            detail = self.client.get(self.detail(existing))
+        assert created.status_code == 403, created.content
+        assert retry.status_code == 403, retry.content
+        assert detail.status_code == 200, detail.content
+        assert Release.objects.filter(project=self.project).count() == 1
+        dispatch.assert_not_called()
+
     def test_capabilities_reject_invalid_submission_ids_without_server_errors(self):
         for value in ("abc", "", "-1", "0", "1.5", "9223372036854775808", "9" * 5000):
             with self.subTest(value=value[:30]):

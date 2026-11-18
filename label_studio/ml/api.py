@@ -5,6 +5,7 @@ import logging
 from access_control.identity import resolve_actor
 from access_control.authorization import authorization
 from access_control.project_access import require_project_manager, visible_projects_for_actor
+from access_control.project_operations import lifecycle_background_fence_enabled
 from core.api_permissions import HasActorObjectPermission
 from core.feature_flags import flag_set
 from core.permissions import ViewClassPermission, all_permissions
@@ -17,6 +18,7 @@ from ml.models import MLBackend
 from ml.serializers import MLBackendSerializer, MLInteractiveAnnotatingRequest
 from projects.models import Task
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -142,7 +144,9 @@ class MLBackendListAPI(generics.ListCreateAPIView):
 
         self.check_object_permissions(self.request, project)
 
-        ml_backends = project.update_ml_backends_state()
+        ml_backends = (
+            project.get_ml_backends() if lifecycle_background_fence_enabled() else project.update_ml_backends_state()
+        )
 
         return ml_backends
 
@@ -152,6 +156,8 @@ class MLBackendListAPI(generics.ListCreateAPIView):
         _, actor = resolve_actor(request)
         project = generics.get_object_or_404(visible_projects_for_actor(actor), pk=request.data.get('project'))
         require_project_manager(request, project)
+        if lifecycle_background_fence_enabled():
+            raise PermissionDenied('ML backend changes are unavailable while lifecycle admission is enabled.')
         return super().post(request, *args, **kwargs)
 
     def perform_create(self, serializer):
@@ -242,6 +248,10 @@ class MLBackendDetailAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         ml_backend = super(MLBackendDetailAPI, self).get_object()
+        if lifecycle_background_fence_enabled():
+            if self.request.method != 'GET':
+                raise PermissionDenied('ML backend changes are unavailable while lifecycle admission is enabled.')
+            return ml_backend
         ml_backend.update_state()
         return ml_backend
 
@@ -303,6 +313,8 @@ class MLBackendTrainAPI(APIView):
     permission_required = all_permissions.projects_change
 
     def post(self, request, *args, **kwargs):
+        if lifecycle_background_fence_enabled():
+            raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
         require_project_manager(request, ml_backend.project)
@@ -350,6 +362,8 @@ class MLBackendPredictTestAPI(APIView):
     permission_required = all_permissions.projects_change
 
     def post(self, request, *args, **kwargs):
+        if lifecycle_background_fence_enabled():
+            raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
         require_project_manager(request, ml_backend.project)
@@ -448,6 +462,8 @@ class MLBackendInteractiveAnnotating(APIView):
         Send a request to the machine learning backend set up to be used for interactive preannotations to retrieve a
         predicted region based on annotator input.
         """
+        if lifecycle_background_fence_enabled():
+            raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
         serializer = MLInteractiveAnnotatingRequest(data=request.data)
@@ -501,6 +517,8 @@ class MLBackendVersionsAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.projects_change
 
     def get(self, request, *args, **kwargs):
+        if lifecycle_background_fence_enabled():
+            raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
         versions_response = ml_backend.get_versions()

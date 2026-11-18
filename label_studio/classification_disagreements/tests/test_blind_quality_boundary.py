@@ -1256,6 +1256,24 @@ class TestBlindQualityBoundary(APITestCase):
         payload = json.loads(b''.join(response.streaming_content))
         assert [item['id'] for item in payload] == [normal_task.pk]
 
+    def test_storage_admission_refresh_cannot_export_stale_quality_annotation(self):
+        from contextlib import nullcontext
+
+        bind_marker(self.assignment)
+        quality_annotation, _ = self._submit_new_annotation()
+        unrelated_task = TaskFactory(project=self.project, data={'text': 'ordinary-synthetic'})
+        # Simulate a worker holding a stale object with an incorrect cached
+        # task binding. The persisted annotation is still quality-only.
+        quality_annotation.task_id = unrelated_task.pk
+        with TemporaryDirectory() as path:
+            storage = LocalFilesExportStorage.objects.create(project=self.project, path=path)
+            with self.settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True), patch(
+                'io_storages.admission.storage_effect', return_value=nullcontext(None),
+            ), patch('io_storages.localfiles.models.open_local_file_write') as output:
+                with self.assertRaises(ValidationError):
+                    storage.save_annotation(quality_annotation)
+                output.assert_not_called()
+
     def test_moved_quality_task_remains_excluded_from_other_project_export(self):
         bind_marker(self.assignment)
         other = ProjectFactory()
@@ -2766,6 +2784,19 @@ class TestBlindQualityBoundary(APITestCase):
             assert not project_file_scope_supported(self.project.pk)
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
             assert not submission.has_permission(self.annotator)
+
+    def test_lifecycle_label_reads_still_revoke_quality_access(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+
+        _, submission = self.qualified_submission(answer('Positive'))
+        handle = issue_handle(principal=local_principal(self.annotator), assignment_id=self.assignment.pk)
+        assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 200
+        with self.settings(ANNOTATION_STORAGE_ADMISSION_ENABLED=True, ANNOTATION_LIFECYCLE_TRANSITIONS_ENABLED=True):
+            assert self.client.get('/api/label_links/').status_code == 200
+        assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
+        assert not submission.has_permission(self.annotator)
 
     def test_label_read_before_project_membership_prevents_quality_admission(self):
         from access_control.identity import LocalIdentityProvider

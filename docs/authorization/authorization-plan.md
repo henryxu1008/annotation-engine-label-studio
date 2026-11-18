@@ -873,6 +873,460 @@ obey its denied operations. This patch does not implement #86 transitions or
 claim coverage of import, storage, project configuration, deletion or release
 policy. Host-controlled/batch writes remain unavailable pending that contract.
 
+The proposed #86 lifecycle matrix, coverage inventory and rollout gates are in
+[project-lifecycle-issue86-contract.md](project-lifecycle-issue86-contract.md).
+That document is a design proposal; it does not enable or enforce a lifecycle.
+The direct `ProjectTaskListAPI` create and delete-all mutations additionally use
+the project-first `MANAGE_TASKS` fence and recheck the Manager role under that
+fence. The legacy provider permits this operation to preserve existing behavior.
+This covers only those two endpoints, not bulk/import, individual task deletion,
+storage synchronization or lifecycle transitions.
+
+The non-streaming `async_import_background` commit also acquires the project
+fence and rechecks the queued actor's current Manager authority. Its task writes,
+summary and completed receipt share one transaction; failure is recorded only
+after rollback and the webhook is scheduled after commit. The job claim uses a
+row lock. Streaming import and reimport stage parsed batches in a private temporary
+file before acquiring the project fence, then commit task batches, counters and
+the completed receipt in one transaction. Reimport rechecks file identities and
+label config under the lock; an empty legacy file list is a no-op. Parsing URL
+imports can itself create upload files and tracking metadata before the fence,
+and external objects may change without a database update. Temporary disk space,
+large transactions, provider-specific source stability and cleanup therefore
+remain rollout concerns. Synchronous import, storage workers and external side
+effects are not covered. This is not lifecycle enablement or a storage drain
+protocol.
+
+Streaming reimport now refuses to remove tasks with an existing export-storage
+link: built-in pre-delete hooks can otherwise delete external objects before the
+database transaction commits. This conservative check does not establish
+coverage for custom signal handlers. `SYNC_STORAGE` is checked before a source
+storage scan and again at target storage writes under the existing project lock;
+legacy mode permits it. Source scans lack a project-wide drain and admission can
+race with a transition. Neither the status fields nor these checks are durable
+admission receipts, and they do not recover uncertain external effects after
+worker or connection failure. Keep #86 enforcement disabled until those gaps and
+automatic annotation export/deletion signals are addressed.
+
+An experimental default-off `ANNOTATION_STORAGE_ADMISSION_ENABLED` path adds a
+PostgreSQL ledger for worker scans and built-in annotation export calls. It
+commits admission before external work, and keeps exceptions and abandoned
+running operations blocking. The experimental transition also inventories the
+built-in legacy storage sync statuses: queued, in-progress, failed,
+completed-with-errors and unknown statuses remain blocking, even when no new
+storage-operation row exists. The management API includes their project-scoped
+identifiers and statuses in the existing bounded, paginated inventory. A storage
+status of initialized or completed is only the absence of this blocker; it is
+not proof of process, credential or in-flight request isolation. While admission
+is enabled, storage configuration updates and deletion also reject unsettled
+legacy statuses, and clients cannot set the server-owned sync state, timestamps,
+job ID, error or metadata fields. Otherwise a manager could erase the status
+that is preventing a transition. A new versioned sync also checks the current
+storage status under its row lock before queuing: a failed, partial or unknown
+legacy state cannot be overwritten by a retry and thereby appear completed.
+Even when the status reads completed, an outstanding sync ledger entry blocks
+another dispatch, so an uncertain original request cannot be overlapped by a
+new attempt.
+For newly queued syncs, the storage's queued status is bound transactionally
+to the durable operation ID. Cancellation clears the storage status only if
+the binding still matches; an older queue or an overwritten/missing binding
+stays blocking. A delayed enqueue response similarly updates the job ID only
+while its operation is still queued or running and remains the storage's queue
+owner, under the project and operation locks. These bindings prevent
+new code from clearing or replacing a different status; they do not isolate
+old workers or prove that an old cloud request has terminated.
+Before a v2 sync worker claims a queued record it locks and reloads the storage
+row and requires both queued status and the matching operation ID. An older v2
+record without a binding, or one whose shared storage state was overwritten by
+an older producer, remains queued and blocking; it cannot be replayed merely
+because the worker or queue has been upgraded. Redispatch also refuses a known
+unowned entry before enqueueing; the worker still checks again under locks to
+cover changes after that preflight. When the broker returns a job ID, replay
+records it only for the still-matching, nonterminal queue owner; synchronous
+fallbacks do not invent a job ID. With admission enabled, an absent job ID by
+itself does not cause the storage health check to infer failure while enqueue
+or synchronous execution may still be underway. Resolving unowned records still
+requires an independently safe upgrade and provider-recovery procedure.
+Each sync dispatch also carries the durable dispatch-attempt number: timer
+reservations advance it under the ledger lock, while worker claims and delayed
+job-ID updates must match it. A superseded queued worker cannot claim or replace
+the newer attempt's job ID. Older queued payloads without an attempt number are
+treated as attempt zero; replayed entries with a higher number fail closed until
+the matching worker is available. Older worker code does not enforce this fence,
+so mixed-version deployment still requires separate process isolation.
+New sync jobs use a versioned failure callback which only updates storage status
+when the same operation is uncertain, its attempt and queue owner still match,
+and any recorded job ID agrees. A stale or legacy callback cannot mark a newer
+sync as failed. The uncertain ledger remains blocking; the callback does not
+prove a cloud request has stopped or authorize recovery.
+These guards do not fence legacy annotation
+workers that never update sync status or processes with direct cloud access.
+The transition uses
+`lock_drained_project` while holding its transaction; a Manager-scoped
+reconciliation records an explicit operator attestation and reason. The
+attestation is not proof that a process stopped or an external request finished.
+Built-in local/S3 pre-delete signals instead write a pending deletion record in
+the source transaction; they do not delete the object. Pending storage work must
+settle first, and a pending deletion blocks further storage effects. An internal
+Manager-only command records an explicit operator attestation after manual
+provider deletion. It does not verify the provider or perform the deletion.
+The ledger protects project records from deletion and currently has no retention
+or public recovery UI. The separate
+default-off lifecycle command locks Project, checks Manager authority and the
+ledger in the same transaction, and appends a revisioned transition event.
+Existing projects remain `legacy`; fields are not inferred from publication
+flags. A versioned `storage_sync_v2` queue entry records a queued operation
+and generation before dispatch; a cancelled or stale entry cannot be claimed.
+Compatible code rejects missing generations for non-legacy projects, and the
+legacy policy provider fails closed for an already-classified project.
+
+The experimental automatic annotation-export signals create generation-bound
+queued ledger entries and register a versioned dispatch after transaction commit;
+lost dispatch leaves the entry queued and blocks drain. An entry can be
+redispatched by its internal function and a duplicate execution cannot claim it
+twice. This assumes the source mutation and signal share a database transaction;
+`Annotation.save()` now takes the project fence and source/outbox transaction
+when admission is enabled, including standalone saves. Bulk writes and direct
+database updates still bypass model signals and need separate treatment. The bounded
+`replay_storage_outbox` command is available to a trusted operator when the
+feature is enabled; it skips deletion intents and reserves bounded replay
+attempts with a cooldown. A [sample systemd timer](../../deploy/storage-outbox/label-studio-storage-outbox.timer)
+is provided but is not installed. Duplicate queue deliveries remain possible;
+the database claim rejects them after the first claimant.
+
+The default-off public API exposes Manager-scoped state, commands and blocking
+operation records. Both the public API and its underlying reconciliation
+function reject running-operation reconciliation, including after a worker
+disappears; a running record remains blocking until a safe recovery protocol
+can establish the original worker and effect have terminated. For known S3,
+GCS and Azure storage models it also rejects manual reconciliation of uncertain
+outcomes and pending deletions: human attestation alone cannot establish cloud
+request quiescence or the object outcome. Redis and unknown/custom storage
+models are also denied by default. Manual attestation is currently available
+only for local-files operations and webhooks, and pending deletion attestation
+only for local-files exports. Even these models must be paired with a recognized
+operation; an unknown worker cannot borrow a known model's attestation path.
+The attestation remains an operator claim rather than machine
+proof. Only explicitly recognized queued operations paired with their supported
+built-in storage or webhook model can be cancelled through the versioned claim
+guard; unknown operations, custom models and mismatched model/operation pairs
+remain blocking. Pending deletions are not cancellable.
+The endpoints are `GET/POST /api/projects/{id}/lifecycle/`,
+`GET /api/projects/{id}/storage-operations/`, and
+`POST /api/projects/{id}/storage-operations/{uuid}/resolve/`. They are gated by
+the three default-off admission, transition and public-API settings plus the
+lifecycle provider. Resolution bodies accept only `action`, `reason` and a
+boolean `attested`; cancellation requires false, and supported manual
+verification requires true. Cloud recovery remains blocked until an
+independently verifiable provider-specific mechanism exists. Do not enable
+these switches until the gates below are resolved.
+
+The project settings lifecycle page is offered only when the Manager-scoped
+lifecycle endpoint is available. It shows the current revision and outstanding
+storage operations, submits state changes with that revision, and requires an
+explicit attestation for supported manual deletion or uncertain-effect
+reconciliation. Cloud operations described above cannot be cleared here.
+After an unconfirmed mutation it disables further writes until the user refreshes.
+The page does not verify a claimed external outcome or make unsafe deployment
+switches safe; it is hidden while the experimental APIs remain disabled.
+
+This is not yet safe to enable: complete operation coverage does not exist;
+the replay timer has not been installed or exercised in a deployment environment.
+Deletion has no automatic provider-specific identity-safe worker or verified
+provider reconciliation. Request
+validation and custom providers have not been enrolled, and an interrupted
+external request may finish after its worker disappears. Old binaries can bypass
+the ledger or execute old queue entries; a versioned entry protects only new
+sync jobs. A compatible-code provider check cannot protect rollback to old code.
+Do not infer safe deployment, recovery, or complete signal coverage from the
+experimental path. Provider-specific reconciliation, worker termination,
+durable dispatch and upgrade/rollback remain gates.
+
+When storage admission is enabled, built-in storage detail API updates and
+deletes lock the project and storage row and reject changes while matching
+queued, running, uncertain or unknown ledger entries exist. Cross-project moves
+are denied. This does not protect direct ORM writes, custom endpoints or older
+processes, and does not snapshot externally mutable credentials or bucket
+contents. SQLite uses lifecycle-state validation triggers rather than rebuilding
+the project table, because existing cross-table review triggers prevent that
+rebuild. Isolated PostgreSQL and SQLite tests exercise downgrade and re-upgrade
+with legacy projects and an empty new ledger; they do not establish safe
+rollback after lifecycle events or storage-operation records exist. Real upgraded
+databases still require separate verification; disabling the compatible code is
+not a safe enforcement rollback.
+
+Automatic S3 deletion additionally needs a deployment-owned isolation boundary:
+old binaries must lose both storage-write and database/queue access before new
+deletions start, and this condition must remain true through recovery and
+rollback. The storage target must bind a provider-verified account and bucket
+incarnation, not just credential text, endpoint and bucket name; bucket
+recreation, credential changes and independent writers need an enforceable
+policy. The worker must use the captured version ID, revalidate the binding,
+durably claim the intent before the request, and preserve uncertain outcomes
+until the original process and request are quiescent. None of these requirements
+is satisfied merely by an operator checkbox or a successful queue inventory.
+
+The individual task create, update and delete APIs now also lock the project,
+recheck Manager authority, and enforce `MANAGE_TASKS`; moving a task to another
+project is rejected. This does not cover all task mutations or writes triggered
+by reads, imports, bulk actions, project configuration or custom integrations.
+
+With storage admission enabled, S3 annotation exports retain the actual non-null
+version returned by PUT together with the exact key and an HMAC binding to the
+configured storage identity. A subsequent deletion intent carries that version
+only if the key and binding still match. Missing explicit credentials, a missing
+or `null` version, or changed configuration leave the intent unpinned. A later
+unversioned overwrite clears a previous pin. All processes must share the same
+stable Django secret for bindings to match. Direct key-only annotation deletion
+is denied under admission; deletion intents remain manual and block draining.
+The stored version is provenance, not authorization to delete: external bucket
+identity, old binaries and intervening external writes are not fully fenced, and
+no automatic provider deletion has been implemented. Other storage providers do
+not gain version-safe deletion from this change.
+
+New opt-in S3 annotation writes commit their exact key, subject, random request
+token and storage binding to a running ledger row before sending a PUT. A lost
+response keeps that identity in a blocking uncertain row; valid successful
+versions are retained on the row and, when the binding is available, the link.
+The read-only request inspection can report observed matching version IDs in
+bounded, encrypted-cursor pages, but always returns UNKNOWN and never resolves
+or replays the operation. These pages are not a snapshot. A read-only AWS preflight requires a
+trusted expected bucket-owner account, a standard HTTPS AWS S3 endpoint, the
+matching project/storage configuration, version ID and token, and supplies the
+expected owner to bucket, versioning and exact-version HEAD requests. It rejects
+missing, suspended or unreadable bucket versioning; this point-in-time check
+does not prevent versioning from changing later. Custom S3-compatible
+endpoints are rejected: the isolated MinIO server accepted a deliberately wrong
+`ExpectedBucketOwner` value without enforcing it. Older pins without the token
+remain manual. The preflight is not a deletion worker or proof of old-credential
+isolation; expected-owner verification must also be bound into any eventual
+delete request. An isolated versioned MinIO test further showed that deleting
+the current version can expose an older version, so version pinning alone does
+not provide the intended absence semantics.
+
+An isolated local PostgreSQL, Redis and versioned MinIO exercise captured an S3
+PUT version in the real application and retained it in the pending intent after
+an external replacement; the replacement remained present. A separate MinIO
+probe deleted an explicitly selected older version twice without deleting its
+replacement. These are local compatibility checks, not AWS, production, or
+end-to-end automatic-deletion acceptance. An actual old RQ worker executed a
+legacy queue entry and failed to import the new versioned entry. In a separate
+isolated PostgreSQL/Redis run, the failed new entry remained queued in the
+ledger and a new worker completed it after guarded redispatch. Stop and drain
+old web and worker processes and account for their queues before enabling; do
+not roll back to an old binary while enforcement or ledger records matter.
+
+The `check_storage_upgrade_queues` management command inventories configured
+RQ connections and standard Redis RQ queue and registry keys, including keys
+whose queue is missing from `rq:queues`. Queued, started, scheduled, deferred,
+failed and canceled records, and global or queue-specific registered workers,
+block the check, including expired registry entries. The check reads raw Redis
+structures instead of RQ's count/worker enumeration APIs, which can clean or
+move records. A scan error, unexpected key type, or scan page limit also blocks.
+It is intentionally read-only and conservative: it can
+neither discover an unconfigured broker nor stop producers, schedulers, direct
+executors or old binaries, and a successful result is only a point-in-time
+observation. Quiesce producers and revoke old processes' database, broker and
+storage credentials at the deployment boundary before treating an inventory as
+an upgrade drain; independently account for synchronous fallbacks and jobs in
+other brokers. Do not resolve failed jobs or delete queue entries merely to make
+the check pass. Redis SCAN is not an atomic snapshot and can miss concurrent
+changes; custom RQ namespaces and unconfigured brokers need separate inventory.
+Only after producer and consumer isolation is independently established can an
+operator reconcile the observed records against durable operation state.
+
+For manual reconciliation, run the following with the applicable `kind`:
+
+```sh
+python label_studio/manage.py inspect_storage_upgrade_queue --connection <configured-name> \
+  --queue <exact-queue-name> --kind failed --limit 25
+```
+
+The command accepts `queued`, `started`, `scheduled`, `deferred`, `failed` and
+`canceled`, and reads at most 100 entry identifiers per page, including unregistered queues and
+expired registry entries. Continue with its `next_offset`; `--limit` defaults to
+25 and offsets above 1,000,000 are rejected. The command reads only Redis list or
+sorted-set members and refuses identifiers outside its safe ASCII format; it does
+not fetch or deserialize job payloads, alter the queue, resolve the operation
+ledger, or establish a mapping from a job to an operation. Started entries can
+include an execution identifier as well as a job identifier. Each page says
+`NON_SNAPSHOT` and `UNKNOWN`: concurrent changes can shift offsets and omit or
+repeat entries, and an empty final page is not proof of drain. First independently
+isolate producers and consumers, then correlate the original IDs with trusted
+deployment evidence; unsupported queue names, unsafe IDs, custom namespaces,
+errors and other brokers require separate investigation and remain unresolved.
+
+An isolated PostgreSQL/Redis credential experiment confirmed that setting a
+PostgreSQL role to `NOLOGIN` and disabling a Redis ACL user stopped new logins
+but did not terminate existing authenticated sessions. The old sessions remained
+usable until they were terminated or evicted. Deployment isolation therefore
+must include closing old web, worker and scheduler processes, evicting their
+existing database and broker sessions, and checking for reconnection, in addition
+to revoking credentials. This experiment did not revoke cloud credentials or
+prove that an already submitted object-store request has finished.
+
+An isolated versioned MinIO test also began a signed PUT, disabled the old
+storage user after the request body had started, and then completed the body.
+That in-flight request returned HTTP 200 even though a new request using the
+same disabled credentials was denied. Credential revocation is therefore not
+proof that previously admitted requests have drained; the actual provider and
+network isolation mechanism must establish quiescence separately. This is
+MinIO-specific test evidence, not a claim about AWS revocation timing.
+The proposed provider-specific procedure and evidence gates are described in
+[the S3 isolation acceptance protocol](issue86-s3-isolation-acceptance.md);
+the protocol itself is not evidence of a successful cloud run.
+
+The read-only `check_storage_upgrade_isolation` command can inspect a specified
+retired database role and Redis user. It fails if the role can log in, a
+non-superuser login inherits it, any other client session exists on the
+application database, a prepared transaction remains there, the Redis user is
+enabled, or a Redis client remains. The stricter maintenance-window check is
+necessary because a session can retain SET ROLE after its membership is
+revoked, and a prepared transaction can outlive its originating session. It
+requires database session visibility and
+Redis ACL/client-list permissions. PostgreSQL superusers remain trusted and are
+excluded from the inherited-role check. The command checks only the named
+identities and configured brokers; it does not prevent a new database session,
+revoke access, cover shared or unknown credentials, or inspect cloud access or
+in-flight requests. A passing
+observation is not an authorization to enable deletion.
+
+The migration reverse paths now reject removal while storage-operation records,
+S3 version pins, lifecycle events or classified lifecycle state exist. Empty
+schema rollback remains possible. A rejected schema rollback does not itself
+isolate an old application binary; application rollback still requires an
+explicit compatible recovery plan and isolated credentials. The storage
+reverse guard also rejects classified lifecycle state or events, so reversing a
+dependent migration cannot remove storage enforcement first. These guards are
+not an all-or-nothing rollback of unrelated migrations in the full graph.
+
+Project update/delete and the direct prediction API now use the project-first
+fence and recheck Manager authority; prediction task and project must agree.
+Synchronous task import, reimport and prediction import hold the same fence
+while committing their database changes. Reimport checks its staged file
+references and label configuration and rejects tasks with external export links.
+Parsing may still persist uploaded files before admission; counter jobs and
+other bulk, read-triggered or custom paths are not all enrolled. These additions
+do not establish complete lifecycle coverage. In legacy mode, task webhooks
+remain post-commit callbacks and can be lost if the process exits after commit.
+
+With PostgreSQL storage admission enabled, `TASKS_CREATED` from the covered
+direct task APIs, synchronous and background imports/reimports, and built-in
+storage imports writes one generation-bound `webhook_task_created` record per
+recipient in the source transaction. Storage imports emit one event per task in
+this mode. The record contains a frozen payload and a keyed binding to project,
+generation, recipient configuration and payload; no webhook credentials are
+copied into it. Payload-bearing batches are limited to 10,000 tasks and 1 MiB.
+The versioned worker claims once, rechecks and locks the recipient configuration,
+sends without redirects and includes a stable `X-Label-Studio-Delivery-ID`.
+That header name is reserved; a configured conflicting header blocks admission.
+Lost dispatch can be replayed; network failures, non-2xx responses and process
+loss leave an uncertain or running record blocking drain rather than retrying an
+unknown effect. A receiver must independently support idempotency to deduplicate
+that identifier. Configuration changes before send block delivery; holding the
+recipient lock during an HTTP request can delay configuration changes and a
+reentrant receiver until timeout. Payloads can contain project/task data and
+currently have no automated retention policy. Project creation and updates, individual task
+deletion, label-link creation, update and deletion, and interactive annotation creation,
+update, deletion and conversion to draft also snapshot their existing webhook
+payloads in the source transaction.
+These events use a v3 queue entry; the v2 task-created worker cannot claim them,
+and the v3 worker cannot claim v2 records. Recipient configuration and payload
+bindings are revalidated before sending. Other webhook actions, custom writers,
+old processes and direct database changes remain outside this outbox.
+
+Storage creation now takes the project fence. When admission is enabled and a
+new export storage requests automatic sync, its queued status and a generation-
+bound operation record commit with the storage itself; failed post-commit
+dispatch leaves a blocking record for the existing bounded replay. Ordinary v2
+sync also commits its queued status and admission record together. Cancelling a
+queued sync resets its storage status only when no other sync remains active.
+These guarantees require the opt-in PostgreSQL path; they do not isolate old
+workers or account for other effects not enrolled in the ledger. Both streaming
+and non-streaming background reimport parsing now use the same staged, fenced
+replacement and completion receipt. The non-streaming mode retains its existing
+whole-file memory requirements. File-upload mutation endpoints also take the
+project fence, although storage of a newly uploaded file may precede a database
+rollback and needs separate cleanup.
+
+While lifecycle admission or the lifecycle provider is enabled, data-manager
+actions other than next-task are conservatively unavailable: several queue
+untracked jobs or perform external effects after returning. Next-task takes the
+project-first edit fence through task selection and lock creation. Read paths
+also suppress automatic live prediction requests until those effects are
+admitted and recoverable; live prelabel selection can consequently return no
+predictions. The
+summary-reset job is similarly unavailable. Model-version prediction deletion
+uses the project-first manager fence. Project deletion and delete-all-tasks are
+also unavailable in this mode because their existing implementations suppress
+process-global signals, which can affect concurrent work in other projects.
+Legacy mode keeps the original action and prediction behavior. These are
+temporary fail-closed restrictions, not complete implementations of the affected
+operations.
+
+In the same mode, ML backend list/detail reads no longer refresh remote state;
+ML configuration writes, training, interactive/test prediction and remote
+version queries are unavailable until those effects have durable admission and
+recovery. Legacy mode retains the upstream behavior.
+Likewise, mutable snapshot creation, synchronous generated exports, conversion
+and export-file deletion are unavailable while the lifecycle background fence
+is enabled: their existing workers and filesystem effects have not yet joined
+the durable ledger. The legacy download path cannot start an on-demand format
+conversion in that mode. Listing and downloading an already generated snapshot
+remain available, subject to existing authorization and release-boundary checks.
+Previously queued export workers must be isolated and accounted for during
+upgrade; blocking new requests does not drain them.
+When the lifecycle background fence is enabled, compatible code also refuses
+the ordinary export/conversion worker entries and the approved-release,
+snapshot and audit worker entries before they begin; compatible dispatch
+callbacks leave their existing receipts for inspection. This guard cannot stop
+an already executing request or an older binary which does not contain it.
+Creation and retry of approved releases and release snapshots are also blocked
+until their independent queues and artifact writes participate in the same
+admission and drain contract. Previously generated authorized releases and
+snapshot artifacts remain readable under their existing access checks.
+The transition drain check additionally inventories project-scoped legacy export,
+conversion, approved-release, release-snapshot and review-audit receipts and
+their release/audit attempts under
+the Project lock. Only `completed` ordinary exports/conversions and `ready`
+release/snapshot/audit receipts and attempts are treated as terminal; failed,
+expired and unknown states conservatively block. A ready parent does not hide a
+still-unresolved earlier attempt. The manager-only storage-operations read endpoint
+returns counts of these blockers, and the UI disables transitions if inventory
+is missing or contains blockers. There is not yet a durable reconciliation API
+for these legacy receipts: do not clear them by directly editing database state.
+This inventory is only a point-in-time check and cannot prevent an old producer
+or already-started request from writing after observation. Stop and isolate old
+processes and account for their external requests independently before enabling.
+Release snapshots do not retain a separate row for every superseded token, so a
+`ready` snapshot is not proof that an earlier snapshot worker has exited.
+The same manager-only endpoint returns paginated unresolved legacy receipt
+identifiers, kinds, states and related receipt identifiers, without frozen
+payloads or a resolution action. The storage ledger is separately paginated.
+Both use project-bound signed, time-limited keyset cursors; malformed, expired
+or cross-project cursors are rejected. Workers may change records between pages,
+so refresh from the first page before drawing conclusions. Counts and pages are
+observations, not a quiescence proof. The server remains authoritative; the UI
+also requires valid metadata for both inventories and blocks a transition
+while showing any unresolved record or a later storage page.
+Global label updates/deletions, direct label-link creation and bulk replacement
+in saved annotations remain unavailable in this mode until their project scope,
+webhook effects, and transactional admission are implemented. Creating labels
+for one project and the corresponding links is admitted only for an authorized
+project manager and commits the label-link-created event with the data. Existing label links can be
+updated or deleted only by an authorized project manager after the project
+operation fence, with the event stored in the same transaction. Changing the
+link's project or label is not supported in this mode. Label reads remain
+available. Older v3 workers without these newly registered events reject them
+before claim; a newer worker must redispatch the queued records.
+
+An opt-in isolated integration test starts an actual worker from the `main`
+checkout against Redis with a queued label-link-created v3 job. The old worker
+cannot import that entry point, leaving the ledger queued; a worker using this
+checkout then sends the original delivery ID to a loopback HTTP receiver and
+marks it completed. This tests worker compatibility only: old producers and
+their existing credentials must still be isolated before admission is enabled.
+
 `GET /api/projects/{project}/my-work/` projects current personal facts without
 mutations, new task states or migrations. Supported filters are `kind`
 (annotation/review), `state` (annotation only), `page`, and `page_size` (50 default,
@@ -1770,3 +2224,18 @@ Local bbox quality and arbitration evidence is separate from Host review and
 release authority and is gated by explicit `fork_review` configuration. Do not
 enable the experimental endpoints until their UI, replay, permissions, lifecycle,
 cleanup scheduling and complete cross-platform tests have been reviewed.
+
+### Fixed-package dispatch and claim pools (unreleased)
+
+The #83 branch adds independently default-off dispatch and claim-pool routes.
+They reuse project-first write fencing and TaskAssignment, require PostgreSQL,
+and persist idempotency receipts. Candidate-scoped pool discovery and claimed
+work deadlines are additional authorization-sensitive read paths. Reconcile
+these endpoints, the operation matrix, membership revocation locks and migrations
+against upstream on upgrade; do not assume UI controls authorize mutations.
+Details, scope limits and rollback behavior are in `fixed-task-packages.md`.
+Optional background allocation additionally persists a local manager identity,
+revalidates it under the project lock, and uses one idempotency key per explicit
+automation generation. Old workers and externally mapped identities are not
+eligible for this background path until their isolation and revocation contracts
+are established.

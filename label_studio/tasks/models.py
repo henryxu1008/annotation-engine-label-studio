@@ -236,6 +236,10 @@ class Task(TaskMixin, FsmHistoryStateModel):
         # TODO if we use live_model on project then we will need to check for it here
         if project.show_collab_predictions and project.model_version is not None:
             if project.ml_backend_in_model_version:
+                from access_control.project_operations import lifecycle_background_fence_enabled
+
+                if lifecycle_background_fence_enabled():
+                    return []
                 new_predictions = evaluate_predictions([self])
                 # TODO this is not as clean as I'd want it to
                 # be. Effectively retrieve_predictions will work only for
@@ -996,6 +1000,20 @@ class Annotation(AnnotationMixin, FsmHistoryStateModel):
         self.task.save(update_fields=update_fields, skip_fsm=True)
 
     def save(self, *args, update_fields=None, **kwargs):
+        if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
+            from access_control.project_operations import EDIT, require_project_operation
+            from projects.models import Project
+
+            # A standalone save must include the outbox rows in the same
+            # transaction. NOWAIT avoids a task->project / project->task
+            # deadlock for callers that already hold a dependent row lock.
+            with transaction.atomic():
+                project = Project.objects.select_for_update(nowait=True).get(pk=self.project_id)
+                require_project_operation(project, EDIT)
+                return self._save_with_project_fence(*args, update_fields=update_fields, **kwargs)
+        return self._save_with_project_fence(*args, update_fields=update_fields, **kwargs)
+
+    def _save_with_project_fence(self, *args, update_fields=None, **kwargs):
         request = get_current_request()
         if request:
             self.updated_by = request.user

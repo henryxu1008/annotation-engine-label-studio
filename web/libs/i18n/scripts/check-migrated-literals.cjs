@@ -32,7 +32,7 @@ const allowed = {
     { text: "--export-path=<output-path>", line: 338, reason: "Executable CLI argument syntax shown verbatim in timeout guidance." },
   ],
   "apps/labelstudio/src/pages/Settings/index.jsx": [
-    { text: "Settings", line: 90, reason: "Static route metadata; RoutesProvider translates the settings breadcrumb by route path." },
+    { text: "Settings", line: 105, reason: "Static route metadata; RoutesProvider translates the settings breadcrumb by route path." },
   ],
   "apps/labelstudio/src/components/Menubar/Menubar.jsx": [
     { text: "API", line: 242, reason: "Public documentation product name and link label." },

@@ -2,6 +2,8 @@
 """
 from django.conf import settings  # noqa: I001
 
+from .admission_models import StorageOperation  # noqa: F401
+
 from .azure_blob.models import (  # noqa: F401
     AzureBlobImportStorage,
     AzureBlobImportStorageLink,
