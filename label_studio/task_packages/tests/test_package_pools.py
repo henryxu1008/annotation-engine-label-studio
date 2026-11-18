@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import timedelta
 from io import StringIO
 from threading import Barrier, Event
@@ -376,6 +376,110 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
                 first = executor.submit(allocate, self.manager, f'{self.url}{self.package_id}/balance/')
                 second = executor.submit(allocate, self.other, f'{other_url}{other_id}/balance/')
                 assert [first.result(timeout=30), second.result(timeout=30)] == [201, 201]
+
+    def assert_participant_read_fences_blind_transition(self, route):
+        from access_control.project_operations import lock_project_actor
+        from classification_disagreements.models import BlindQualityAssignment
+        from projects.models import Project
+        from users.models import User
+
+        assert self.configure().status_code == 200
+        self.assignment(task=self.tasks[0], user=self.annotator)
+        urls = {'list': self.url, 'detail': f'{self.url}{self.package_id}/', 'pools': f'{self.url}claim-pools/'}
+        started = Event()
+
+        def observed_lock(*args, **kwargs):
+            started.set()
+            return lock_project_actor(*args, **kwargs)
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=self.annotator.pk))
+                return client.get(urls[route]).status_code
+            finally:
+                close_old_connections()
+
+        assert read() == 200
+        with patch('task_packages.api.lock_project_actor', side_effect=observed_lock):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    Project.objects.select_for_update().get(pk=self.project.pk)
+                    reading = pool.submit(read)
+                    assert started.wait(10)
+                    marker_task = Task.objects.create(project=self.project, data={'text': 'private sample'})
+                    assignment = self.assignment(task=marker_task, user=self.other)
+                    BlindQualityAssignment.objects.create(
+                        assignment_id=assignment.pk, task_id=marker_task.pk,
+                        project_id=self.project.pk, assignee_id=self.other.pk,
+                    )
+                assert reading.result(timeout=20) == 404
+
+    def test_package_list_fences_blind_transition(self):
+        self.assert_participant_read_fences_blind_transition('list')
+
+    def test_package_detail_fences_blind_transition(self):
+        self.assert_participant_read_fences_blind_transition('detail')
+
+    def test_available_pools_fence_blind_transition(self):
+        self.assert_participant_read_fences_blind_transition('pools')
+
+    def test_blind_transition_waits_for_the_final_package_response_check(self):
+        from classification_disagreements.models import BlindQualityAssignment
+        from task_packages import api as package_api
+        from users.models import User
+
+        self.assignment(task=self.tasks[0], user=self.annotator)
+        marker_task = Task.objects.create(project=self.project, data={'text': 'private sample'})
+        assignment = self.assignment(task=marker_task, user=self.other)
+        entered, release, writer_started = Event(), Event(), Event()
+        original = package_api.current_read_policy
+        calls = 0
+
+        def pause_after_lock(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                entered.set()
+                if not release.wait(15):
+                    raise AssertionError('participant response was not released')
+            return original(*args, **kwargs)
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=self.annotator.pk))
+                return client.get(f'{self.url}{self.package_id}/').status_code
+            finally:
+                close_old_connections()
+
+        def mark():
+            close_old_connections()
+            try:
+                writer_started.set()
+                BlindQualityAssignment.objects.create(
+                    assignment_id=assignment.pk, task_id=marker_task.pk,
+                    project_id=self.project.pk, assignee_id=self.other.pk,
+                )
+            finally:
+                close_old_connections()
+
+        with patch('task_packages.api.current_read_policy', side_effect=pause_after_lock):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reading = pool.submit(read)
+                try:
+                    assert entered.wait(10)
+                    writing = pool.submit(mark)
+                    assert writer_started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        writing.result(timeout=0.3)
+                finally:
+                    release.set()
+                assert reading.result(timeout=20) == 200
+                writing.result(timeout=20)
+        assert read() == 404
 
     def test_claim_rechecks_blind_scope_after_waiting_for_project_lock(self):
         from classification_disagreements.models import BlindQualityAssignment

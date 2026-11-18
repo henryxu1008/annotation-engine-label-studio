@@ -508,6 +508,13 @@ Ordinary projects retain the existing balanced allocation behavior.
 Participant package claims recheck blind scope after acquiring the project
 lock, so a claim that started before a sample was bound cannot return raw
 assignment identities or create ordinary package work afterward.
+Annotator package list, detail and available-pool responses materialize without
+the project lock, then take it briefly to recheck the role, policy, blind scope
+and returned identities. A blind transition can commit during the initial read;
+if it commits first the response is denied, and if it arrives after the final
+fence it waits until response assembly completes. Reviewer reads retain their
+ordinary review behavior. This fence does not unify blind evidence or establish
+timing privacy.
 For repeatable local diagnostics, `measure_classification_blind_e2e` accepts
 the two outputs of the isolated synthetic seed commands, alternates the two
 reads and reports aggregate latency and query counts without returning handles.

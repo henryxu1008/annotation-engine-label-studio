@@ -14,6 +14,7 @@ from access_control.project_operations import (
     ORGANIZE_WORK,
     READ_WORK,
     REVIEW,
+    lock_project_actor,
     lock_project_operation,
     require_project_operation,
 )
@@ -156,6 +157,28 @@ class PackageAPIBase(generics.GenericAPIView):
             raise NotFound()
         return principal, actor, project, role, policy
 
+    def fence_participant_response(self, *, principal, actor, project, role, policy, response, package_ids=(),
+                                   validate=None):
+        """Check a materialized annotator response after taking the project fence.
+
+        Long-running projection reads remain outside the fence so normal
+        revocations can commit. Once the fence is held, recheck live access and
+        the projected identities before the response is returned.
+        """
+        if role != 'annotator':
+            return response
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        with transaction.atomic():
+            project, actor = lock_project_actor(project.pk, principal)
+            if authorization.project_role(principal, project) != role or sensitive_nonmanager(project, principal):
+                raise NotFound('Work is unavailable.')
+            if current_read_policy(project, actor, role, package_ids=package_ids) != policy:
+                fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current project access has changed.')
+            if validate is not None:
+                validate()
+            return response
+
 
 class PackageCapabilityAPI(PackageAPIBase):
     def get(self, request, pk):
@@ -169,7 +192,7 @@ class PackageCapabilityAPI(PackageAPIBase):
 
 class PackageListAPI(PackageAPIBase):
     def get(self, request, pk):
-        _, actor, project, role, _ = self.context(request, pk)
+        principal, actor, project, role, _ = self.context(request, pk)
         page = self.paginate_queryset(visible_packages(project, actor, role).order_by('-pk'))
         ids = [package.pk for package in page]
         counts = PackageWork(project, actor, role, ids).summaries(ids) if ids else {}
@@ -183,7 +206,8 @@ class PackageListAPI(PackageAPIBase):
             as_of=timezone.now(),
             can_discover_pools=settings.ANNOTATION_PACKAGE_CLAIM_ENABLED and role in ('annotator', 'manager'),
         )
-        return response
+        return self.fence_participant_response(principal=principal, actor=actor, project=project, role=role, policy=policy,
+                                               response=response, package_ids=ids)
 
     def post(self, request, pk):
         principal, _, _, _, _ = self.context(request, pk)
@@ -426,7 +450,7 @@ class AvailablePoolsAPI(PackageAPIBase):
         )
         if current != {pool.pk for pool in page} or authorization.project_role(principal, project) != role:
             fail(PermissionDenied, 'POOL_ACCESS_CHANGED', 'Claim pool access changed; refresh the page.')
-        return self.get_paginated_response(
+        response = self.get_paginated_response(
             [
                 {
                     'package_id': pool.package_id,
@@ -451,6 +475,22 @@ class AvailablePoolsAPI(PackageAPIBase):
                 for pool in page
             ]
         )
+
+        def validate_pools():
+            live = set(
+                TaskPackagePool.objects.filter(
+                    pk__in=[pool.pk for pool in page], package__project_id__in=work_projects(actor, [role]),
+                )
+                .annotate(occupied=Exists(occupied), personal_work=Exists(personal_work))
+                .filter(visible)
+                .distinct()
+                .values_list('pk', flat=True)
+            )
+            if live != {pool.pk for pool in page}:
+                fail(PermissionDenied, 'POOL_ACCESS_CHANGED', 'Claim pool access changed; refresh the page.')
+
+        return self.fence_participant_response(principal=principal, actor=actor, project=project, role=role, policy=policy,
+                                               response=response, validate=validate_pools)
 
 
 class PackageClaimAPI(PackageAPIBase):
@@ -596,7 +636,7 @@ class PackageOverdueNoticeAPI(PackageAPIBase):
 
 class PackageDetailAPI(PackageAPIBase):
     def get(self, request, pk, package_id):
-        _, actor, project, role, policy = self.context(request, pk, filters=('state',))
+        principal, actor, project, role, policy = self.context(request, pk, filters=('state',))
         state = requested_state(request, role)
         packages = visible_packages(project, actor, role)
         package = generics.get_object_or_404(packages, pk=package_id)
@@ -704,4 +744,13 @@ class PackageDetailAPI(PackageAPIBase):
             else None,
             policy={'version': policy.version, 'state': policy.state, 'reason': policy.reason},
         )
-        return response
+        def validate_assignments():
+            live = set(assignments.filter(pk__in=[row['assignment_id'] for row in results]).values_list(
+                'pk', 'version', 'task_id',
+            ))
+            if live != expected:
+                fail(PermissionDenied, 'PACKAGE_ACCESS_CHANGED', 'Current assignment access has changed.')
+
+        return self.fence_participant_response(principal=principal, actor=actor, project=project, role=role, policy=policy,
+                                               response=response, package_ids=[package.pk],
+                                               validate=validate_assignments)
