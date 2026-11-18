@@ -49,6 +49,7 @@ class BackgroundImportFenceTests(TestCase):
             self.run_job()
         self.assertEqual(self.job.status, ProjectImport.Status.FAILED)
         self.assertIn('injected failure', self.job.error)
+        self.assertIsNone(self.job.finished_at)
         self.assertFalse(Task.objects.filter(project=self.project).exists())
         webhook.assert_not_called()
 
@@ -83,6 +84,7 @@ class BackgroundImportFenceTests(TestCase):
     def test_active_manager_can_import(self):
         self.run_job()
         self.assertEqual(self.job.status, ProjectImport.Status.COMPLETED)
+        self.assertIsNotNone(self.job.finished_at)
         self.assertEqual(Task.objects.filter(project=self.project).count(), 1)
 
     def test_changed_label_config_during_parsing_aborts_commit(self):
@@ -280,12 +282,14 @@ class StreamingImportAtomicTests(TestCase):
                 self.run_job()
         self.job.refresh_from_db()
         self.assertEqual(self.job.status, ProjectImport.Status.FAILED)
+        self.assertIsNone(self.job.finished_at)
         self.assertFalse(Task.objects.filter(project=self.project).exists())
 
     def test_success_commits_all_batches_and_receipt(self):
         self.run_job()
         self.job.refresh_from_db()
         self.assertEqual(self.job.status, ProjectImport.Status.COMPLETED)
+        self.assertIsNotNone(self.job.finished_at)
         self.assertEqual(self.job.task_count, 2)
         self.assertEqual(Task.objects.filter(project=self.project).count(), 2)
 

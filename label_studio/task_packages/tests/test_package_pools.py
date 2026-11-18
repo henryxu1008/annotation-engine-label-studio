@@ -219,9 +219,12 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
 
     def test_nonempty_pool_migration_cannot_reverse(self):
         assert self.configure().status_code == 200
-        with self.assertRaisesRegex(RuntimeError, 'pool configuration'):
-            MigrationExecutor(connection).migrate([('task_packages', '0002_taskpackagedispatch')])
-        assert TaskPackagePool.objects.count() == 1
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'pool configuration'):
+                MigrationExecutor(connection).migrate([('task_packages', '0002_taskpackagedispatch')])
+            assert TaskPackagePool.objects.count() == 1
+        finally:
+            MigrationExecutor(connection).migrate(MigrationExecutor(connection).loader.graph.leaf_nodes('task_packages'))
 
     def test_reopen_requires_cancelled_original_and_replays_history_safely(self):
         assert self.configure().status_code == 200
@@ -511,9 +514,12 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
             f'{self.url}{self.package_id}/balance/', {}, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4())
         )
         assert response.status_code == 201
-        with self.assertRaisesRegex(RuntimeError, 'pool configuration or notices'):
-            MigrationExecutor(connection).migrate([('task_packages', '0006_pool_automation')])
-        assert TaskPackagePool.objects.get(package_id=self.package_id).allocation_id == response.json()['dispatch_id']
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'pool configuration or notices'):
+                MigrationExecutor(connection).migrate([('task_packages', '0006_pool_automation')])
+            assert TaskPackagePool.objects.get(package_id=self.package_id).allocation_id == response.json()['dispatch_id']
+        finally:
+            MigrationExecutor(connection).migrate(MigrationExecutor(connection).loader.graph.leaf_nodes('task_packages'))
 
     def test_ambiguous_legacy_pool_dispatch_blocks_upgrade_without_deleting_receipt(self):
         old_target = [('task_packages', '0006_pool_automation')]
@@ -541,7 +547,7 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
         finally:
             old_dispatch.objects.filter(package_id=self.package_id).delete()
             old_pool.objects.filter(package_id=self.package_id).delete()
-            MigrationExecutor(connection).migrate([('task_packages', '0007_pool_allocation_notices')])
+            MigrationExecutor(connection).migrate(MigrationExecutor(connection).loader.graph.leaf_nodes('task_packages'))
 
     def test_package_cascade_deletes_pool_allocation(self):
         assert self.configure(due_at=None).status_code == 200

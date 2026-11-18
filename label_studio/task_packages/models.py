@@ -22,6 +22,23 @@ class TaskPackage(models.Model):
         ]
 
 
+class TaskPackageBatch(models.Model):
+    """Immutable receipt for one atomic, project-local split request."""
+
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='package_batches')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    creator_principal = models.CharField(max_length=512)
+    idempotency_key = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    receipt = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'idempotency_key'], name='package_batch_project_key_unique')
+        ]
+
+
 class TaskPackageItem(models.Model):
     package = models.ForeignKey(TaskPackage, on_delete=models.CASCADE, related_name='items')
     task = models.ForeignKey('tasks.Task', null=True, on_delete=models.SET_NULL, related_name='package_items')

@@ -109,7 +109,7 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         historical.objects.all().delete()
         executor = MigrationExecutor(connection)
         executor.migrate([('task_packages', '0001_initial')])
-        MigrationExecutor(connection).migrate([('task_packages', '0007_pool_allocation_notices')])
+        MigrationExecutor(connection).migrate(MigrationExecutor(connection).loader.graph.leaf_nodes('task_packages'))
 
     def test_paused_project_blocks_even_replay(self):
         key = uuid4()
