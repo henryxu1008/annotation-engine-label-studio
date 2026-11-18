@@ -435,7 +435,10 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
         allocated = self.annotator if recipient == self.annotator.pk else self.other
         pool = TaskPackagePool.objects.get(package_id=self.package_id)
         assert pool.allocation_id == result.json()['dispatch_id']
-        assert self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code == 200
+        assert (
+            self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code
+            == 200
+        )
         TaskAssignment.objects.get(pk=result.json()['assignment_ids'][0]).cancel()
         assert self.client.get(self.pool_url).json()['overdue_count'] == 2
         self.client.force_authenticate(other)
@@ -480,9 +483,10 @@ class TestPackagePools(PackageFixture, TransactionTestCase):
         )
         assert response.status_code == 201
         recipient = self.annotator if response.json()['assignee_id'] == self.annotator.pk else self.other
-        assert self.configure(
-            expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()
-        ).status_code == 200
+        assert (
+            self.configure(expected_revision=1, due_at=(timezone.now() - timedelta(seconds=1)).isoformat()).status_code
+            == 200
+        )
         barrier = Barrier(2)
 
         def reconcile(_):

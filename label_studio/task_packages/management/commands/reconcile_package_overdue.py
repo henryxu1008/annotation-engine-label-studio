@@ -53,7 +53,9 @@ class Command(BaseCommand):
                     pool = (
                         TaskPackagePool.objects.filter(
                             Q(claim__actor=actor) | Q(claim__isnull=True, allocation__assignee=actor),
-                            pk=pool_id, package__project=project, due_at__lte=timezone.now()
+                            pk=pool_id,
+                            package__project=project,
+                            due_at__lte=timezone.now(),
                         )
                         .select_related('claim', 'allocation', 'package')
                         .first()

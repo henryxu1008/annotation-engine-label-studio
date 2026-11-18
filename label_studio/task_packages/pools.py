@@ -261,11 +261,11 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
         candidate_ids = list(
             TaskPackagePool.candidates.through.objects.filter(
                 taskpackagepool__package_id=package_id, taskpackagepool__package__project_id=project_id
-            ).order_by('user_id').values_list('user_id', flat=True)
+            )
+            .order_by('user_id')
+            .values_list('user_id', flat=True)
         )
-        project, actor = lock_project_operation(
-            project_id, principal, BATCH_ASSIGN, related_user_ids=candidate_ids
-        )
+        project, actor = lock_project_operation(project_id, principal, BATCH_ASSIGN, related_user_ids=candidate_ids)
         require_project_operation(project, ASSIGN)
         if not authorization.can_manage_project(principal, project):
             raise PermissionDenied()

@@ -121,8 +121,10 @@ class TaskPackageOverdueNotice(models.Model):
                 fields=['pool', 'dispatch_id_snapshot', 'due_at'], name='package_dispatch_notice_unique'
             ),
             models.CheckConstraint(
-                condition=(models.Q(claim_id_snapshot__isnull=False, dispatch_id_snapshot__isnull=True)
-                           | models.Q(claim_id_snapshot__isnull=True, dispatch_id_snapshot__isnull=False)),
+                condition=(
+                    models.Q(claim_id_snapshot__isnull=False, dispatch_id_snapshot__isnull=True)
+                    | models.Q(claim_id_snapshot__isnull=True, dispatch_id_snapshot__isnull=False)
+                ),
                 name='package_notice_one_source',
             ),
         ]

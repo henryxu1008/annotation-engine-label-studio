@@ -67,7 +67,9 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         assert first.status_code == 201, first.content
         assert first.json()['assignment_count'] == 3
         assert self.post(key=key).json()['assignment_ids'] == first.json()['assignment_ids']
-        assert TaskAssignment.objects.filter(task=self.tasks[1], status__in=TaskAssignment.ACTIVE_STATUSES).count() == 2
+        assert (
+            TaskAssignment.objects.filter(task=self.tasks[1], status__in=TaskAssignment.ACTIVE_STATUSES).count() == 2
+        )
 
     def test_transaction_failure_rolls_back_assignments(self):
         with patch('task_packages.dispatch.TaskPackageDispatch.objects.create', side_effect=RuntimeError('failure')):
@@ -99,9 +101,11 @@ class TestPackageDispatch(PackageFixture, TransactionTestCase):
         assert TaskPackageDispatch.objects.count() == 1
         # Later migrations may already have been reversed before the receipt
         # guard fires; use that historical model for cleanup and restoration.
-        historical = MigrationExecutor(connection).loader.project_state(
-            [('task_packages', '0002_taskpackagedispatch')]
-        ).apps.get_model('task_packages', 'TaskPackageDispatch')
+        historical = (
+            MigrationExecutor(connection)
+            .loader.project_state([('task_packages', '0002_taskpackagedispatch')])
+            .apps.get_model('task_packages', 'TaskPackageDispatch')
+        )
         historical.objects.all().delete()
         executor = MigrationExecutor(connection)
         executor.migrate([('task_packages', '0001_initial')])

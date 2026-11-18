@@ -542,7 +542,9 @@ class PackageOverdueNoticeAPI(PackageAPIBase):
             pools = list(
                 TaskPackagePool.objects.filter(
                     Q(claim__actor=actor) | Q(claim__isnull=True, allocation__assignee=actor),
-                    package__project=project, due_at__lte=timezone.now(), pk__gt=int(after)
+                    package__project=project,
+                    due_at__lte=timezone.now(),
+                    pk__gt=int(after),
                 )
                 .select_related('claim', 'allocation', 'package')
                 .order_by('pk')[:51]
