@@ -264,7 +264,7 @@ def latest_jobs(ctx, rows):
             integer(attempt, 1, 20) and attempt < ctx['attempt']
             and r.get('run_id') == ctx['run_id'] and r.get('head_sha') == ctx['metadata_head']
             and integer(r.get('id'), 1) and r.get('status') == 'completed' and r.get('conclusion') == 'skipped'
-            and r.get('runner_id') is None and r.get('steps') == []
+            and 'runner_id' in r and r['runner_id'] is None and r.get('steps') == []
             and len(prepare) == 1 and prepare[0].get('run_id') == ctx['run_id']
             and prepare[0].get('head_sha') == ctx['metadata_head'] and prepare[0].get('status') == 'completed'
             and prepare[0].get('conclusion') in ('failure', 'cancelled', 'timed_out', 'skipped'),

@@ -18,6 +18,7 @@ from data_import.uploader import load_tasks_for_async_import_streaming
 from django.apps import apps
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from label_studio_sdk.label_interface import LabelInterface
 from projects.models import ProjectImport, ProjectReimport, ProjectSummary
 from rest_framework.exceptions import ValidationError
@@ -161,6 +162,7 @@ def async_import_background(
                 project_import.data_columns = list(data_columns)
                 if project_import.return_task_ids:
                     project_import.task_ids = created_task_ids
+                project_import.finished_at = timezone.now()
                 project_import.status = ProjectImport.Status.COMPLETED
                 project_import.save()
                 if getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False):
@@ -200,6 +202,7 @@ def async_import_background(
     if project_import.return_task_ids:
         project_import.task_ids = [task.id for task in tasks]
 
+    project_import.finished_at = timezone.now()
     project_import.status = ProjectImport.Status.COMPLETED
     project_import.save()
 
@@ -730,6 +733,7 @@ def _commit_streaming_import(project_import, user, actor, staged_batches):
         if project_import.return_task_ids:
             project_import.task_ids = all_created_task_ids
 
+        project_import.finished_at = timezone.now()
         project_import.status = ProjectImport.Status.COMPLETED
         project_import.save()
 

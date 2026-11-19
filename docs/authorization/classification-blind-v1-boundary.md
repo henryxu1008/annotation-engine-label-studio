@@ -508,12 +508,20 @@ isolated PostgreSQL fixture, 14 warm paired reads measured a median of 42.7 ms
 for ordinary work. The difference remains observable in this diagnostic; the
 common persisted evidence and live-revocation path is still required before
 public mixed delivery. These measurements are not a production benchmark.
+After integrating main through `61f7bbd44`, a fresh isolated PostgreSQL
+fixture again measured 14 warm paired editor reads: quality median 33.9 ms
+(28.9–47.2 ms, 31 queries), ordinary median 14.6 ms (12.5–17.4 ms, 19
+queries). This confirms that the live proof and read paths remain distinguishable
+in this diagnostic; it is not a deployment measurement or a privacy threshold.
 The optional fixed-package balanced allocator counts active assignments to
 choose a recipient. A sampled task and its deferred source can distort that
 count, revealing information through the chosen recipient. Balanced allocation
 therefore fails closed for opted-in or previously sampled projects, including
 scheduled allocation, until a common blind allocation contract is verified.
 Ordinary projects retain the existing balanced allocation behavior.
+Both single-package and atomic batch creation reject retained quality tasks
+and active deferred sources under the project lock, before creating any
+package or replay receipt. A batch is rejected as a whole.
 Participant package claims recheck blind scope after acquiring the project
 lock, so a claim that started before a sample was bound cannot return raw
 assignment identities or create ordinary package work afterward.

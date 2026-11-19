@@ -3,6 +3,7 @@ from django.urls import path
 from .api import (
     AvailablePoolsAPI,
     PackageBalancedDispatchAPI,
+    PackageBatchAPI,
     PackageCapabilityAPI,
     PackageClaimAPI,
     PackageDetailAPI,
@@ -14,6 +15,7 @@ from .api import (
 )
 
 urlpatterns = [
+    path('batches/', PackageBatchAPI.as_view(), name='batches'),
     path('capability/', PackageCapabilityAPI.as_view(), name='capability'),
     path('claim-pools/', AvailablePoolsAPI.as_view(), name='claim-pools'),
     path('overdue-notices/', PackageOverdueNoticeAPI.as_view(), name='overdue-notices'),

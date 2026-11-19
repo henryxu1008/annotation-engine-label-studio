@@ -610,6 +610,8 @@ class AggregateTests(unittest.TestCase):
             }
             rows = [*f.rows, failed_prepare, placeholder]
             self.assertEqual(set(latest_jobs(f.context, rows)), set(JOB_NAMES))
+            f.rows = rows
+            self.assertEqual(aggregate(f.context, Path(d) / 'aggregate', f)['status'], 'success')
             for change in (
                 lambda p: p.update(run_attempt=2),
                 lambda p: p.update(run_id=999),
@@ -617,6 +619,7 @@ class AggregateTests(unittest.TestCase):
                 lambda p: p.update(conclusion='success'),
                 lambda p: p.update(status='in_progress'),
                 lambda p: p.update(runner_id=1),
+                lambda p: p.pop('runner_id'),
                 lambda p: p.update(steps=[{'name': 'unexpected execution'}]),
             ):
                 altered = copy.deepcopy(rows)
