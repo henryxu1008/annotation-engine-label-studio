@@ -314,8 +314,29 @@ class SyntheticTransactionTestCase(TransactionTestCase):
     def _fixture_teardown(self):
         # The test database contains legacy tables no longer represented by
         # models; PostgreSQL requires them in the same TRUNCATE operation.
-        call_command('flush', verbosity=0, interactive=False, database='default',
-                     reset_sequences=False, allow_cascade=True)
+        if connection.vendor != 'sqlite':
+            call_command('flush', verbosity=0, interactive=False, database='default',
+                         reset_sequences=False, allow_cascade=True)
+            return
+        # SQLite flush uses DELETE, so immutable evidence triggers reject it.
+        # Temporarily remove only those guards in Django's isolated in-memory
+        # test database; the production database and its triggers are untouched.
+        name = str(connection.settings_dict['NAME'])
+        if name != ':memory:' and not (name.startswith('file:memorydb_') and 'mode=memory' in name):
+            raise RuntimeError('Synthetic flush requires an in-memory SQLite test database.')
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL")
+            guards = [(trigger, sql) for trigger, sql in cursor.fetchall()
+                      if 'BEFORE DELETE' in sql.upper() and 'RAISE' in sql.upper()]
+            for trigger, _ in guards:
+                cursor.execute(f'DROP TRIGGER {connection.ops.quote_name(trigger)}')
+        try:
+            call_command('flush', verbosity=0, interactive=False, database='default',
+                         reset_sequences=False, allow_cascade=True)
+        finally:
+            with connection.cursor() as cursor:
+                for _, sql in guards:
+                    cursor.execute(sql)
 
 
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL transaction-lock test')
@@ -449,6 +470,43 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_reference_identity_migration_backfills_live_and_retired_evidence(self):
+        from classification_disagreements.models import BlindEvidenceIdentity, BlindQualityAssignment
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0043_blind_exposure_row_fence')])
+        try:
+            owner = UserFactory()
+            member = UserFactory()
+            project = ProjectFactory(created_by=owner)
+
+            def reference():
+                return ClassificationGoldEvidence.objects.create(
+                    project=project, created_by=owner, actor_id_frozen=owner.pk,
+                    principal='local:test', principal_source='local', kind='reference',
+                    idempotency_key=uuid4(), request_hash='0' * 64, manifest={}, manifest_hash='1' * 64,
+                )
+
+            live = reference()
+            provenance_only = reference()
+            provenance_id = provenance_only.pk
+            provenance_only.delete()
+            retired = reference()
+            retired_id = retired.pk
+            task = TaskFactory(project=project)
+            assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=owner)
+            BlindQualityAssignment.objects.create(
+                assignment_id=assignment.pk, task_id=task.pk, project_id=project.pk, assignee_id=member.pk,
+                reference_id=retired_id, reference_hash=retired.manifest_hash,
+            )
+            retired.delete()
+            BlindProvenanceEvent.objects.filter(kind='reference', subject_id=retired_id).delete()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert set(BlindEvidenceIdentity.objects.filter(pk__in=[live.pk, provenance_id, retired_id])
+                   .values_list('pk', flat=True)) == {live.pk, provenance_id, retired_id}
+
     def test_existing_reference_is_backfilled_but_existing_account_is_not(self):
         before = [('classification_disagreements', '0020_classification_gold_evidence')]
         executor = MigrationExecutor(connection)

@@ -421,6 +421,19 @@ not verify all of the immutable evidence. A shared permit or precomputed live
 projection would need a transactional invalidation path for each of those
 changes and the same bounded lookup for ordinary and sampled work before it can
 replace the current checks. No such permit is implemented or enabled here.
+Gold evidence identities now have a retained, immutable registry. Its migration
+backfills live evidence and IDs retained by quality markers or reference
+provenance, and disables the existing capture generation. A new evidence row
+cannot reuse a registered ID, even after project or provenance deletion. The
+registry stores only IDs; project deletion still removes the evidence payload.
+This closes one prerequisite for a future verified read binding. It does not
+validate legacy hashes, prove a database restore retained the registry, or
+replace the current per-read proof and reference validation.
+New assignment inserts are also rejected if their numeric ID already belongs
+to a retained opaque handle, so a deleted assignment cannot simply rebind that
+handle. This does not establish whether an assignment ID was reused before
+the guard was installed; existing handles still need a continuity and upgrade
+strategy before this can serve as the common durable authorization evidence.
 An additional paired local HTTP measurement from a browser against an isolated
 server, using another newly admitted synthetic account, also showed nonoverlap:
 quality reads had a 114 ms median (110–133 ms), while ordinary reads had a

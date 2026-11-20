@@ -276,6 +276,12 @@ class BlindResourceHandle(models.Model):
         ]
 
 
+class BlindEvidenceIdentity(models.Model):
+    """Retained numeric evidence identities, including after project deletion."""
+
+    evidence_id = models.PositiveBigIntegerField(primary_key=True, serialize=False)
+
+
 class ClassificationGoldEvidence(models.Model):
     """Append-only manager-curated reference or exact-revision score."""
 

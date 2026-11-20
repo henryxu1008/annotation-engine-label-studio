@@ -54,6 +54,52 @@ class TestBlindQualityBoundary(APITestCase):
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
     _review = fixtures.TestSubmissionReviewWorkflow._review
 
+    def test_deleted_reference_id_cannot_be_reused_after_provenance_is_removed(self):
+        from classification_disagreements.models import BlindEvidenceIdentity, BlindProvenanceEvent
+
+        reference = synthetic_reference(self.project)
+        reference_id = reference.pk
+        fields = {
+            'id': reference_id, 'project': self.project, 'created_by': self.manager,
+            'actor_id_frozen': self.manager.pk, 'principal': 'local:test', 'principal_source': 'local',
+            'kind': 'reference', 'idempotency_key': uuid4(), 'request_hash': '0' * 64,
+            'manifest': {'forged': True}, 'manifest_hash': reference.manifest_hash,
+        }
+        reference.delete()
+        BlindProvenanceEvent.objects.filter(kind='reference', subject_id=reference_id).delete()
+        assert BlindEvidenceIdentity.objects.filter(pk=reference_id).exists()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindEvidenceIdentity.objects.filter(pk=reference_id).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindEvidenceIdentity.objects.filter(pk=reference_id).update(evidence_id=reference_id + 1000000)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            ClassificationGoldEvidence.objects.create(**fields)
+
+    def test_project_deletion_retains_evidence_identity_without_blocking_new_references(self):
+        from classification_disagreements.models import BlindEvidenceIdentity
+
+        reference = synthetic_reference(self.project)
+        old_id = reference.pk
+        self.project.delete()
+        assert BlindEvidenceIdentity.objects.filter(pk=old_id).exists()
+        replacement_project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        assert synthetic_reference(replacement_project).pk != old_id
+
+    def test_deleted_assignment_id_cannot_rebind_existing_opaque_handle(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from rest_framework.exceptions import NotFound
+
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        old_id = self.assignment.pk
+        self.assignment.delete()
+        with self.assertRaises(NotFound):
+            resolve_handle(principal=principal, task_handle=handle.task_handle)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            TaskAssignment.objects.create(id=old_id, task=self.task, project=self.project,
+                                          assignee=self.annotator, assigned_by=self.manager)
+
     def test_opaque_handles_are_stable_owner_bound_and_never_grant_stale_access(self):
         from dataclasses import replace
         from access_control.project_operations import local_principal
@@ -3367,6 +3413,73 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL transaction-lock test')
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
+
+    def test_concurrent_assignment_id_reuse_cannot_rebind_new_handle(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.blind_task_handles import issue_handle
+        from projects.models import ProjectMember
+
+        organization = fixtures.OrganizationFactory()
+        project = ProjectFactory(organization=organization, created_by=organization.created_by)
+        task = TaskFactory(project=project)
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        ProjectMember.objects.create(project=project, user=member, role='annotator')
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member,
+                                                   assigned_by=organization.created_by)
+        entered, release, deleting, inserting = Event(), Event(), Event(), Event()
+
+        def issue():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    Project.objects.select_for_update().get(pk=project.pk)
+                    lock_capture_epoch_for_read()
+                    handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+                    entered.set()
+                    if not release.wait(10):
+                        raise AssertionError('handle issuance was not released')
+                    return handle.task_handle
+            finally:
+                close_old_connections()
+
+        def delete():
+            close_old_connections()
+            try:
+                deleting.set()
+                TaskAssignment.objects.filter(pk=assignment.pk).delete()
+            finally:
+                close_old_connections()
+
+        def insert():
+            close_old_connections()
+            try:
+                inserting.set()
+                TaskAssignment.objects.create(id=assignment.pk, task_id=task.pk, project_id=project.pk,
+                                              assignee_id=member.pk, assigned_by_id=organization.created_by_id)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            issuing = pool.submit(issue)
+            try:
+                assert entered.wait(10)
+                deletion = pool.submit(delete)
+                assert deleting.wait(10)
+                with self.assertRaises(TimeoutError):
+                    deletion.result(timeout=0.3)
+                insertion = pool.submit(insert)
+                assert inserting.wait(10)
+                with self.assertRaises(TimeoutError):
+                    insertion.result(timeout=0.3)
+            finally:
+                release.set()
+            issuing.result(timeout=20)
+            deletion.result(timeout=20)
+            with self.assertRaises(DatabaseError):
+                insertion.result(timeout=20)
 
     def test_blind_editor_rechecks_membership_after_project_lock_for_both_work_types(self):
         from access_control.identity import LocalIdentityProvider
