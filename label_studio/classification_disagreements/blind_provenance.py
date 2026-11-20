@@ -127,6 +127,19 @@ def lock_capture_epoch_for_write(using='default'):
     return BlindCaptureEpoch.objects.using(using).select_for_update().filter(pk=1).first()
 
 
+def lock_active_capture_for_write(using='default'):
+    """Take the write fence early when exposure capture is active.
+
+    Call after locking the project and before locking tasks or assignments.
+    The database triggers are authoritative if activation races this precheck.
+    """
+    if not connections[using].in_atomic_block:
+        raise RuntimeError('Capture write fencing requires an atomic transaction.')
+    if BlindCaptureEpoch.objects.using(using).filter(pk=1, enabled=True).exists():
+        return lock_capture_epoch_for_write(using=using)
+    return None
+
+
 def lock_capture_epoch_for_read(using='default'):
     """Fence exposure/revocation until the participant response is assembled.
 

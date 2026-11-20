@@ -579,18 +579,22 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
             'Project manager role is required to modify tasks.',
         )
 
-    def _lock_managed_task(self, task):
+    def _lock_managed_task(self, task, *, fence_exposure=False):
         principal = resolve_principal(self.request)
         project, _ = lock_project_operation(task.project_id, principal, MANAGE_TASKS)
         authorization.require(
             authorization.can_manage_project(principal, project),
             'Project manager role is required to modify tasks.',
         )
+        if fence_exposure:
+            from classification_disagreements.blind_provenance import lock_active_capture_for_write
+
+            lock_active_capture_for_write()
         return generics.get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
 
     def perform_update(self, serializer):
         with transaction.atomic():
-            task = self._lock_managed_task(serializer.instance)
+            task = self._lock_managed_task(serializer.instance, fence_exposure='data' in serializer.validated_data)
             requested_project = serializer.validated_data.get('project')
             if requested_project is not None and requested_project.pk != task.project_id:
                 raise ValidationError('Moving tasks between projects is not supported.')

@@ -3666,6 +3666,61 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                 reader.result(timeout=20)
             writer.result(timeout=20)
 
+    def test_new_assignment_exposure_waits_for_capture_reader(self):
+        self._assert_assignment_exposure_waits_for_capture_reader(update_task=False)
+
+    def test_changed_task_text_exposure_waits_for_capture_reader(self):
+        self._assert_assignment_exposure_waits_for_capture_reader(update_task=True)
+
+    def _assert_assignment_exposure_waits_for_capture_reader(self, *, update_task):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+
+        organization = fixtures.OrganizationFactory()
+        project = ProjectFactory(organization=organization, created_by=organization.created_by)
+        task = TaskFactory(project=project, data={'text': 'new exposure'})
+        provenance_fixtures.enable_test_capture()
+        account = UserFactory(active_organization=organization)
+        if update_task:
+            TaskAssignment.objects.create(task=task, project=project, assignee=account,
+                                          assigned_by=organization.created_by)
+        entered, release, writer_started = Event(), Event(), Event()
+
+        def read():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    lock_capture_epoch_for_read()
+                    entered.set()
+                    if not release.wait(10):
+                        raise AssertionError('capture reader was not released')
+            finally:
+                close_old_connections()
+
+        def assign():
+            close_old_connections()
+            try:
+                writer_started.set()
+                if update_task:
+                    Task.objects.filter(pk=task.pk).update(data={'text': 'changed exposure'})
+                else:
+                    TaskAssignment.objects.create(task_id=task.pk, project_id=project.pk,
+                                                  assignee_id=account.pk, assigned_by_id=organization.created_by_id)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(read)
+            try:
+                assert entered.wait(10)
+                writer = pool.submit(assign)
+                assert writer_started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+            finally:
+                release.set()
+            reader.result(timeout=20)
+            writer.result(timeout=20)
+
     def test_certificate_revocation_waits_for_capture_reader(self):
         self._assert_evidence_revocation_waits_for_capture_reader('certificate')
 
@@ -3880,6 +3935,82 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
 
     def test_editor_read_completes_before_certificate_revocation(self):
         self._assert_editor_read_fenced_from_revocation(certificate=True)
+
+    def test_cross_project_assignment_fences_editor_and_revokes_next_read(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_editor_api
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from tasks.assignments import create_assignment
+        from users.models import User
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        other_project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        exposed_task = TaskFactory(project=other_project, data={'text': 'synthetic classification text'})
+        carrier = TaskFactory(project=self.project, data={'text': 'independent carrier'})
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        for project in (self.project, other_project):
+            ProjectMember.objects.create(project=project, user=member, role='annotator')
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        entered, release, started = Event(), Event(), Event()
+        original = blind_editor_api.participant_text_data
+
+        def pause(*args):
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError('editor read was not released')
+            return original(*args)
+
+        def read(handle):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=member.pk))
+                return client.get(f'/api/tasks/blind/{handle}/').status_code
+            finally:
+                close_old_connections()
+
+        def assign():
+            close_old_connections()
+            try:
+                started.set()
+                create_assignment(task=exposed_task, assignee=member, principal=local_principal(self.manager))
+            finally:
+                close_old_connections()
+
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            chosen = create_mixed_assignment(task=carrier, assignee=member,
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(self.manager), key=uuid4())
+            handle = issue_handle(principal=local_principal(member), assignment_id=chosen.pk).task_handle
+            with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    reading = pool.submit(read, handle)
+                    try:
+                        assert entered.wait(10)
+                        writer = pool.submit(assign)
+                        assert started.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            writer.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    assert reading.result(timeout=20) == 200
+                    writer.result(timeout=20)
+            assert read(handle) == 404
 
     def _assert_editor_read_fenced_from_revocation(self, *, certificate):
         from access_control.identity import LocalIdentityProvider

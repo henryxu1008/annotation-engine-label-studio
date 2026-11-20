@@ -49,6 +49,9 @@ def create_assignment(*, task, assignee, principal):
         related_user_ids=[assignee.pk],
     )
     authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+    from classification_disagreements.blind_provenance import lock_active_capture_for_write
+
+    lock_active_capture_for_write()
     task = get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
     task.project = project
     from classification_disagreements.models import BlindMixEvidence, BlindQualityAssignment

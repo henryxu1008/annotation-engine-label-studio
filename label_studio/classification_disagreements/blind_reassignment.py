@@ -46,6 +46,9 @@ def _locked_project(project_id, assignee, principal):
             or type(get_identity_provider()) is not LocalIdentityProvider or principal.source != LOCAL_IDENTITY_SOURCE):
         raise ValidationError({'detail': 'Quality reassignment is unavailable.'})
     require_project_operation(project, ORGANIZE_CLASSIFICATION_GOLD)
+    from .blind_provenance import lock_capture_epoch_for_write
+
+    lock_capture_epoch_for_write()
     return project, actor
 
 
