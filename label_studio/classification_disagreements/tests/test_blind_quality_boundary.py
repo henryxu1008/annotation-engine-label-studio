@@ -3672,6 +3672,77 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_changed_task_text_exposure_waits_for_capture_reader(self):
         self._assert_assignment_exposure_waits_for_capture_reader(update_task=True)
 
+    def test_direct_file_exposure_waits_for_capture_reader(self):
+        self._assert_direct_exposure_waits_for_capture_reader('file')
+
+    def test_direct_label_exposure_waits_for_capture_reader(self):
+        self._assert_direct_exposure_waits_for_capture_reader('label')
+
+    def test_direct_assignment_exposure_waits_for_capture_reader(self):
+        self._assert_direct_exposure_waits_for_capture_reader('assignment')
+
+    def test_direct_text_exposure_waits_for_capture_reader(self):
+        self._assert_direct_exposure_waits_for_capture_reader('text')
+
+    def test_direct_reference_length_waits_for_capture_reader(self):
+        self._assert_direct_exposure_waits_for_capture_reader('reference')
+
+    def _assert_direct_exposure_waits_for_capture_reader(self, kind):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import (
+            BlindAssignmentExposure, BlindCaptureEpoch, BlindLabelExposure, BlindProjectFileExposure,
+            BlindReferenceTextLength, BlindTextLengthExposure,
+        )
+
+        provenance_fixtures.enable_test_capture()
+        account = UserFactory()
+        epoch = BlindCaptureEpoch.objects.get(pk=1)
+        entered, release, started = Event(), Event(), Event()
+
+        def read():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    lock_capture_epoch_for_read()
+                    entered.set()
+                    if not release.wait(10):
+                        raise AssertionError('capture reader was not released')
+            finally:
+                close_old_connections()
+
+        def expose():
+            close_old_connections()
+            try:
+                started.set()
+                if kind == 'file':
+                    BlindProjectFileExposure.objects.create(account_id=account.pk, project_id=1,
+                                                            generation=epoch.generation)
+                elif kind == 'label':
+                    BlindLabelExposure.objects.create(account_id=account.pk, generation=epoch.generation)
+                elif kind == 'assignment':
+                    BlindAssignmentExposure.objects.create(account_id=account.pk, project_id=1, task_id=1,
+                                                           generation=epoch.generation)
+                elif kind == 'text':
+                    BlindTextLengthExposure.objects.create(account_id=account.pk, assignment_id=1,
+                                                           generation=epoch.generation, byte_length=12)
+                else:
+                    BlindReferenceTextLength.objects.create(reference_id=1, byte_length=12)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(read)
+            try:
+                assert entered.wait(10)
+                writer = pool.submit(expose)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+            finally:
+                release.set()
+            reader.result(timeout=20)
+            writer.result(timeout=20)
+
     def _assert_assignment_exposure_waits_for_capture_reader(self, *, update_task):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
 
@@ -3730,17 +3801,25 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_provenance_revocation_waits_for_capture_reader(self):
         self._assert_evidence_revocation_waits_for_capture_reader('event')
 
+    def test_reference_revocation_waits_for_capture_reader(self):
+        self._assert_evidence_revocation_waits_for_capture_reader('reference')
+
     def _assert_evidence_revocation_waits_for_capture_reader(self, evidence):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
         from classification_disagreements.models import BlindCaptureCertificate, BlindPrivilegeHistory, BlindProvenanceEvent
 
         provenance_fixtures.enable_test_capture()
         account = UserFactory()
-        rows = {
-            'certificate': BlindCaptureCertificate.objects.filter(account_id=account.pk),
-            'history': BlindPrivilegeHistory.objects.filter(account_id=account.pk),
-            'event': BlindProvenanceEvent.objects.filter(kind='account', subject_id=account.pk),
-        }[evidence]
+        if evidence == 'reference':
+            project = ProjectFactory()
+            reference = synthetic_reference(project)
+            rows = ClassificationGoldEvidence.objects.filter(pk=reference.pk)
+        else:
+            rows = {
+                'certificate': BlindCaptureCertificate.objects.filter(account_id=account.pk),
+                'history': BlindPrivilegeHistory.objects.filter(account_id=account.pk),
+                'event': BlindProvenanceEvent.objects.filter(kind='account', subject_id=account.pk),
+            }[evidence]
         assert rows.exists()
         entered, release, revocation_started = Event(), Event(), Event()
 

@@ -429,7 +429,7 @@ load was represented. This reinforces the default-off gate; a successful
 functional browser test does not establish timing privacy.
 Participant work-list and editor reads take a capture-epoch lock after the
 project lock. PostgreSQL readers share this lock; deleting a certificate,
-privilege history or provenance event takes its conflicting lock even when
+privilege history, provenance event or reference takes its conflicting lock even when
 issued directly through the ORM or SQL.
 SQLite readers instead reserve the write lock: a plain read cannot fence a
 concurrent commit in WAL mode. That serializes SQLite writers and participant
@@ -440,7 +440,9 @@ PostgreSQL assignment insertion/rebinding and task-data updates now also take
 the exclusive capture fence before their exposure triggers run. Assignment and
 manager task-update services acquire it after the project lock and before task
 locks when capture is active; blind sampling takes the exclusive fence before
-its task and reference locks. Direct database writes still need a compatible
+its task and reference locks. Insertions of assignment, file, label, text-length
+and reference-length evidence also take that fence when issued directly.
+Direct database writes still need a compatible
 lock order: a database-detected deadlock rolls back the transaction and is not
 a substitute for correct ordering. The global write fence also needs throughput
 and contention evaluation before rollout.
