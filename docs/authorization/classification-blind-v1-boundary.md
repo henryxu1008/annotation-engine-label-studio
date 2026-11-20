@@ -427,10 +427,15 @@ quality reads had a 114 ms median (110–133 ms), while ordinary reads had a
 93.5 ms median (86–107 ms), with 14 warm samples each. No production network or
 load was represented. This reinforces the default-off gate; a successful
 functional browser test does not establish timing privacy.
-Participant work-list and editor reads take a shared capture-epoch lock after
-the project lock. This lets concurrent readers proceed while serializing each
-read with exposure recording and revocation; the current proof is rechecked
-inside that fence. The fence does not remove the timing distinction.
+Participant work-list and editor reads take a capture-epoch lock after the
+project lock. PostgreSQL readers share this lock; deleting a certificate,
+privilege history or provenance event takes its conflicting lock even when
+issued directly through the ORM or SQL.
+SQLite readers instead reserve the write lock: a plain read cannot fence a
+concurrent commit in WAL mode. That serializes SQLite writers and participant
+reads and requires throughput evaluation. The current proof is rechecked
+inside the fence; this does not remove the timing distinction or prove that
+every other revocation source takes the required lock.
 Any transaction spanning multiple projects must lock all involved projects in
 stable ID order before it acquires the capture-epoch lock. A synthetic fixture
 previously acquired a second project after holding the epoch, which deadlocked
@@ -513,6 +518,12 @@ fixture again measured 14 warm paired editor reads: quality median 33.9 ms
 (28.9–47.2 ms, 31 queries), ordinary median 14.6 ms (12.5–17.4 ms, 19
 queries). This confirms that the live proof and read paths remain distinguishable
 in this diagnostic; it is not a deployment measurement or a privacy threshold.
+An experiment folded the retained quality marker into the ordinary assignment
+lookup while keeping full live quality-proof validation. In a fresh isolated
+PostgreSQL fixture, 14 warm paired reads still differed: quality median 32.8 ms
+(29.5–39.9 ms, 29 queries), ordinary median 15.0 ms (13.2–25.7 ms, 18 queries).
+The experiment was removed because it did not unify the evidence or close the
+observable gap. These values are diagnostic, not a production benchmark.
 The optional fixed-package balanced allocator counts active assignments to
 choose a recipient. A sampled task and its deferred source can distort that
 count, revealing information through the chosen recipient. Balanced allocation

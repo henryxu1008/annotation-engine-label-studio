@@ -132,7 +132,8 @@ def lock_capture_epoch_for_read(using='default'):
 
     PostgreSQL shared row locks allow concurrent readers, but conflict with the
     exclusive epoch lock taken before exposure evidence is recorded. SQLite
-    holds its read transaction until the surrounding atomic block completes.
+    takes a write reservation, since a read transaction alone does not fence
+    concurrent commits when the database uses WAL mode.
     Call only after the project lock to preserve the admission lock order.
     """
     connection = connections[using]
@@ -144,7 +145,7 @@ def lock_capture_epoch_for_read(using='default'):
             cursor.execute(f'SELECT id FROM {table} WHERE id = %s FOR SHARE', [1])
             cursor.fetchone()
     elif connection.vendor == 'sqlite':
-        BlindCaptureEpoch.objects.using(using).filter(pk=1).exists()
+        BlindCaptureEpoch.objects.using(using).filter(pk=1).update(generation=F('generation'))
 
 
 def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_id, using='default'):

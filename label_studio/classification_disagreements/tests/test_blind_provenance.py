@@ -1,8 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
 from threading import Event
-from unittest import skipUnless
+from unittest import TestCase as PlainTestCase, skipUnless
 from uuid import uuid4
 
+import pytest
 from classification_disagreements.blind_provenance import (
     account_born_after_reference,
     account_has_never_been_assigned,
@@ -17,7 +21,7 @@ from classification_disagreements.models import (
     ClassificationGoldEvidence,
 )
 from django.core.management import call_command
-from django.db import DatabaseError, close_old_connections, connection, transaction
+from django.db import DatabaseError, close_old_connections, connection, connections, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.models import F
@@ -35,6 +39,60 @@ def enable_test_capture():
     # Synthetic database only. Production activation is intentionally absent.
     BlindCaptureEpoch.objects.get_or_create(pk=1)
     BlindCaptureEpoch.objects.filter(pk=1).update(generation=F('generation') + 1, enabled=True)
+
+
+@skipUnless(connection.vendor == 'sqlite', 'SQLite WAL locking test')
+class TestBlindCaptureSqliteWal(PlainTestCase):
+    @pytest.fixture(autouse=True)
+    def _allow_isolated_database(self, django_db_blocker):
+        with django_db_blocker.unblock():
+            yield
+
+    def test_capture_reader_fences_revoke_in_wal_mode(self):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+
+        # Use an isolated file because Django's in-memory SQLite test database
+        # cannot use WAL. No application or development data is touched.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'capture.sqlite3'
+            alias = f'blind_wal_{uuid4().hex}'
+            connections.databases[alias] = {**connections.databases['default'], 'NAME': str(path)}
+            database = connections[alias]
+            try:
+                with database.cursor() as cursor:
+                    cursor.execute('PRAGMA journal_mode=WAL')
+                    assert cursor.fetchone()[0].lower() == 'wal'
+                with database.schema_editor() as editor:
+                    editor.create_model(BlindCaptureEpoch)
+                BlindCaptureEpoch.objects.using(alias).create(pk=1, generation=1, enabled=True)
+                entered, release = Event(), Event()
+
+                def read():
+                    try:
+                        with transaction.atomic(using=alias):
+                            lock_capture_epoch_for_read(using=alias)
+                            entered.set()
+                            if not release.wait(10):
+                                raise AssertionError('capture reader was not released')
+                    finally:
+                        connections[alias].close()
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    reader = pool.submit(read)
+                    try:
+                        assert entered.wait(10)
+                        with sqlite3.connect(path, timeout=0.2) as writer:
+                            with self.assertRaisesRegex(sqlite3.OperationalError, 'locked'):
+                                writer.execute('DELETE FROM classification_disagreements_blindcaptureepoch WHERE id = 1')
+                    finally:
+                        release.set()
+                    reader.result(timeout=20)
+                with sqlite3.connect(path) as writer:
+                    writer.execute('DELETE FROM classification_disagreements_blindcaptureepoch WHERE id = 1')
+                    assert writer.total_changes == 1
+            finally:
+                database.close()
+                del connections.databases[alias]
 
 
 class TestBlindProvenance(TestCase):

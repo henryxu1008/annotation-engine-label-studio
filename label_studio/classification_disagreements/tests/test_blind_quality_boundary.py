@@ -3666,6 +3666,63 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                 reader.result(timeout=20)
             writer.result(timeout=20)
 
+    def test_certificate_revocation_waits_for_capture_reader(self):
+        self._assert_evidence_revocation_waits_for_capture_reader('certificate')
+
+    def test_history_revocation_waits_for_capture_reader(self):
+        self._assert_evidence_revocation_waits_for_capture_reader('history')
+
+    def test_provenance_revocation_waits_for_capture_reader(self):
+        self._assert_evidence_revocation_waits_for_capture_reader('event')
+
+    def _assert_evidence_revocation_waits_for_capture_reader(self, evidence):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import BlindCaptureCertificate, BlindPrivilegeHistory, BlindProvenanceEvent
+
+        provenance_fixtures.enable_test_capture()
+        account = UserFactory()
+        rows = {
+            'certificate': BlindCaptureCertificate.objects.filter(account_id=account.pk),
+            'history': BlindPrivilegeHistory.objects.filter(account_id=account.pk),
+            'event': BlindProvenanceEvent.objects.filter(kind='account', subject_id=account.pk),
+        }[evidence]
+        assert rows.exists()
+        entered, release, revocation_started = Event(), Event(), Event()
+
+        def read():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    lock_capture_epoch_for_read()
+                    assert rows.exists()
+                    entered.set()
+                    if not release.wait(10):
+                        raise AssertionError('capture reader was not released')
+            finally:
+                close_old_connections()
+
+        def revoke():
+            close_old_connections()
+            try:
+                revocation_started.set()
+                rows.delete()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(read)
+            try:
+                assert entered.wait(10)
+                revocation = pool.submit(revoke)
+                assert revocation_started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    revocation.result(timeout=0.3)
+            finally:
+                release.set()
+            reader.result(timeout=20)
+            revocation.result(timeout=20)
+        assert not rows.exists()
+
     def test_ordinary_and_quality_handle_writes_fence_concurrent_exposure(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
@@ -3819,6 +3876,12 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                 create_mixed_assignment(**args)
 
     def test_editor_read_completes_before_exposure_and_next_read_is_revoked(self):
+        self._assert_editor_read_fenced_from_revocation(certificate=False)
+
+    def test_editor_read_completes_before_certificate_revocation(self):
+        self._assert_editor_read_fenced_from_revocation(certificate=True)
+
+    def _assert_editor_read_fenced_from_revocation(self, *, certificate):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_editor_api
@@ -3865,7 +3928,11 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             close_old_connections()
             try:
                 exposure_started.set()
-                record_label_metadata_access(account_id=member.pk)
+                if certificate:
+                    from classification_disagreements.models import BlindCaptureCertificate
+                    BlindCaptureCertificate.objects.filter(account_id=member.pk).delete()
+                else:
+                    record_label_metadata_access(account_id=member.pk)
             finally:
                 close_old_connections()
 
