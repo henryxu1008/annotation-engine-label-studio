@@ -58,6 +58,9 @@ def _validate(principal, assignment, record=None):
     live = authorization.active_task_assignment(principal, assignment.task)
     if live is None or live.pk != assignment.pk or live.project_id != assignment.project_id:
         _unavailable()
+    from .blind_read_binding import verify_mixed_read_binding
+
+    verify_mixed_read_binding(assignment)
     if record is not None and (record.assignment_id_frozen != assignment.pk
                                or record.task_id_frozen != assignment.task_id
                                or record.project_id_frozen != assignment.project_id

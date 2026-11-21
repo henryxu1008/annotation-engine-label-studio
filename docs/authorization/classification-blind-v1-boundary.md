@@ -421,6 +421,22 @@ not verify all of the immutable evidence. A shared permit or precomputed live
 projection would need a transactional invalidation path for each of those
 changes and the same bounded lookup for ordinary and sampled work before it can
 replace the current checks. No such permit is implemented or enabled here.
+An internal mixed slot now receives an immutable read binding in the same
+transaction as its decision, whether the selected result is ordinary or
+quality work. The binding records the decision and source identities and, for
+quality work, the verified reference and eligibility-proof hashes. Handle
+validation checks this binding after the existing live authorization; it does
+not replace the current proof, membership, exposure or content checks. A
+pre-existing mixed decision without a binding is unavailable until its manager
+replays the original idempotent command and the current checks succeed.
+Ordinary non-mixed work still follows the legacy path, and the additional
+binding does not establish uniform timing or authorize public dispatch.
+An isolated PostgreSQL run with 14 warm paired reads after this change measured
+quality work at a 48.1 ms median (44.2–58.4 ms, 32 SQL queries) and ordinary
+work at a 22.5 ms median (20.5–32.8 ms, 20 SQL queries). The ranges did not
+overlap in this synthetic sample. These observations are diagnostic rather
+than production or statistical acceptance evidence; the separate quality
+proof path still prevents public rollout.
 Gold evidence identities now have a retained, immutable registry. Its migration
 backfills live evidence and IDs retained by quality markers or reference
 provenance, and disables the existing capture generation. A new evidence row

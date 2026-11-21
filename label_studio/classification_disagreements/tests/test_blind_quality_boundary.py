@@ -100,6 +100,138 @@ class TestBlindQualityBoundary(APITestCase):
             TaskAssignment.objects.create(id=old_id, task=self.task, project=self.project,
                                           assignee=self.annotator, assigned_by=self.manager)
 
+    def test_mixed_ordinary_and_quality_share_durable_binding_and_live_revocation(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_provenance import record_label_metadata_access
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.models import BlindReadBinding
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        memberships = []
+        for member in members:
+            self.organization.add_user(member)
+            memberships.append(ProjectMember.objects.create(project=self.project, user=member, role='annotator'))
+        tasks = [TaskFactory(project=self.project, data={'text': text}) for text in ('normal', 'q')]
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            assignments = [create_mixed_assignment(
+                task=task, assignee=member, references=[{'id': reference.pk, 'hash': reference.manifest_hash}],
+                ratio_basis_points=ratio, principal=local_principal(self.manager), key=uuid4(),
+            ) for task, member, ratio in zip(tasks, members, (0, 10000))]
+            rows = [BlindReadBinding.objects.get(assignment_id_frozen=assignment.pk) for assignment in assignments]
+            assert [row.purpose for row in rows] == ['ordinary', 'quality']
+            assert rows[0].reference_id_frozen is None
+            assert rows[1].reference_id_frozen == reference.pk and rows[1].proof_hash
+            for row in rows:
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindReadBinding.objects.filter(pk=row.pk).update(actor_id_frozen=self.manager.pk)
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindReadBinding.objects.filter(pk=row.pk).delete()
+            handles = [issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+                       for member, assignment in zip(members, assignments)]
+            for member, handle in zip(members, handles):
+                assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+            memberships[0].enabled = False
+            memberships[0].save(update_fields=['enabled'])
+            record_label_metadata_access(account_id=members[1].pk)
+            for member, handle in zip(members, handles):
+                with self.assertRaises(NotFound):
+                    resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+
+    def test_old_mixed_slot_requires_manager_replay_before_handle_issuance(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadBinding
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'normal'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        args = {'task': task, 'assignee': member, 'references': [], 'ratio_basis_points': 0,
+                'principal': local_principal(self.manager), 'key': uuid4()}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            with patch('classification_disagreements.blind_read_binding.seal_mixed_read_binding'):
+                assignment = create_mixed_assignment(**args)
+            assert not BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).exists()
+            with self.assertRaises(NotFound):
+                issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            assert create_mixed_assignment(**args).pk == assignment.pk
+            assert issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+
+    def test_binding_prevents_assignment_id_reuse_before_handle_exists(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from projects.models import ProjectMember
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'normal'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                principal=local_principal(self.manager), key=uuid4())
+            old_id = assignment.pk
+            assignment.delete()
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                TaskAssignment.objects.create(id=old_id, task=task, project=self.project,
+                                              assignee=member, assigned_by=self.manager)
+
+    def test_ordinary_mixed_binding_denies_after_decision_is_deleted(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.models import BlindMixDecision
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'normal'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        key = uuid4()
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                principal=local_principal(self.manager), key=key)
+            handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            BlindMixDecision.objects.filter(project=self.project, key=key).delete()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+
     def test_opaque_handles_are_stable_owner_bound_and_never_grant_stale_access(self):
         from dataclasses import replace
         from access_control.project_operations import local_principal
@@ -3917,6 +4049,9 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_reference_revocation_waits_for_capture_reader(self):
         self._assert_evidence_revocation_waits_for_capture_reader('reference')
 
+    def test_mix_decision_revocation_waits_for_capture_reader(self):
+        self._assert_evidence_revocation_waits_for_capture_reader('decision')
+
     def _assert_evidence_revocation_waits_for_capture_reader(self, evidence):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
         from classification_disagreements.models import BlindCaptureCertificate, BlindPrivilegeHistory, BlindProvenanceEvent
@@ -3927,6 +4062,21 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             project = ProjectFactory()
             reference = synthetic_reference(project)
             rows = ClassificationGoldEvidence.objects.filter(pk=reference.pk)
+        elif evidence == 'decision':
+            from classification_disagreements.models import BlindMixDecision
+
+            project = ProjectFactory()
+            task = TaskFactory(project=project)
+            assignment = TaskAssignment.objects.create(task=task, project=project, assignee=account,
+                                                       assigned_by=project.created_by)
+            decision = BlindMixDecision.objects.create(
+                project=project, source_assignment=assignment, chosen_assignment=assignment,
+                source_id_frozen=assignment.pk, source_task_id_frozen=task.pk,
+                source_assignee_id_frozen=account.pk, chosen_id_frozen=assignment.pk,
+                key=uuid4(), request_hash='0' * 64, actor_id=project.created_by_id,
+                ratio_basis_points=0, selected=False,
+            )
+            rows = BlindMixDecision.objects.filter(pk=decision.pk)
         else:
             rows = {
                 'certificate': BlindCaptureCertificate.objects.filter(account_id=account.pk),

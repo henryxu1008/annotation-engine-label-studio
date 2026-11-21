@@ -140,6 +140,9 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
         live = authorization.active_task_assignment(local_principal(assignee), task)
         if live is None or live.pk != chosen.pk or live.project_id != project.pk:
             unavailable()
+        from .blind_read_binding import seal_mixed_read_binding
+
+        seal_mixed_read_binding(assignment=chosen, decision=previous)
         return chosen
     if BlindMixDecision.objects.filter(project=project, source_id_frozen=source.pk).exists():
         unavailable()
@@ -174,7 +177,7 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
         chosen = create_quality_task(project_id=project.pk, reference_id=item['id'],
                                      expected_reference_hash=item['hash'], assignee=source.assignee,
                                      principal=principal, key=key)
-    BlindMixDecision.objects.create(
+    decision = BlindMixDecision.objects.create(
         project=project, source_assignment=source, chosen_assignment=chosen,
         source_id_frozen=source.pk, source_task_id_frozen=source.task_id, source_assignee_id_frozen=source.assignee_id,
         chosen_id_frozen=chosen.pk, reference_id_frozen=reference_id,
@@ -182,6 +185,9 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
         key=key, request_hash=request_hash, actor_id=actor.pk, ratio_basis_points=ratio_basis_points,
         selected=selected,
     )
+    from .blind_read_binding import seal_mixed_read_binding
+
+    seal_mixed_read_binding(assignment=chosen, decision=decision)
     return chosen
 
 

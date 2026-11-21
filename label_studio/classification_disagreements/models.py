@@ -247,6 +247,33 @@ class BlindMixCompletion(models.Model):
     submission_id_frozen = models.PositiveBigIntegerField(unique=True)
 
 
+class BlindReadBinding(models.Model):
+    """Retained server-verified identity evidence for a mixed work slot."""
+
+    assignment_id_frozen = models.PositiveBigIntegerField(unique=True)
+    task_id_frozen = models.PositiveBigIntegerField()
+    project_id_frozen = models.PositiveBigIntegerField()
+    actor_id_frozen = models.PositiveBigIntegerField()
+    decision_id_frozen = models.PositiveBigIntegerField()
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_task_id_frozen = models.PositiveBigIntegerField()
+    decision_request_hash = models.CharField(max_length=64)
+    purpose = models.CharField(max_length=12)
+    reference_id_frozen = models.PositiveBigIntegerField(null=True)
+    reference_hash = models.CharField(max_length=64, null=True)
+    proof_hash = models.CharField(max_length=64, null=True)
+    binding_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(purpose='ordinary', reference_id_frozen__isnull=True,
+                                reference_hash__isnull=True, proof_hash__isnull=True)
+                       | models.Q(purpose='quality', reference_id_frozen__isnull=False,
+                                  reference_hash__isnull=False, proof_hash__isnull=False)),
+            name='blind_read_binding_purpose_valid',
+        )]
+
+
 class BlindTaskHandle(models.Model):
     """Retained opaque participant identifiers for one assignment, not a public API."""
 
