@@ -1367,6 +1367,24 @@ class TestBlindQualityBoundary(APITestCase):
         with self.assertRaises(ValidationError):
             checked_quality_proof(assignment=self.assignment, marker=marker)
 
+    def test_quality_reference_lengths_require_same_values_not_just_count(self):
+        from classification_disagreements.blind_provenance import checked_quality_proof
+        from classification_disagreements.models import BlindReferenceTextLength
+        from classification_disagreements.tests.test_gold_scoring import answer
+
+        self.qualified_submission(answer('Positive'))
+        marker = BlindQualityAssignment.objects.get(assignment_id=self.assignment.pk)
+        recorded = set(BlindReferenceTextLength.objects.filter(reference_id=marker.reference_id)
+                       .values_list('byte_length', flat=True))
+        assert recorded
+        wrong = set(recorded)
+        wrong.remove(max(wrong))
+        wrong.add(max(recorded) + 1)
+        assert len(wrong) == len(recorded)
+        with patch('classification_disagreements.blind_text_lengths.reference_text_lengths', return_value=wrong):
+            with self.assertRaises(ValidationError):
+                checked_quality_proof(assignment=self.assignment, marker=marker)
+
     def test_quality_tasks_do_not_change_ordinary_project_counts(self):
         from projects.models import ProjectMember
         from tasks.tests.factories import AnnotationFactory, PredictionFactory

@@ -1,7 +1,7 @@
 """Forward-only ordering evidence; deliberately not an admission decision."""
 
 from django.db import connections, transaction
-from django.db.models import CharField, Exists, F, OuterRef, Q, Subquery
+from django.db.models import CharField, Count, Exists, F, OuterRef, Q, Subquery
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Cast
 
@@ -213,6 +213,13 @@ def _matching_text_exposures(*, account_id, generation, lengths, assignment_id, 
     return (BlindTextLengthExposure.objects.using(using).filter(account_id=account_id, generation=generation)
             .exclude(assignment_id=assignment_id)
             .filter(Q(byte_length=-1) | Q(byte_length__in=lengths)))
+
+
+def _exact_reference_length_checks(*, reference_id, expected_lengths, using='default'):
+    """Return alias-safe SQL checks for equality to an authenticated set."""
+    lengths = BlindReferenceTextLength.objects.using(using).filter(reference_id=reference_id)
+    count = lengths.order_by().values('reference_id').annotate(total=Count('pk')).values('total')
+    return Subquery(count), Exists(lengths.exclude(byte_length__in=expected_lengths))
 
 
 def current_quality_assignment_ids(account_id, using='default'):
@@ -505,11 +512,13 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
         lengths = reference_text_lengths(reference)
     except ValidationError:
         unavailable()
-    recorded = set(BlindReferenceTextLength.objects.filter(reference_id=reference.pk)
-                   .values_list('byte_length', flat=True))
-    if (recorded != lengths or _matching_text_exposures(
-            account_id=assignment.assignee_id, generation=epoch.generation,
-            lengths=lengths, assignment_id=assignment.pk,
-    ).exists()):
+    count, has_extra = _exact_reference_length_checks(reference_id=reference.pk, expected_lengths=lengths)
+    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=epoch.generation,
+                                       lengths=lengths, assignment_id=assignment.pk)
+    length_state = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=epoch.generation)
+                    .annotate(_length_count=count, _length_extra=has_extra, _length_exposed=Exists(exposed))
+                    .values('_length_count', '_length_extra', '_length_exposed').first())
+    if (length_state is None or length_state['_length_count'] != len(lengths)
+            or length_state['_length_extra'] or length_state['_length_exposed']):
         unavailable()
     return proof
