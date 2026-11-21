@@ -479,6 +479,19 @@ An isolated PostgreSQL diagnostic with 100 warm paired reads measured 19
 queries for each purpose, but ordinary and quality medians were 27.2 ms and
 39.3 ms; the empirical rank probability was 0.9896. This is not a privacy
 acceptance test and is evidence that the current paths remain distinguishable.
+For retained active assignments, a project manager can explicitly POST up to
+50 `items` to `gold/legacy-bindings/` when both gold and blind project flags
+are enabled. Each item pins `id`, `task_id`, `assignee_id`, `version` and the
+timezone-aware `assigned_at` value from the assignment. The server rejects a
+stale snapshot before and after locking the project, affected members, capture
+epoch, tasks and assignments; rechecks each assignee's current authorization;
+and seals ordinary, mixed or quality evidence only after its existing checks
+pass. The request is all-or-nothing and can be replayed. It cannot reconstruct
+missing eligibility history or make an unqualified member eligible. This
+repair endpoint does not enable participant dispatch or automatically migrate
+all existing work. Manager-only GET lists active assignments missing a binding
+or attestation in pages of 50 using `after`; it does not prove that existing
+signatures are valid or that a project is ready for blind dispatch.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

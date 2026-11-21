@@ -49,10 +49,110 @@ def synthetic_reference(project):
     )
 
 
+def legacy_repair_item(assignment):
+    return {'id': assignment.pk, 'task_id': assignment.task_id, 'assignee_id': assignment.assignee_id,
+            'version': assignment.version, 'assigned_at': assignment.assigned_at.isoformat()}
+
+
 class TestBlindQualityBoundary(APITestCase):
     setUpTestData = classmethod(fixtures.TestSubmissionReviewWorkflow.setUpTestData.__func__)
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
     _review = fixtures.TestSubmissionReviewWorkflow._review
+
+    def test_manager_repairs_legacy_ordinary_binding_atomically_and_rechecks_scope(self):
+        from access_control.identity import LocalIdentityProvider
+        from classification_disagreements.models import BlindReadAttestation, BlindReadBinding
+        from projects.models import ProjectMember
+
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/legacy-bindings/'
+        body = {'items': [legacy_repair_item(self.assignment)]}
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        assert not BlindReadBinding.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+        other = UserFactory(active_organization=self.organization)
+        self.organization.add_user(other)
+        ProjectMember.objects.create(project=self.project, user=other, role='annotator', enabled=False)
+        other_task = TaskFactory(project=self.project, data={'text': 'other'})
+        other_assignment = TaskAssignment.objects.create(task=other_task, project=self.project, assignee=other,
+                                                         assigned_by=self.manager)
+        foreign_project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        foreign_task = TaskFactory(project=foreign_project, data={'text': 'foreign'})
+        foreign_assignment = TaskAssignment.objects.create(task=foreign_task, project=foreign_project,
+            assignee=self.annotator, assigned_by=self.manager)
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_legacy_api.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            self.client.force_authenticate(user=None)
+            assert self.client.post(url, body, format='json').status_code in (401, 403, 404)
+            for unauthorized in (self.annotator, self.reviewer, self.other_user):
+                self.client.force_authenticate(unauthorized)
+                assert self.client.post(url, body, format='json').status_code in (403, 404)
+                assert self.client.get(url).status_code in (403, 404)
+            self.client.force_authenticate(self.manager)
+            inventory = self.client.get(url)
+            assert inventory.status_code == 200
+            listed = {item['id'] for item in inventory.data['items']}
+            assert self.assignment.pk in listed and other_assignment.pk in listed and foreign_assignment.pk not in listed
+            assert inventory['Cache-Control'] == 'private, no-store'
+            assert self.client.get(url + '?after=-1').status_code == 400
+            assert self.client.get(url + '?after=1&after=2').status_code == 400
+            assert self.client.post(url, {'items': [legacy_repair_item(foreign_assignment)]}, format='json').status_code == 404
+            missing = {**legacy_repair_item(self.assignment), 'id': 99999999}
+            assert self.client.post(url, {'items': [legacy_repair_item(self.assignment), missing]}, format='json').status_code == 404
+            assert not BlindReadBinding.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+            assert self.client.post(url, {'items': [legacy_repair_item(self.assignment), legacy_repair_item(other_assignment)]},
+                                    format='json').status_code == 404
+            assert not BlindReadBinding.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+            assert not BlindReadAttestation.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+            assert self.client.post(url, {'items': [legacy_repair_item(self.assignment)] * 2}, format='json').status_code == 400
+            assert self.client.post(url, {'items': [{**legacy_repair_item(self.assignment), 'id': 2**63}]}, format='json').status_code == 400
+            stale = {**legacy_repair_item(self.assignment), 'version': self.assignment.version + 1}
+            assert self.client.post(url, {'items': [stale]}, format='json').status_code == 409
+            stale = {**legacy_repair_item(self.assignment), 'assigned_at': '2000-01-01T00:00:00Z'}
+            assert self.client.post(url, {'items': [stale]}, format='json').status_code == 409
+            result = self.client.post(url, body, format='json')
+            assert result.status_code == 200 and result.data == {'processed': 1}
+            assert BlindReadAttestation.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+            assert self.assignment.pk not in {item['id'] for item in self.client.get(url).data['items']}
+            assert self.client.post(url, body, format='json').status_code == 200
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            assert self.client.post(url, body, format='json').status_code == 404
+
+    def test_legacy_binding_repair_is_default_off(self):
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/legacy-bindings/'
+        self.client.force_authenticate(self.manager)
+        with self.settings(ANNOTATION_CLASSIFICATION_BLIND_ENABLED=False,
+                           ANNOTATION_CLASSIFICATION_GOLD_ENABLED=True,
+                           ANNOTATION_CLASSIFICATION_GOLD_PROJECTS={f'{self.organization.pk}:{self.project.pk}': True}):
+            assert self.client.post(url, {'items': [legacy_repair_item(self.assignment)]}, format='json').status_code == 404
+        with self.settings(ANNOTATION_CLASSIFICATION_BLIND_ENABLED=True, ANNOTATION_CLASSIFICATION_BLIND_PROJECTS={},
+                           ANNOTATION_CLASSIFICATION_GOLD_ENABLED=True,
+                           ANNOTATION_CLASSIFICATION_GOLD_PROJECTS={f'{self.organization.pk}:{self.project.pk}': True}):
+            assert self.client.post(url, {'items': [legacy_repair_item(self.assignment)]}, format='json').status_code == 404
+
+    def test_legacy_inventory_pages_only_active_project_assignments(self):
+        from access_control.identity import LocalIdentityProvider
+
+        expected = {self.assignment.pk}
+        for _ in range(51):
+            task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+            assignment = TaskAssignment.objects.create(task=task, project=self.project, assignee=self.annotator,
+                                                       assigned_by=self.manager)
+            expected.add(assignment.pk)
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/legacy-bindings/'
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.manager)
+        with self.settings(**config), patch('classification_disagreements.blind_legacy_api.get_identity_provider',
+                                            return_value=LocalIdentityProvider()):
+            first = self.client.get(url)
+            assert first.status_code == 200 and len(first.data['items']) == 50 and first.data['next_after']
+            second = self.client.get(url, {'after': first.data['next_after']})
+            assert second.status_code == 200 and len(second.data['items']) == 2 and second.data['next_after'] is None
+            seen = [item['id'] for item in first.data['items'] + second.data['items']]
+            assert len(set(seen)) == len(seen) and set(seen) == expected
 
     def test_capture_fence_cannot_be_reused_after_its_atomic_block(self):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read, require_capture_fence
@@ -314,6 +414,12 @@ class TestBlindQualityBoundary(APITestCase):
                 assignment = create_mixed_assignment(**args)
             assert not BlindReadAttestation.objects.filter(assignment_id_frozen=assignment.pk).exists()
             assert issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/legacy-bindings/'
+            self.client.force_authenticate(self.manager)
+            with patch('classification_disagreements.blind_legacy_api.get_identity_provider',
+                       return_value=LocalIdentityProvider()):
+                result = self.client.post(url, {'items': [legacy_repair_item(assignment)]}, format='json')
+            assert result.status_code == 200, result.data
             assert create_mixed_assignment(**args).pk == assignment.pk
             assert BlindReadAttestation.objects.filter(assignment_id_frozen=assignment.pk).exists()
 
@@ -1365,9 +1471,11 @@ class TestBlindQualityBoundary(APITestCase):
         assert response.data['drafts'][0]['id'] != draft.pk
 
     def test_legacy_quality_without_attestation_keeps_full_live_check(self):
+        from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_provenance
         from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadAttestation
         from classification_disagreements.tests.test_gold_scoring import answer
 
         with patch('classification_disagreements.blind_read_attestation.seal_attestation'):
@@ -1382,6 +1490,17 @@ class TestBlindQualityBoundary(APITestCase):
             response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
         assert response.status_code == 200
         assert check.call_count == 1
+        assert not BlindReadAttestation.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
+        config.update(ANNOTATION_CLASSIFICATION_GOLD_ENABLED=True,
+                      ANNOTATION_CLASSIFICATION_GOLD_PROJECTS={f'{self.organization.pk}:{self.project.pk}': True})
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/legacy-bindings/'
+        self.client.force_authenticate(self.manager)
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_legacy_api.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            result = self.client.post(url, {'items': [legacy_repair_item(self.assignment)]}, format='json')
+        assert result.status_code == 200, result.data
+        assert BlindReadAttestation.objects.filter(assignment_id_frozen=self.assignment.pk).exists()
 
     def test_quality_handle_is_revoked_when_pinned_config_or_task_data_changes(self):
         from access_control.project_operations import local_principal
@@ -1439,13 +1558,19 @@ class TestBlindQualityBoundary(APITestCase):
         principal = local_principal(self.annotator)
         handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
         assert Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+        self.client.force_authenticate(self.annotator)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
         # Keep the epoch and certificate valid while simulating a live global
         # fence, so the test cannot pass merely because a trigger revoked it.
         blocked = {'external_test': Exists(User.objects.filter(pk=self.manager.pk))}
-        with patch('classification_disagreements.blind_provenance._external_scope_checks', return_value=blocked):
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_provenance._external_scope_checks', return_value=blocked,
+        ), patch('classification_disagreements.blind_attested_live._external_scope_checks', return_value=blocked):
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
             with self.assertRaises(NotFound):
                 resolve_handle(principal=principal, task_handle=handle.task_handle)
+            assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
 
     def test_collection_prefilter_is_not_a_substitute_for_integrity_verification(self):
         from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
@@ -3884,6 +4009,74 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL transaction-lock test')
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
+
+    def test_legacy_repair_fences_assignee_membership_revocation(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_legacy_api
+        from classification_disagreements.blind_task_handles import issue_handle
+        from django.test import override_settings
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+        from rest_framework.test import APIClient
+
+        organization = fixtures.OrganizationFactory()
+        manager = organization.created_by
+        project = ProjectFactory(organization=organization, created_by=manager)
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        membership = ProjectMember.objects.create(project=project, user=member, role='annotator')
+        task = TaskFactory(project=project, data={'text': 'ordinary'})
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=manager)
+        entered, release, revoking = Event(), Event(), Event()
+        original = blind_legacy_api.seal_ordinary_read_binding
+
+        def pause_repair(**kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError('repair was not released')
+            return original(**kwargs)
+
+        def repair():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(manager)
+                response = client.post(f'/api/projects/{project.pk}/classification-disagreements/gold/legacy-bindings/',
+                                       {'items': [legacy_repair_item(assignment)]}, format='json')
+                return response.status_code
+            finally:
+                close_old_connections()
+
+        def revoke():
+            close_old_connections()
+            try:
+                revoking.set()
+                ProjectMember.objects.filter(pk=membership.pk).update(enabled=False)
+            finally:
+                close_old_connections()
+
+        flags = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                 'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{organization.pk}:{project.pk}': True},
+                 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{organization.pk}:{project.pk}': True}}
+        with override_settings(**flags), patch('classification_disagreements.blind_legacy_api.get_identity_provider',
+                                               return_value=LocalIdentityProvider()), patch.object(
+                blind_legacy_api, 'seal_ordinary_read_binding', side_effect=pause_repair):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                repairing = pool.submit(repair)
+                try:
+                    assert entered.wait(10)
+                    revoking_future = pool.submit(revoke)
+                    assert revoking.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        revoking_future.result(timeout=0.3)
+                finally:
+                    release.set()
+                assert repairing.result(timeout=20) == 200
+                revoking_future.result(timeout=20)
+        with self.assertRaises(NotFound):
+            issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
 
     def test_concurrent_assignment_id_reuse_cannot_rebind_new_handle(self):
         from access_control.project_operations import local_principal
