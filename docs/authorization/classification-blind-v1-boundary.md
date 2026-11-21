@@ -460,6 +460,10 @@ Participant work-list and editor reads take a capture-epoch lock after the
 project lock. PostgreSQL readers share this lock; deleting a certificate,
 privilege history, provenance event or reference takes its conflicting lock even when
 issued directly through the ORM or SQL.
+If the capture-epoch row is missing, blind participant reads and writes fail
+closed for ordinary and quality assignments instead of proceeding without a
+fence. A disabled but existing epoch retains its lock and its separate
+eligibility behavior.
 SQLite readers instead reserve the write lock: a plain read cannot fence a
 concurrent commit in WAL mode. That serializes SQLite writers and participant
 reads and requires throughput evaluation. The current proof is rechecked

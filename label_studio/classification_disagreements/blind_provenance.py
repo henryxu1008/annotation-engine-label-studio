@@ -124,7 +124,12 @@ def lock_capture_epoch_for_write(using='default'):
     connection = connections[using]
     if not connection.in_atomic_block:
         raise RuntimeError('Capture write fencing requires an atomic transaction.')
-    return BlindCaptureEpoch.objects.using(using).select_for_update().filter(pk=1).first()
+    epoch = BlindCaptureEpoch.objects.using(using).select_for_update().filter(pk=1).first()
+    if epoch is None:
+        from rest_framework.exceptions import NotFound
+
+        raise NotFound('Work is unavailable.')
+    return epoch
 
 
 def lock_active_capture_for_write(using='default'):
@@ -156,9 +161,15 @@ def lock_capture_epoch_for_read(using='default'):
         table = connection.ops.quote_name(BlindCaptureEpoch._meta.db_table)
         with connection.cursor() as cursor:
             cursor.execute(f'SELECT id FROM {table} WHERE id = %s FOR SHARE', [1])
-            cursor.fetchone()
+            locked = cursor.fetchone() is not None
     elif connection.vendor == 'sqlite':
-        BlindCaptureEpoch.objects.using(using).filter(pk=1).update(generation=F('generation'))
+        locked = bool(BlindCaptureEpoch.objects.using(using).filter(pk=1).update(generation=F('generation')))
+    else:
+        locked = False
+    if not locked:
+        from rest_framework.exceptions import NotFound
+
+        raise NotFound('Work is unavailable.')
 
 
 def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_id, using='default'):

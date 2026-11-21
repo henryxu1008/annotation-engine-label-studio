@@ -946,6 +946,39 @@ class TestBlindQualityBoundary(APITestCase):
                 assert self.client.post(url, {**token, 'result': []}, format='json').status_code == 404
             assert not AnnotationDraft.objects.filter(assignment=self.assignment).exists()
 
+    def test_missing_capture_epoch_denies_ordinary_blind_reads_and_writes(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindCaptureEpoch
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+        from tasks.models import AnnotationDraft
+
+        Project.objects.filter(pk=self.project.pk).update(label_config=CONFIG)
+        Task.objects.filter(pk=self.task.pk).update(data={'text': 'ordinary test'})
+        handle = issue_handle(principal=local_principal(self.annotator), assignment_id=self.assignment.pk)
+        token = {'assignment_id': handle.assignment_handle, 'assignment_version': self.assignment.version}
+        root = f'/api/tasks/blind/{handle.task_handle}'
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.annotator)
+        with self.settings(**config):
+            assert self.client.get(root + '/').status_code == 200
+            BlindCaptureEpoch.objects.filter(pk=1).delete()
+            assert self.client.get(root + '/').status_code == 404
+            assert self.client.get(f'/api/projects/{self.project.pk}/blind-work/').status_code == 404
+            assert self.client.post(root + '/drafts', {**token, 'result': []}, format='json').status_code == 404
+            assert not AnnotationDraft.objects.filter(assignment=self.assignment).exists()
+
+    def test_missing_capture_epoch_does_not_block_regular_assignment(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.models import BlindCaptureEpoch
+        from tasks.assignments import create_assignment
+
+        task = TaskFactory(project=self.project)
+        BlindCaptureEpoch.objects.filter(pk=1).delete()
+        assignment = create_assignment(task=task, assignee=self.annotator, principal=local_principal(self.manager))
+        assert assignment.task_id == task.pk and assignment.assignee_id == self.annotator.pk
+
     def test_blind_write_does_not_emit_ordinary_annotation_webhooks(self):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_task_handles import issue_handle
