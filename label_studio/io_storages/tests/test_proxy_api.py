@@ -31,6 +31,12 @@ class TestResolveStorageUriAPIMixin(unittest.TestCase):
         self.request.user = self.user
         self.storage = MagicMock()
         self.storage.presign = True
+        actor_patch = patch('access_control.identity.resolve_actor', return_value=(MagicMock(), self.user))
+        exposure_patch = patch('classification_disagreements.blind_provenance.record_project_file_access')
+        actor_patch.start()
+        exposure_patch.start()
+        self.addCleanup(actor_patch.stop)
+        self.addCleanup(exposure_patch.stop)
 
     def test_resolve_with_permission_denied(self):
         self.task.has_permission.return_value = False

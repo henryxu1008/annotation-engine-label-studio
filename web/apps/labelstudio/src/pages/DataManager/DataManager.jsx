@@ -56,6 +56,8 @@ const initializeDataManager = (root, props, params) => {
     apiGateway: `${window.APP_SETTINGS.hostname}/api/dm`,
     apiVersion: 2,
     project: params.project,
+    blindWorkspace: ({ store }) => <MyWorkWorkspace projectId={params.id} blindStore={store}
+      onOpenBlindTask={(taskID) => store.setTask({ taskID })} />,
     polling: window.APP_SETTINGS?.polling,
     showPreviews: false,
     apiEndpoints: APIConfig.endpoints,
@@ -601,7 +603,9 @@ DataManagerPage.context = ({ dmRef }) => {
     const dialog = modal({
       title: <CollaborationModalTitle kind="myWork" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <MyWorkWorkspace projectId={project.id} onOpenReviewQueue={() => { dialog.close(); openReviews(); }} />,
+      body: <MyWorkWorkspace projectId={project.id} onOpenReviewQueue={() => { dialog.close(); openReviews(); }}
+        blindStore={dmRef?.settings?.blindProtocol === true ? dmRef.store : null}
+        onOpenBlindTask={(taskID) => { dialog.close(); dmRef.store.setTask({ taskID }); }} />,
       style: { width: 960 },
     });
   };

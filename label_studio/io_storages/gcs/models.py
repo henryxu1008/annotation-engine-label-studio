@@ -256,6 +256,7 @@ class GCSExportStorage(GCSStorageMixin, ExportStorage):
         annotation = self.current_annotation_for_delivery(annotation)
         if annotation is None:
             return
+        self.require_annotation_delivery_allowed(annotation)
         bucket = self.get_bucket()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)

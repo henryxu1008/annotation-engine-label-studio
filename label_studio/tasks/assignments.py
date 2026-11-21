@@ -41,7 +41,7 @@ def validate_assignment_target(task, assignee):
 
 
 @transaction.atomic
-def create_assignment(*, task, assignee, principal):
+def create_assignment(*, task, assignee, principal, _defer_blind_binding=False):
     project, actor = lock_project_operation(
         task.project_id,
         principal,
@@ -49,13 +49,30 @@ def create_assignment(*, task, assignee, principal):
         related_user_ids=[assignee.pk],
     )
     authorization.require(authorization.can_manage_project(principal, project), 'Project manager role is required.')
+    from classification_disagreements.blind_provenance import lock_active_capture_for_write
+
+    lock_active_capture_for_write()
     task = get_object_or_404(Task.objects.select_for_update(), pk=task.pk, project=project)
     task.project = project
+    from classification_disagreements.models import BlindMixEvidence, BlindQualityAssignment
+
+    if BlindQualityAssignment.objects.filter(task_id=task.pk).exists():
+        raise ValidationError({'task': 'This task cannot be reassigned.'})
+    if BlindMixEvidence.objects.filter(source_task_id_frozen=task.pk, source_assignee_id_frozen=assignee.pk).exists():
+        raise ValidationError({'task': 'This task cannot be assigned to this user.'})
     # The serializer's preflight is not authoritative: revalidate the locked
     # current target after concurrent membership/account changes commit.
     assignee.refresh_from_db()
     validate_assignment_target(task, assignee)
-    return TaskAssignment.objects.create(task=task, project=project, assignee=assignee, assigned_by=actor)
+    assignment = TaskAssignment.objects.create(task=task, project=project, assignee=assignee, assigned_by=actor)
+    if not _defer_blind_binding:
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        if sensitive_project(project):
+            from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+
+            seal_ordinary_read_binding(assignment=assignment)
+    return assignment
 
 
 @transaction.atomic

@@ -286,6 +286,10 @@ def normalized_filters(filters):
 
 
 def source_record(submission, namespace):
+    from classification_disagreements.blind_quality_boundary import is_quality_only_submission
+
+    if is_quality_only_submission(submission):
+        fail('APPROVAL_REQUIRED')
     snapshot = submission.result_snapshot
     try:
         review = submission.review
@@ -337,12 +341,14 @@ def source_record(submission, namespace):
 
 
 def selected_records(project, normalized, namespace, lock=False):
+    from classification_disagreements.blind_quality_boundary import with_quality_snapshot
+
     requested = normalized["items"]
     qs = Submission.objects.filter(assignment__project=project, pk__in=[i["submission_id"] for i in requested])
     if qs.count() != len(requested):
         fail("NOT_FOUND", 404)
     qs = (
-        qs.filter(**normalized_filters(normalized["filters"]))
+        with_quality_snapshot(qs.filter(**normalized_filters(normalized["filters"])))
         .select_related("assignment__task", "review")
         .order_by("id")
     )
@@ -613,6 +619,8 @@ def dispatch(release_id):
 
 
 def integrity(release):
+    from classification_disagreements.blind_quality_boundary import with_quality_snapshot
+
     frozen = release.frozen_input
     if (
         digest(canonical(frozen)) != release.input_sha256
@@ -622,7 +630,9 @@ def integrity(release):
     ids = list(release.items.values_list("submission_id_frozen", flat=True))
     sources = {
         s.pk: s
-        for s in Submission.objects.filter(pk__in=ids, assignment__project_id=release.project_id).select_related(
+        for s in with_quality_snapshot(Submission.objects.filter(
+            pk__in=ids, assignment__project_id=release.project_id
+        )).select_related(
             "assignment", "review"
         )
     }

@@ -96,6 +96,9 @@ def localfiles_data(request):
 
     local_serving_document_root = settings.LOCAL_FILES_DOCUMENT_ROOT
     if path and request.user.is_authenticated:
+        from access_control.identity import resolve_actor
+
+        _, actor = resolve_actor(request)
         # Normalize the incoming relative path so we don't depend on trailing slashes
         path = posixpath.normpath(path).lstrip('/')
         full_path = Path(safe_join(local_serving_document_root, path))
@@ -107,6 +110,7 @@ def localfiles_data(request):
         except (OSError, RuntimeError, ValueError):
             return HttpResponseNotFound()
         authorized_root = None
+        matching_projects = set()
 
         # Storage paths are normalized on save/migration, so prefix matches using the
         # directory that contains the requested file stay consistent across OSes.
@@ -115,13 +119,11 @@ def localfiles_data(request):
             _full_path=Value(full_path_dir, output_field=CharField())
         ).filter(_full_path__startswith=F('path'))
         for storage in localfiles_storage:
-            if (
-                not is_private_local_path(storage.path, storage_root=True)
-                and resolved.is_relative_to(Path(storage.path).resolve())
-                and storage.project.has_permission(request.user)
-            ):
-                authorized_root = storage.path
-                break
+            if (not is_private_local_path(storage.path, storage_root=True)
+                    and resolved.is_relative_to(Path(storage.path).resolve())):
+                matching_projects.add(storage.project_id)
+                if storage.project.has_permission(actor):
+                    authorized_root = storage.path
 
         # Open through pinned, no-follow directory handles after authorization.
         if authorized_root is not None:
@@ -129,6 +131,9 @@ def localfiles_data(request):
 
             if pinned_local_path(resolved):
                 return HttpResponseNotFound()
+            from classification_disagreements.blind_provenance import record_project_file_accesses
+
+            record_project_file_accesses(account_id=actor.pk, project_ids=matching_projects)
             # Detect mime type and encoding
             return build_localfile_response(
                 request=request,

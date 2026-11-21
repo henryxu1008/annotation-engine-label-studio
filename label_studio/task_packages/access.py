@@ -1,7 +1,7 @@
 """Shared fixed-package visibility predicates; context never grants authority."""
 
 from access_control.project_operations import READ_WORK, require_project_operation
-from django.db.models import Exists, F, OuterRef
+from django.db.models import Exists, F, OuterRef, Q
 from projects.models import Project, ProjectMember
 from rest_framework.exceptions import PermissionDenied
 from tasks.models import Submission, TaskAssignment
@@ -26,7 +26,10 @@ def live_items(project):
 
 
 def review_work(project, actor, role):
-    rows = Submission.objects.filter(assignment__project=project, status=Submission.Status.PENDING)
+    from classification_disagreements.models import BlindQualityAssignment
+
+    rows = Submission.objects.filter(assignment__project=project, status=Submission.Status.PENDING).exclude(
+        assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
     return rows.exclude(submitted_by=actor) if role == ProjectMember.Role.REVIEWER else rows
 
 
@@ -36,12 +39,18 @@ def visible_packages(project, actor, role):
         return rows.filter(project_id__in=work_projects(actor, ['manager']))
     live = live_items(project).filter(package_id=OuterRef('pk'))
     if role == ProjectMember.Role.ANNOTATOR:
+        from classification_disagreements.blind_mix import deferred_source_ids
+        from classification_disagreements.blind_provenance import current_quality_assignment_ids
+        from classification_disagreements.models import BlindQualityAssignment
+
         tasks = TaskAssignment.objects.filter(
             project=project,
             project_id__in=work_projects(actor, ['annotator']),
             assignee=actor,
             status__in=TaskAssignment.ACTIVE_STATUSES,
-        ).values('task_id')
+        ).filter(~Q(task_id__in=BlindQualityAssignment.objects.values('task_id'))
+                 | Q(pk__in=current_quality_assignment_ids(actor.pk))).exclude(
+                     pk__in=deferred_source_ids(actor.pk)).values('task_id')
     else:
         tasks = (
             review_work(project, actor, role)

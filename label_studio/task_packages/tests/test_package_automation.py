@@ -52,6 +52,17 @@ class TestPackageAutomation(PackageFixture, TransactionTestCase):
         data.update(changes)
         return self.client.put(self.url_pool, data, format='json')
 
+    def test_automatic_allocation_skips_blind_projects(self):
+        assert self.configure().status_code == 200
+        with self.settings(
+            ANNOTATION_CLASSIFICATION_BLIND_ENABLED=True,
+            ANNOTATION_CLASSIFICATION_BLIND_PROJECTS={f'{self.organization.pk}:{self.project.pk}': True},
+        ):
+            result = scan_allocations()
+            assert result['allocated'] == 0 and result['skipped'] == 1
+            assert not TaskAssignment.objects.exists() and not TaskPackageDispatch.objects.exists()
+        assert scan_allocations()['allocated'] == 1
+
     def test_generation_survives_edit_and_requires_explicit_reenable(self):
         assert self.configure().status_code == 200
         assert scan_allocations()['allocated'] == 1

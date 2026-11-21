@@ -287,6 +287,9 @@ class S3ExportStorage(S3StorageMixin, ExportStorage):
     @transaction.atomic
     def save_annotation(self, annotation, *, _issue86_export_identity=None):
         self.require_mutable_delivery_allowed(lock_project=True)
+        annotation = self.current_annotation_for_delivery(annotation)
+        if annotation is None:
+            return
         durable_export = _issue86_export_identity is not None or getattr(settings, 'ANNOTATION_STORAGE_ADMISSION_ENABLED', False)
         if durable_export:
             # The outbox worker can load this object before another committed
@@ -295,6 +298,7 @@ class S3ExportStorage(S3StorageMixin, ExportStorage):
             annotation.refresh_from_db()
             if annotation.project_id != self.project_id:
                 raise ValueError('The annotation project changed before the S3 request.')
+        self.require_annotation_delivery_allowed(annotation)
         # get key that identifies this object in storage
         key = S3ExportStorageLink.get_key(annotation)
         key = str(self.prefix) + '/' + key if self.prefix else key

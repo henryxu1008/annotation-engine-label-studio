@@ -66,7 +66,14 @@ class PackageWork:
         self._assignments = TaskAssignment.objects.filter(project=project, status__in=TaskAssignment.ACTIVE_STATUSES)
         self._pending = review_work(project, actor, role)
         if role == 'annotator':
-            self._assignments = self._assignments.filter(assignee=actor)
+            from classification_disagreements.blind_mix import deferred_source_ids
+            from classification_disagreements.blind_provenance import current_quality_assignment_ids
+            from classification_disagreements.models import BlindQualityAssignment
+
+            self._assignments = self._assignments.filter(assignee=actor).filter(
+                ~Q(task_id__in=BlindQualityAssignment.objects.values('task_id'))
+                | Q(pk__in=current_quality_assignment_ids(actor.pk))
+            ).exclude(pk__in=deferred_source_ids(actor.pk))
             self._pending = self._pending.filter(
                 assignment__assignee=actor, assignment__status__in=TaskAssignment.ACTIVE_STATUSES
             )

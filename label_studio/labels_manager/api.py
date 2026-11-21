@@ -1,7 +1,7 @@
 import logging
 
 from access_control import authorization
-from access_control.identity import resolve_principal
+from access_control.identity import resolve_actor, resolve_principal
 from access_control.project_operations import MANAGE_TASKS, lifecycle_background_fence_enabled, lock_project_operation
 from core.permissions import ViewClassPermission, all_permissions
 from django.conf import settings
@@ -27,6 +27,17 @@ from .functions import bulk_update_label
 from .models import Label, LabelLink
 
 logger = logging.getLogger(__name__)
+
+
+class BlindLabelExposureFence:
+    """Capture global label metadata exposure before serving any response."""
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from classification_disagreements.blind_provenance import record_label_metadata_access
+
+        _, actor = resolve_actor(request)
+        record_label_metadata_access(account_id=actor.pk)
 
 
 class LifecycleLabelWriteFence:
@@ -112,7 +123,7 @@ class LifecycleLabelWriteFence:
     ),
 )
 @method_decorator(name='update', decorator=extend_schema(exclude=True))
-class LabelAPI(LifecycleLabelWriteFence, viewsets.ModelViewSet):
+class LabelAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, viewsets.ModelViewSet):
     pagination_class = PageNumberPagination
     serializer_class = LabelSerializer
     permission_required = ViewClassPermission(
@@ -235,7 +246,7 @@ class LabelAPI(LifecycleLabelWriteFence, viewsets.ModelViewSet):
     ),
 )
 @method_decorator(name='update', decorator=extend_schema(exclude=True))
-class LabelLinkAPI(LifecycleLabelWriteFence, viewsets.ModelViewSet):
+class LabelLinkAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = {
         'project': ['exact'],
@@ -327,20 +338,36 @@ class LabelLinkAPI(LifecycleLabelWriteFence, viewsets.ModelViewSet):
         },
     ),
 )
-class LabelBulkUpdateAPI(LifecycleLabelWriteFence, views.APIView):
+class LabelBulkUpdateAPI(BlindLabelExposureFence, LifecycleLabelWriteFence, views.APIView):
     permission_required = all_permissions.labels_change
 
+    @transaction.atomic
     def post(self, request):
+        from access_control.authorization import authorization
+        from access_control.project_operations import EDIT, lock_project_operation
+        from projects.models import Project
+
         serializer = LabelBulkUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project = serializer.validated_data['project']
-        if project is not None:
-            self.check_object_permissions(self.request, project)
+        principal, actor = resolve_actor(request)
+        if project is not None and project.organization_id != actor.active_organization_id:
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound('Project is unavailable.')
+        project_ids = ([project.pk] if project is not None else list(Project.objects.filter(
+            organization_id=actor.active_organization_id,
+        ).order_by('pk').values_list('pk', flat=True)))
+        for project_id in project_ids:
+            locked, _ = lock_project_operation(project_id, principal, EDIT)
+            authorization.require(authorization.can_manage_project(principal, locked),
+                                  'Project manager role is required to update labels.')
 
         updated_count = bulk_update_label(
             old_label=serializer.validated_data['old_label'],
             new_label=serializer.validated_data['new_label'],
             organization=self.request.user.active_organization,
             project=project,
+            allowed_project_ids=project_ids,
         )
         return Response({'annotations_updated': updated_count})

@@ -1,6 +1,7 @@
-import { flow, getRoot, getSnapshot, types } from "mobx-state-tree";
+import { flow, getRoot, getSnapshot, isAlive, types } from "mobx-state-tree";
 import { DataStore, DataStoreItem } from "../../mixins/DataStore";
 import { getAnnotationSnapshot } from "../../sdk/lsf-utils";
+import { validBlindTask } from "../../sdk/blind-protocol";
 import { isDefined } from "../../utils/utils";
 import { History } from "../../utils/history";
 import { Assignee } from "../Assignee";
@@ -139,6 +140,7 @@ export const create = (columns) => {
       totalPredictions: 0,
     },
   })
+    .volatile(() => ({ blindTaskRequestId: 0 }))
     .actions((self) => ({
       loadTaskHistory: flow(function* (props) {
         const taskPackage = History.getParams().task_package;
@@ -162,6 +164,10 @@ export const create = (columns) => {
           return;
         }
 
+        const sdk = self.root.SDK;
+        const restricted = sdk.settings?.blindProtocol === true;
+        const project = sdk.projectId;
+        const requestId = restricted ? ++self.blindTaskRequestId : null;
         self.setLoading(taskID);
 
         // Pass label stream mode context to the backend API call
@@ -178,7 +184,21 @@ export const create = (columns) => {
           taskParams.annotations_stub = true;
         }
 
-        const taskData = yield self.root.apiCall("task", taskParams);
+        let taskData;
+        try {
+          taskData = yield self.root.apiCall("task", taskParams);
+        } catch (error) {
+          if (isAlive(self)) self.finishLoading(taskID);
+          if (restricted) return null;
+          throw error;
+        }
+        if (!isAlive(self)) return null;
+        if (restricted && (self.root.SDK !== sdk || sdk.settings?.blindProtocol !== true
+            || String(sdk.projectId) !== String(project) || requestId !== self.blindTaskRequestId
+            || !validBlindTask(taskData, taskID, project))) {
+          self.finishLoading(taskID);
+          return null;
+        }
 
         const taskStatusCode =
           taskData?.status ??

@@ -95,6 +95,9 @@ class MediaAPI(generics.GenericAPIView):
         current_scope = PackageScope.from_request(request, current_project)
         if current_scope:
             current_scope.require_task(current_task)
+        from .blind_provenance import record_project_file_access
+
+        record_project_file_access(account_id=actor.pk, project_id=current_project.pk)
         content_type = 'image/png' if data.startswith(b'\x89PNG\r\n\x1a\n') else 'image/jpeg'
         response = HttpResponse(data, content_type=content_type)
         response['Cache-Control'] = 'private, no-store'

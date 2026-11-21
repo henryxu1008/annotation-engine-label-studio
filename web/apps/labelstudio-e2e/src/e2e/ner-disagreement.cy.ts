@@ -116,7 +116,13 @@ describe('read-only frozen NER comparison', () => {
       const scope = fixture.projects[locale], task = scope.cases.producer;
       cy.loginAs(fixture.users.a.email, fixture.password, '/user/account/personal-info'); cy.setUserLocale(locale);
       cy.visit(`/projects/${scope.id}/data?task=${task.task}&assignment=${task.assignment_a}`);
-      cy.get('.lsf-label').contains('PER').click(); selectText('😀');
+      const editorReady = (win: any) => {
+        expect(Number(win.Htx?.task?.id), 'the expected task is loaded').to.eq(task.task);
+        expect(win.Htx?.isLoading, 'editor finished loading').to.eq(false);
+        expect(win.Htx?.annotationStore?.selected, 'selected annotation is available').to.exist;
+      };
+      cy.window({ timeout: 30000 }).should(editorReady);
+      cy.get('.lsf-label', { timeout: 30000 }).contains('PER').click(); selectText('😀');
       cy.window().should((win: any) => {
         const result = win.Htx.annotationStore.selected.serializeAnnotation();
         expect(result).to.have.length(1); expect(result[0].value).to.include({ start: 1, end: 2, text: '😀' });
@@ -133,7 +139,10 @@ describe('read-only frozen NER comparison', () => {
       cy.window({ timeout: 15000 }).should((win: any) => {
         check(win.Htx.annotationStore.selected.serializeAnnotation()); expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false);
       });
-      cy.reload(); cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+      cy.reload(); cy.window({ timeout: 30000 }).should((win: any) => {
+        editorReady(win);
+        check(win.Htx.annotationStore.selected.serializeAnnotation());
+      });
       cy.intercept('POST', `**/api/tasks/${task.task}/annotations*`).as('nerSubmit');
       cy.get('[data-testid="bottombar-submit-button"]').click(); cy.wait('@nerSubmit').then(({ response }) => {
         expect(response!.statusCode).to.eq(201); check(response!.body.result);

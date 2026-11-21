@@ -95,12 +95,17 @@ class OrganizationMemberSerializer(DynamicFieldsMixin, serializers.ModelSerializ
     contributed_to_projects = serializers.SerializerMethodField(read_only=True)
 
     def get_annotations_count(self, member) -> int:
+        from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
         org = self.context.get('organization')
-        return member.user.annotations.filter(project__organization=org).count()
+        return member.user.annotations.filter(project__organization=org).exclude(sensitive_project_filter('project')).count()
 
     def get_contributed_projects_count(self, member) -> int:
+        from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
         org = self.context.get('organization')
-        return member.user.annotations.filter(project__organization=org).values('project').distinct().count()
+        return (member.user.annotations.filter(project__organization=org)
+                .exclude(sensitive_project_filter('project')).values('project').distinct().count())
 
     def get_created_projects(self, member) -> list[ProjectInfo] | None:
         if not self.context.get('contributed_to_projects', False):
@@ -117,11 +122,14 @@ class OrganizationMemberSerializer(DynamicFieldsMixin, serializers.ModelSerializ
         ]
 
     def get_contributed_to_projects(self, member) -> list[ProjectInfo] | None:
+        from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
         if not self.context.get('contributed_to_projects', False):
             return None
         organization = self.context.get('organization')
         annotations = (
             Annotation.objects.filter(completed_by=member.user, project__organization=organization)
+            .exclude(sensitive_project_filter('project'))
             .values('project__id', 'project__title')
             .distinct()
         )

@@ -2,8 +2,13 @@ from django.db import transaction
 from tasks.models import Annotation
 
 
-def bulk_update_label(old_label, new_label, organization, project=None):
-    annotations = Annotation.objects.filter(project__organization=organization)
+def bulk_update_label(old_label, new_label, organization, project=None, allowed_project_ids=None):
+    from classification_disagreements.blind_quality_boundary import quality_task_ids
+
+    # Quality-only annotations never participate in ordinary bulk operations.
+    annotations = Annotation.objects.filter(project__organization=organization).exclude(task_id__in=quality_task_ids())
+    if allowed_project_ids is not None:
+        annotations = annotations.filter(project_id__in=allowed_project_ids)
     if project is not None:
         annotations = annotations.filter(project=project)
 
