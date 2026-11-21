@@ -1,6 +1,7 @@
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from unittest.mock import patch
 
 from classification_disagreements.models import ClassificationGoldEvidence
 from classification_disagreements.tests import test_comparison as fixtures
@@ -40,6 +41,24 @@ class TestGoldAPI(APITestCase):
         result = self.create({'kind': 'reference', 'submission_id': self.first.pk})
         assert result.status_code == 201, result.data
         return result.data['id']
+
+    def test_checked_reference_reads_bounded_manifest_in_one_snapshot(self):
+        from classification_disagreements.gold_api import MAX_BYTES, checked
+        from rest_framework.exceptions import APIException
+
+        ref = self.reference()
+        with self.assertNumQueries(1):
+            item = checked(self.project, ref, 'reference')
+            assert item.manifest['kind'] == 'reference'
+        oversized = ClassificationGoldEvidence.objects.create(
+            project=self.project, created_by=self.manager, actor_id_frozen=self.manager.pk,
+            principal='local:test', principal_source='local', kind='reference', idempotency_key=uuid4(),
+            request_hash='0' * 64, manifest={'text': 'x' * (MAX_BYTES + 1)}, manifest_hash='0' * 64,
+        )
+        with patch('classification_disagreements.gold_api.partial.bounded_size') as check_size:
+            with self.assertNumQueries(1), self.assertRaises(APIException):
+                checked(self.project, oversized.pk, 'reference')
+            check_size.assert_not_called()
 
     def test_reference_and_score_freeze_exact_inputs_without_review_mutation(self):
         self.set_answer(self.second, 'Negative')

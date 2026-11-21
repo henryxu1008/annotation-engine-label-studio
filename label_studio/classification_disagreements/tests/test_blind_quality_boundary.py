@@ -54,6 +54,30 @@ class TestBlindQualityBoundary(APITestCase):
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
     _review = fixtures.TestSubmissionReviewWorkflow._review
 
+    def test_assignment_lookup_preserves_marker_scope_for_live_proof_check(self):
+        from access_control.authorization import authorization
+        from access_control.project_operations import local_principal
+        from django.test.utils import CaptureQueriesContext
+
+        principal = local_principal(self.annotator)
+        with CaptureQueriesContext(connection) as ordinary_queries:
+            assert authorization.active_task_assignment(principal, self.task).pk == self.assignment.pk
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindQualityAssignment.objects.create(
+                assignment_id=self.assignment.pk, task_id=self.task.pk,
+                project_id=self.project.pk + 1000000, assignee_id=self.manager.pk,
+            )
+        marker = bind_marker(self.assignment)
+        with patch('classification_disagreements.blind_provenance.checked_quality_proof',
+                   side_effect=ValidationError('invalid marker')) as check:
+            with CaptureQueriesContext(connection) as marked_queries:
+                assert authorization.active_task_assignment(principal, self.task) is None
+        assert len(ordinary_queries) == len(marked_queries)
+        observed = check.call_args.kwargs['marker']
+        assert (observed.pk, observed.assignment_id, observed.task_id, observed.project_id, observed.assignee_id) == (
+            marker.pk, marker.assignment_id, marker.task_id, marker.project_id, marker.assignee_id,
+        )
+
     def test_deleted_reference_id_cannot_be_reused_after_provenance_is_removed(self):
         from classification_disagreements.models import BlindEvidenceIdentity, BlindProvenanceEvent
 

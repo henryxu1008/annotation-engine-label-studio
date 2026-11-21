@@ -388,13 +388,20 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
 
     if lock_epoch and not connections['default'].in_atomic_block:
         raise RuntimeError('Quality proof validation requires a transaction.')
-    epochs = BlindCaptureEpoch.objects
+    epochs = BlindCaptureEpoch.objects.filter(pk=1, enabled=True)
+    epoch = None
     if lock_epoch:
-        epochs = epochs.select_for_update()
-    epoch = epochs.filter(pk=1, enabled=True).first()
-    proof = bounded_query(BlindEligibilityProof.objects.all(), 'manifest').filter(
-        assignment_id=assignment.pk).first()
-    if (epoch is None or proof is None or type(proof._gold_bytes) is not int
+        epoch = epochs.select_for_update().first()
+    proofs = bounded_query(BlindEligibilityProof.objects.all(), 'manifest').defer(None).filter(
+        assignment_id=assignment.pk, _gold_bytes__gte=0, _gold_bytes__lte=16384)
+    if not lock_epoch:
+        # Participant callers already fence the capture epoch where required;
+        # read the live generation and bounded proof in the same snapshot.
+        proofs = proofs.annotate(_capture_generation=Subquery(epochs.values('generation')[:1]))
+    proof = proofs.first()
+    generation = (epoch.generation if epoch is not None else None) if lock_epoch else (
+        proof._capture_generation if proof is not None else None)
+    if (generation is None or proof is None or type(proof._gold_bytes) is not int
             or not 0 <= proof._gold_bytes <= 16384):
         unavailable()
     if not _local_upload_backend_supported():
@@ -427,50 +434,9 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
             or marker.assignment_id != assignment.pk or marker.project_id != assignment.project_id
             or marker.task_id != assignment.task_id or marker.assignee_id != assignment.assignee_id
             or value['reference_id'] != marker.reference_id or value['reference_hash'] != marker.reference_hash
-            or value['capture_generation'] != epoch.generation or value['issuer_source'] != 'label_studio_local'
+            or value['capture_generation'] != generation or value['issuer_source'] != 'label_studio_local'
             or value['issuer_principal'] != f"label_studio_local:{value['issued_by']}"
             or value['account_birth_sequence'] <= value['reference_sequence']):
-        unavailable()
-    # Keep all prospective admission and exposure predicates, but evaluate
-    # them together against one epoch rather than separate round trips.
-    mixes, mix_history, valid_mix = _mixed_evidence_queries(
-        account_id=assignment.assignee_id, assignment_id=assignment.pk, project_id=assignment.project_id,
-        reference_id=marker.reference_id,
-    )
-    checks = {
-        'has_certificate': Exists(BlindCaptureCertificate.objects.filter(
-            account_id=assignment.assignee_id, generation=epoch.generation)),
-        'has_history': Exists(BlindPrivilegeHistory.objects.filter(
-            account_id=assignment.assignee_id, elevated=False, had_assignment=True)),
-        'has_account_event': Exists(BlindProvenanceEvent.objects.filter(
-            kind='account', subject_id=assignment.assignee_id, sequence=value['account_birth_sequence'])),
-        'has_reference_event': Exists(BlindProvenanceEvent.objects.filter(
-            kind='reference', subject_id=marker.reference_id, sequence=value['reference_sequence'])),
-        'has_file_exposure': Exists(BlindProjectFileExposure.objects.filter(
-            account_id=assignment.assignee_id, generation=epoch.generation)),
-        'has_label_exposure': Exists(BlindLabelExposure.objects.filter(
-            account_id=assignment.assignee_id, generation=epoch.generation)),
-        'has_mix': Exists(mixes),
-        'has_mix_history': Exists(mix_history),
-        'has_valid_mix': Exists(valid_mix),
-        'has_first_assignment': Exists(BlindPrivilegeHistory.objects.filter(
-            account_id=assignment.assignee_id, first_assignment_id=assignment.pk)),
-        'has_source_exposure': Exists(BlindAssignmentExposure.objects.filter(
-            account_id=assignment.assignee_id, task_id=value.get('source_task_id'), generation=epoch.generation)),
-    }
-    from projects.models import Project
-
-    scope_checks = _external_scope_checks()
-    checks.update(scope_checks)
-    checks['has_project'] = Exists(Project.all_objects.filter(pk=assignment.project_id))
-    guard = (BlindCaptureEpoch.objects.filter(pk=1, generation=epoch.generation, enabled=True)
-             .annotate(**checks).values(*checks).first())
-    if (guard is None or not all(guard[key] for key in (
-            'has_project', 'has_certificate', 'has_history', 'has_account_event', 'has_reference_event'))
-            or any(guard[key] for key in scope_checks)
-            or guard['has_file_exposure'] or guard['has_label_exposure']
-            or guard['has_mix'] != guard['has_mix_history']
-            or (guard['has_mix'] and not guard['has_valid_mix'])):
         unavailable()
     # The eligibility certificate is not authority to keep serving a task
     # after its pinned configuration or text has changed. Use the same frozen
@@ -489,6 +455,64 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
             unavailable()
     except (APIException, Http404, KeyError, TypeError, ValueError, OverflowError):
         unavailable()
+    from .blind_text_lengths import reference_text_lengths
+
+    try:
+        lengths = reference_text_lengths(reference)
+    except ValidationError:
+        unavailable()
+    # Keep all prospective admission and exposure predicates, but evaluate
+    # them together against one epoch rather than separate round trips.
+    mixes, mix_history, valid_mix = _mixed_evidence_queries(
+        account_id=assignment.assignee_id, assignment_id=assignment.pk, project_id=assignment.project_id,
+        reference_id=marker.reference_id,
+    )
+    checks = {
+        'has_certificate': Exists(BlindCaptureCertificate.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_history': Exists(BlindPrivilegeHistory.objects.filter(
+            account_id=assignment.assignee_id, elevated=False, had_assignment=True)),
+        'has_account_event': Exists(BlindProvenanceEvent.objects.filter(
+            kind='account', subject_id=assignment.assignee_id, sequence=value['account_birth_sequence'])),
+        'has_reference_event': Exists(BlindProvenanceEvent.objects.filter(
+            kind='reference', subject_id=marker.reference_id, sequence=value['reference_sequence'])),
+        'has_reference': Exists(ClassificationGoldEvidence.objects.filter(
+            pk=marker.reference_id, project_id=assignment.project_id, kind='reference',
+            manifest_hash=marker.reference_hash)),
+        'has_proof': Exists(BlindEligibilityProof.objects.filter(
+            pk=proof.pk, assignment_id=assignment.pk, manifest_hash=proof.manifest_hash)),
+        'has_file_exposure': Exists(BlindProjectFileExposure.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_label_exposure': Exists(BlindLabelExposure.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_mix': Exists(mixes),
+        'has_mix_history': Exists(mix_history),
+        'has_valid_mix': Exists(valid_mix),
+        'has_first_assignment': Exists(BlindPrivilegeHistory.objects.filter(
+            account_id=assignment.assignee_id, first_assignment_id=assignment.pk)),
+        'has_source_exposure': Exists(BlindAssignmentExposure.objects.filter(
+            account_id=assignment.assignee_id, task_id=value.get('source_task_id'), generation=generation)),
+    }
+    count, has_extra = _exact_reference_length_checks(reference_id=reference.pk, expected_lengths=lengths)
+    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
+                                       lengths=lengths, assignment_id=assignment.pk)
+    checks.update(_length_count=count, _length_extra=has_extra, _length_exposed=Exists(exposed))
+    from projects.models import Project
+
+    scope_checks = _external_scope_checks()
+    checks.update(scope_checks)
+    checks['has_project'] = Exists(Project.all_objects.filter(pk=assignment.project_id))
+    guard = (BlindCaptureEpoch.objects.filter(pk=1, generation=generation, enabled=True)
+             .annotate(**checks).values(*checks).first())
+    if (guard is None or not all(guard[key] for key in (
+            'has_project', 'has_certificate', 'has_history', 'has_account_event', 'has_reference_event',
+            'has_reference', 'has_proof'))
+            or any(guard[key] for key in scope_checks)
+            or guard['has_file_exposure'] or guard['has_label_exposure']
+            or guard['_length_count'] != len(lengths) or guard['_length_extra'] or guard['_length_exposed']
+            or guard['has_mix'] != guard['has_mix_history']
+            or (guard['has_mix'] and not guard['has_valid_mix'])):
+        unavailable()
     if rule == 'local-first-assignment/v1':
         if not guard['has_first_assignment']:
             unavailable()
@@ -503,22 +527,4 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
             unavailable()
         if value['source_task_id'] == assignment.task_id or guard['has_source_exposure']:
             unavailable()
-    # Later assignments can expose matching-length text regardless of which
-    # admission rule originally qualified the member. Collection prefilters
-    # already enforce this for both rules; object authorization must agree.
-    from .blind_text_lengths import reference_text_lengths
-
-    try:
-        lengths = reference_text_lengths(reference)
-    except ValidationError:
-        unavailable()
-    count, has_extra = _exact_reference_length_checks(reference_id=reference.pk, expected_lengths=lengths)
-    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=epoch.generation,
-                                       lengths=lengths, assignment_id=assignment.pk)
-    length_state = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=epoch.generation)
-                    .annotate(_length_count=count, _length_extra=has_extra, _length_exposed=Exists(exposed))
-                    .values('_length_count', '_length_extra', '_length_exposed').first())
-    if (length_state is None or length_state['_length_count'] != len(lengths)
-            or length_state['_length_extra'] or length_state['_length_exposed']):
-        unavailable()
     return proof

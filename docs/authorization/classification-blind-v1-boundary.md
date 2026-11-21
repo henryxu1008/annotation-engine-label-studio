@@ -451,6 +451,12 @@ validator checks that set and matching exposure together in one database
 snapshot. The SQL prefilter does not verify the manifest hashes or replace
 object authorization. A trial of sharing the complete list query for object
 reads made the measured timing gap larger and was not enabled.
+Active assignment lookup now reads the quality marker and its scope with the
+assignment for both ordinary and quality work. Bounded proof and reference
+contents are fetched with their size checks, and live eligibility, exposure,
+reference and proof existence are checked in one later snapshot. These changes
+retain the full proof and reference hash checks and do not alone establish
+uniform participant timing or authorize public dispatch.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate
