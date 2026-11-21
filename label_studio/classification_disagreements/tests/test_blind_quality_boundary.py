@@ -107,6 +107,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_provenance import record_label_metadata_access
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.blind_read_attestation import read_attestation
+        from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.models import BlindReadAttestation, BlindReadBinding
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -134,6 +135,12 @@ class TestBlindQualityBoundary(APITestCase):
             assert [row.purpose for row in rows] == ['ordinary', 'quality']
             assert rows[0].reference_id_frozen is None
             assert rows[1].reference_id_frozen == reference.pk and rows[1].proof_hash
+            for assignment in assignments:
+                # Binding and the bounded signed evidence are read from the
+                # same snapshot for both purposes, with no lazy second fetch.
+                with self.assertNumQueries(1):
+                    binding, verified = verify_mixed_read_binding(assignment)
+                assert verified['purpose'] == binding.purpose
             for row in rows:
                 attestation = BlindReadAttestation.objects.get(assignment_id_frozen=row.assignment_id_frozen)
                 verified = read_attestation(row)
@@ -174,6 +181,7 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.gold_api import MAX_BYTES
         from classification_disagreements.models import BlindReadAttestation
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -181,7 +189,6 @@ class TestBlindQualityBoundary(APITestCase):
         member = UserFactory(active_organization=self.organization)
         self.organization.add_user(member)
         ProjectMember.objects.create(project=self.project, user=member, role='annotator')
-        task = TaskFactory(project=self.project, data={'text': 'ordinary'})
         config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
                   'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
                   'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
@@ -189,11 +196,13 @@ class TestBlindQualityBoundary(APITestCase):
         with self.settings(**config), patch(
             'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
         ), patch('classification_disagreements.blind_read_attestation.seal_attestation'):
-            assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
-                principal=local_principal(self.manager), key=uuid4())
-            BlindReadAttestation.objects.create(assignment_id_frozen=assignment.pk, signed_payload='forged')
-            with self.assertRaises(NotFound):
-                issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            for payload in ('forged', 'x' * (MAX_BYTES + 1)):
+                task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+                assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                    principal=local_principal(self.manager), key=uuid4())
+                BlindReadAttestation.objects.create(assignment_id_frozen=assignment.pk, signed_payload=payload)
+                with self.assertRaises(NotFound):
+                    issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
 
     def test_legacy_binding_uses_full_checks_until_manager_replays(self):
         from access_control.identity import LocalIdentityProvider
@@ -1336,6 +1345,27 @@ class TestBlindQualityBoundary(APITestCase):
                                              .values_list('assignment_id', flat=True))
             with self.assertRaises(ValidationError):
                 checked_quality_proof(assignment=self.assignment, marker=marker)
+
+    def test_collection_prefilter_does_not_verify_exact_reference_text_lengths(self):
+        from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
+        from classification_disagreements.models import BlindReferenceTextLength, BlindTextLengthExposure
+        from classification_disagreements.tests.test_gold_scoring import answer
+
+        self.qualified_submission(answer('Positive'))
+        marker = BlindQualityAssignment.objects.get(assignment_id=self.assignment.pk)
+        ids = current_quality_assignment_ids(self.annotator.pk)
+        assert ids.filter(assignment_id=self.assignment.pk).exists()
+        occupied = set(BlindTextLengthExposure.objects.filter(account_id=self.annotator.pk)
+                       .values_list('byte_length', flat=True))
+        occupied.update(BlindReferenceTextLength.objects.filter(reference_id=marker.reference_id)
+                        .values_list('byte_length', flat=True))
+        extra = max({0, *occupied}) + 1
+        BlindReferenceTextLength.objects.create(reference_id=marker.reference_id, byte_length=extra)
+        # SQL checks for exposed lengths but does not establish that the set
+        # exactly matches the frozen reference. The object check must deny.
+        assert ids.filter(assignment_id=self.assignment.pk).exists()
+        with self.assertRaises(ValidationError):
+            checked_quality_proof(assignment=self.assignment, marker=marker)
 
     def test_quality_tasks_do_not_change_ordinary_project_counts(self):
         from projects.models import ProjectMember

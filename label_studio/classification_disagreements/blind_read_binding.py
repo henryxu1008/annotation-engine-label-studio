@@ -2,12 +2,13 @@
 
 import re
 
-from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db import connection, transaction
+from django.db.models import BinaryField, Exists, Func, IntegerField, OuterRef, Subquery, TextField
+from django.db.models.functions import Cast, Length
 from rest_framework.exceptions import NotFound, ValidationError
 from review_batches.service import digest
 
-from .models import BlindEligibilityProof, BlindMixDecision, BlindQualityAssignment, BlindReadBinding
+from .models import BlindEligibilityProof, BlindMixDecision, BlindQualityAssignment, BlindReadAttestation, BlindReadBinding
 
 
 FIELDS = ('assignment_id_frozen', 'task_id_frozen', 'project_id_frozen', 'actor_id_frozen', 'decision_id_frozen',
@@ -128,6 +129,12 @@ def verify_mixed_read_binding(assignment):
     mixed decision without a binding must be replayed by its manager before it
     is usable; a missing record must never silently become an ordinary grant.
     """
+    from .gold_api import MAX_BYTES
+
+    attestations = BlindReadAttestation.objects.filter(assignment_id_frozen=OuterRef('assignment_id_frozen'))
+    size = (Func(Cast('signed_payload', TextField()), function='OCTET_LENGTH', output_field=IntegerField())
+            if connection.vendor == 'postgresql' else Length(Cast('signed_payload', BinaryField())))
+    bounded_attestations = attestations.annotate(_bytes=size).filter(_bytes__gte=0, _bytes__lte=MAX_BYTES)
     markers = BlindQualityAssignment.objects.filter(task_id=OuterRef('task_id_frozen'))
     matching_marker = markers.filter(
         assignment_id=OuterRef('assignment_id_frozen'), project_id=OuterRef('project_id_frozen'),
@@ -148,6 +155,8 @@ def verify_mixed_read_binding(assignment):
         ordinary_decision=Exists(decisions.filter(selected=False, reference_id_frozen__isnull=True)),
         quality_decision=Exists(decisions.filter(selected=True, reference_id_frozen=OuterRef('reference_id_frozen'))),
         has_decision=Exists(any_decisions),
+        has_attestation=Exists(attestations),
+        bounded_attestation=Subquery(bounded_attestations.values('signed_payload')[:1]),
     ).first()
     if row is None:
         if BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists():
@@ -180,4 +189,4 @@ def verify_mixed_read_binding(assignment):
         _unavailable()
     from .blind_read_attestation import read_attestation
 
-    return row, read_attestation(row)
+    return row, read_attestation(row, payload=row.bounded_attestation, has_row=row.has_attestation)

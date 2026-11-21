@@ -12,6 +12,7 @@ from .models import BlindReadAttestation
 
 
 SALT = 'label-studio.blind-read-attestation.v1'
+_NOT_LOADED = object()
 
 
 def _unavailable():
@@ -25,16 +26,22 @@ def _signed_row(assignment_id):
             .filter(assignment_id_frozen=assignment_id, _gold_bytes__gte=0, _gold_bytes__lte=MAX_BYTES).first())
 
 
-def read_attestation(binding):
+def read_attestation(binding, *, payload=_NOT_LOADED, has_row=None):
     """Verify an attestation if present; legacy absence is not authority."""
-    row = _signed_row(binding.assignment_id_frozen)
-    if row is None:
-        # A too-large row is also unavailable; never treat it as legacy absence.
-        if BlindReadAttestation.objects.filter(assignment_id_frozen=binding.assignment_id_frozen).exists():
+    if payload is _NOT_LOADED:
+        row = _signed_row(binding.assignment_id_frozen)
+        if row is None:
+            # A too-large row is also unavailable; never treat it as legacy absence.
+            if BlindReadAttestation.objects.filter(assignment_id_frozen=binding.assignment_id_frozen).exists():
+                _unavailable()
+            return None
+        payload = row.signed_payload
+    elif payload is None:
+        if has_row is not False:
             _unavailable()
         return None
     try:
-        value = signing.Signer(salt=SALT).unsign_object(row.signed_payload)
+        value = signing.Signer(salt=SALT).unsign_object(payload)
     except (signing.BadSignature, TypeError, ValueError, UnicodeError, OverflowError):
         _unavailable()
     if (not isinstance(value, dict) or set(value) != {'schema', 'assignment_id', 'binding_hash', 'purpose', 'quality'}

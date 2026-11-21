@@ -443,6 +443,11 @@ path. A forged or oversized attestation is denied. Deployments must keep
 signing keys consistent across web and worker instances and retain old keys
 in Django's fallback list during rotation; removing a key invalidates its
 attestations, and re-signing an immutable row is not yet supported.
+Binding and signed attestation are now loaded in the same bounded SQL query
+for both purposes. Absence remains a legacy fallback; an oversized row is not
+treated as absent. The collection SQL prefilter also does not verify that the
+reference text-length records exactly match the frozen reference. Object-level
+validation remains necessary, even when the prefilter reports the task visible.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate
