@@ -460,6 +460,25 @@ uniform participant timing or authorize public dispatch.
 For the handle paths that already hold project and task locks, authorization
 reuses those locked objects after checking that the assignment belongs to the
 same project. Other callers continue to load their own related objects.
+On handle reads and writes that also hold the capture-epoch fence, both signed
+ordinary and signed quality work now use the same live work-check entry point.
+It rechecks active user, assignment and binding; quality work additionally
+checks its signed static facts and current certificate, exposures, reference,
+proof and mix history. It depends on the database immutability and evidence-ID
+guards installed by the preceding migrations. Missing attestations, historical
+scoring and unfenced callers retain the full existing proof path. Nested
+resource writes reuse the already-authorized locked assignment and still
+check the opaque resource's actor, assignment, task and project bindings.
+The optimized path requires a transaction-local witness returned after locking
+the epoch row; witnesses from exited atomic blocks cannot be reused. It uses
+Django's connection atomic-block and commit-hook state and must be checked
+during upgrades.
+This remains default-off: equal query counts do not establish timing privacy,
+and no public mixed dispatch or reassignment is enabled by this change.
+An isolated PostgreSQL diagnostic with 100 warm paired reads measured 19
+queries for each purpose, but ordinary and quality medians were 27.2 ms and
+39.3 ms; the empirical rank probability was 0.9896. This is not a privacy
+acceptance test and is evidence that the current paths remain distinguishable.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

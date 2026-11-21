@@ -4,6 +4,7 @@ import json
 import os
 import statistics
 import time
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 from django.conf import settings
@@ -17,6 +18,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--source', required=True)
         parser.add_argument('--fixture', required=True)
+        parser.add_argument('--samples', type=int, default=14)
 
     def handle(self, *args, **options):
         from classification_disagreements.models import BlindQualityAssignment, BlindTaskHandle
@@ -27,6 +29,8 @@ class Command(BaseCommand):
         if (not settings.TEST_ENVIRONMENT or os.environ.get('LS82_SYNTHETIC_BLIND_FIXTURE') != '1'
                 or connection.settings_dict['NAME'] != 'classification_gold'):
             raise CommandError('An explicitly marked isolated synthetic database is required.')
+        if not 1 <= options['samples'] <= 1000:
+            raise CommandError('Sample count must be between 1 and 1000.')
         try:
             source = json.loads(Path(options['source']).read_text(encoding='utf-8'))
             fixture = json.loads(Path(options['fixture']).read_text(encoding='utf-8'))
@@ -67,7 +71,7 @@ class Command(BaseCommand):
             if set(handles) != {'quality', 'ordinary'}:
                 raise CommandError('Synthetic paired work is unavailable.')
             measurements = {kind: [] for kind in handles}
-            for iteration in range(16):
+            for iteration in range(options['samples'] + 2):
                 for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
                     start = time.perf_counter()
                     with CaptureQueriesContext(connection) as queries:
@@ -84,3 +88,11 @@ class Command(BaseCommand):
                           'max_ms': round(max(v[0] for v in samples), 1),
                           'queries': sorted({v[1] for v in samples})}
                 self.stdout.write(json.dumps(result))
+            # A descriptive rank statistic only: values near 1 indicate that
+            # quality samples are usually slower. It is not a privacy gate.
+            ordinary = sorted(value[0] for value in measurements['ordinary'][2:])
+            quality = [value[0] for value in measurements['quality'][2:]]
+            rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
+                       for value in quality) / (len(ordinary) * len(quality))
+            self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
+                                          'samples_per_kind': len(quality), 'diagnostic_only': True}))

@@ -1,0 +1,180 @@
+"""Live checks for signed work evidence on already-fenced handle reads.
+
+The existing blind editor uses this for fenced reads; public dispatch remains
+disabled. Static facts require signature verification and immutable identities.
+"""
+
+from django.db import connection
+from django.db.models import Exists, OuterRef
+from rest_framework.exceptions import ValidationError
+from review_batches.service import digest
+
+from .blind_read_attestation import read_attestation
+from .blind_read_binding import FIELDS
+from .blind_provenance import (
+    _exact_reference_length_checks, _external_scope_checks, _local_upload_backend_supported,
+    _matching_text_exposures, require_capture_fence,
+)
+from .models import (
+    BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
+    BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
+    BlindQualityAssignment, BlindReadBinding, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
+    ClassificationGoldEvidence,
+)
+
+
+def _deny():
+    raise ValidationError({'detail': 'The quality admission evidence is unavailable.'})
+
+
+def checked_attested_work(*, assignment, marker, binding, fence):
+    """Check signed work and live fences while caller holds project/task/epoch locks."""
+    from tasks.models import Submission, TaskAssignment
+    from users.models import User
+
+    if not connection.in_atomic_block or connection.vendor not in ('postgresql', 'sqlite'):
+        _deny()
+    require_capture_fence(fence)
+    if (binding is None or binding.purpose not in ('ordinary', 'quality')
+            or binding.assignment_id_frozen != assignment.pk or binding.task_id_frozen != assignment.task_id
+            or binding.project_id_frozen != assignment.project_id or binding.actor_id_frozen != assignment.assignee_id
+            or (binding.purpose == 'ordinary' and (marker is not None or binding.reference_id_frozen is not None
+                or binding.reference_hash is not None or binding.proof_hash is not None
+                or (binding.decision_id_frozen is None and (binding.source_id_frozen is not None
+                    or binding.source_task_id_frozen is not None or binding.decision_request_hash is not None))))
+            or (binding.purpose == 'quality' and (marker is None or marker.assignment_id != assignment.pk
+                or marker.task_id != assignment.task_id or marker.project_id != assignment.project_id
+                or marker.assignee_id != assignment.assignee_id or marker.reference_id != binding.reference_id_frozen
+                or marker.reference_hash != binding.reference_hash))):
+        _deny()
+    try:
+        if binding.binding_hash != digest({'schema': 'blind-mixed-read-binding/v1',
+                                           **{name: getattr(binding, name) for name in FIELDS}}):
+            _deny()
+        signed = read_attestation(binding, payload=binding.bounded_attestation, has_row=binding.has_attestation)
+        if signed is None:
+            _deny()
+        common = {
+            'active_user': Exists(User.objects.filter(pk=assignment.assignee_id, is_active=True,
+                                  active_organization_id=assignment.project.organization_id)),
+            'active_assignment': Exists(TaskAssignment.objects.filter(pk=assignment.pk, task_id=assignment.task_id,
+                project_id=assignment.project_id, assignee_id=assignment.assignee_id,
+                status__in=TaskAssignment.ACTIVE_STATUSES, task__project_id=assignment.project_id)),
+            'binding': Exists(BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash,
+                                assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
+        }
+        if binding.purpose == 'ordinary':
+            markers = BlindQualityAssignment.objects.filter(task_id=assignment.task_id)
+            proofs = BlindEligibilityProof.objects.filter(assignment_id=assignment.pk)
+            decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
+            common.update(marker=Exists(markers), proof=Exists(proofs), decision=Exists(decisions))
+            if binding.decision_id_frozen is not None:
+                matching = decisions.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
+                    selected=False, chosen_assignment_id=assignment.pk, source_assignment_id=assignment.pk,
+                    source_id_frozen=assignment.pk,
+                    source_task_id_frozen=assignment.task_id, source_assignee_id_frozen=assignment.assignee_id,
+                    request_hash=binding.decision_request_hash, reference_id_frozen__isnull=True)
+                common['matching_decision'] = Exists(matching)
+            guard = BlindCaptureEpoch.objects.filter(pk=1).annotate(**common).values(*common).first()
+            if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding'))
+                    or guard['marker'] or guard['proof']
+                    or (binding.decision_id_frozen is None and guard['decision'])
+                    or (binding.decision_id_frozen is not None and not guard['matching_decision'])):
+                _deny()
+            return
+        facts = signed['quality']
+        value, lengths = facts['proof'], facts['text_lengths']
+        generation = value['capture_generation']
+        rule = value['rule']
+        if (digest(value) != binding.proof_hash or type(generation) is not int or generation <= 0
+                or rule not in ('local-first-assignment/v1', 'local-unseen-source/v2')
+                or type(value['account_birth_sequence']) is not int or type(value['reference_sequence']) is not int
+                or value['account_birth_sequence'] <= value['reference_sequence']
+                or value['issuer_source'] != 'label_studio_local'
+                or type(value['issued_by']) is not int or value['issued_by'] <= 0
+                or value['issuer_principal'] != f"label_studio_local:{value['issued_by']}"
+                or digest(assignment.project.label_config) != facts['config_hash']
+                or digest(assignment.task.data) != facts['task_data_hash']
+                or not _local_upload_backend_supported()):
+            _deny()
+        if (rule == 'local-unseen-source/v2'
+                and (value['source_task_id'] != facts['source_task_id']
+                     or facts['source_task_id'] == assignment.task_id
+                     or facts['source_submitter_id'] == assignment.assignee_id)):
+            _deny()
+    except (KeyError, TypeError, ValueError, OverflowError):
+        _deny()
+
+    mixes = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk, selected=True)
+    history = BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)
+    decision = mixes.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
+        chosen_assignment_id=assignment.pk, source_assignment_id=binding.source_id_frozen,
+        source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
+        source_assignee_id_frozen=assignment.assignee_id, request_hash=binding.decision_request_hash,
+        reference_id_frozen=marker.reference_id)
+    matching_history = history.filter(decision_id_frozen=binding.decision_id_frozen,
+        project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
+        source_task_id_frozen=binding.source_task_id_frozen, source_assignee_id_frozen=assignment.assignee_id)
+    source = TaskAssignment.objects.filter(pk=binding.source_id_frozen, project_id=assignment.project_id,
+        task_id=binding.source_task_id_frozen, task__project_id=assignment.project_id,
+        assignee_id=assignment.assignee_id, status__in=TaskAssignment.ACTIVE_STATUSES)
+    released = TaskAssignment.objects.filter(pk=binding.source_id_frozen, project_id=assignment.project_id,
+        task_id=binding.source_task_id_frozen, task__project_id=assignment.project_id,
+        assignee_id=assignment.assignee_id, status=TaskAssignment.Status.CANCELLED,
+        version=OuterRef('source_version_after'))
+    submitted = Submission.objects.filter(pk=OuterRef('submission_id_frozen'), assignment_id=assignment.pk,
+                                          submitted_by_id=assignment.assignee_id)
+    completion = BlindMixCompletion.objects.filter(decision_id_frozen=binding.decision_id_frozen,
+        project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
+        chosen_id_frozen=assignment.pk).filter(Exists(released), Exists(submitted))
+    count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
+    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
+                                       lengths=lengths, assignment_id=assignment.pk)
+    checks = {
+        'certificate': Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
+                                                                      generation=generation)),
+        'history': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
+                                                                elevated=False, had_assignment=True)),
+        'account_event': Exists(BlindProvenanceEvent.objects.filter(kind='account', subject_id=assignment.assignee_id,
+                                        sequence=value['account_birth_sequence'])),
+        'reference_event': Exists(BlindProvenanceEvent.objects.filter(kind='reference', subject_id=marker.reference_id,
+                                        sequence=value['reference_sequence'])),
+        'reference': Exists(ClassificationGoldEvidence.objects.filter(pk=marker.reference_id,
+                             project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
+        'proof': Exists(BlindEligibilityProof.objects.filter(assignment_id=assignment.pk,
+                                                             manifest_hash=binding.proof_hash)),
+        'marker': Exists(BlindQualityAssignment.objects.filter(pk=marker.pk, assignment_id=assignment.pk,
+                          task_id=assignment.task_id, project_id=assignment.project_id,
+                          assignee_id=assignment.assignee_id, reference_id=marker.reference_id,
+                          reference_hash=marker.reference_hash)),
+        'file_exposure': Exists(BlindProjectFileExposure.objects.filter(account_id=assignment.assignee_id,
+                                                                         generation=generation)),
+        'label_exposure': Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
+                                                                   generation=generation)),
+        'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
+                                   task_id=value.get('source_task_id'), generation=generation)),
+        'first_assignment': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
+                                                                         first_assignment_id=assignment.pk)),
+        'mix': Exists(mixes), 'mix_history': Exists(history), 'decision': Exists(decision),
+        'matching_history': Exists(matching_history), 'source_active': Exists(source),
+        'completion': Exists(completion),
+        'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
+    }
+    checks.update(common)
+    scopes = _external_scope_checks()
+    checks.update(scopes)
+    guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
+             .annotate(**checks).values(*checks).first())
+    if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding',
+            'certificate', 'history', 'account_event',
+            'reference_event', 'reference', 'proof', 'marker')) or any(guard[name] for name in scopes)
+            or guard['file_exposure'] or guard['label_exposure'] or guard['length_exposed']
+            or guard['length_count'] != len(lengths) or guard['length_extra']
+            or guard['mix'] != guard['mix_history']
+            or (binding.decision_id_frozen is None and guard['mix'])
+            or (binding.decision_id_frozen is not None and not guard['mix'])
+            or (guard['mix'] and (not guard['decision'] or not guard['matching_history']
+                                  or not (guard['source_active'] or guard['completion'])))
+            or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])
+            or (rule == 'local-unseen-source/v2' and guard['source_exposure'])):
+        _deny()

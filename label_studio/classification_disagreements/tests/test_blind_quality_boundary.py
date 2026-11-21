@@ -54,6 +54,20 @@ class TestBlindQualityBoundary(APITestCase):
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
     _review = fixtures.TestSubmissionReviewWorkflow._review
 
+    def test_capture_fence_cannot_be_reused_after_its_atomic_block(self):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read, require_capture_fence
+
+        with transaction.atomic():
+            reusable = transaction.atomic()
+            with reusable:
+                fence = lock_capture_epoch_for_read(with_fence=True)
+                require_capture_fence(fence)
+            with self.assertRaises(RuntimeError):
+                require_capture_fence(fence)
+            with reusable:
+                with self.assertRaises(RuntimeError):
+                    require_capture_fence(fence)
+
     def test_assignment_lookup_preserves_marker_scope_for_live_proof_check(self):
         from access_control.authorization import authorization
         from access_control.project_operations import local_principal
@@ -132,9 +146,12 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.blind_read_attestation import read_attestation
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
-        from classification_disagreements.models import BlindReadAttestation, BlindReadBinding
+        from classification_disagreements.blind_attested_live import checked_attested_work
+        from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
+        from classification_disagreements.models import BlindCaptureCertificate, BlindReadAttestation, BlindReadBinding
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
+        from users.models import User
 
         reference = self.valid_reference()
         provenance_fixtures.enable_test_capture()
@@ -183,6 +200,36 @@ class TestBlindQualityBoundary(APITestCase):
                        for member, assignment in zip(members, assignments)]
             for member, handle in zip(members, handles):
                 assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+            quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
+            quality_binding, _ = verify_mixed_read_binding(assignments[1])
+            ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
+            fence = lock_capture_epoch_for_read(with_fence=True)
+            _ = assignments[0].project.organization_id, assignments[0].task.project_id
+            with self.assertNumQueries(1):
+                checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding, fence=fence)
+            assert checked_quality_proof(assignment=assignments[1], marker=quality_marker, lock_epoch=False)
+            _ = assignments[1].project.label_config, assignments[1].task.data
+            with self.assertNumQueries(1):
+                checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                      fence=fence)
+            with self.assertRaises(RuntimeError):
+                checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                      fence=None)
+            self.client.force_authenticate(members[1])
+            read_url = f'/api/tasks/blind/{handles[1].task_handle}/'
+            assert self.client.get(read_url).status_code == 200
+            mutations = (
+                lambda: ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete(),
+                lambda: BlindCaptureCertificate.objects.filter(account_id=members[1].pk).delete(),
+                lambda: Project.objects.filter(pk=self.project.pk).update(label_config='<View/>'),
+                lambda: Task.objects.filter(pk=assignments[1].task_id).update(data={'text': 'changed'}),
+            )
+            for mutate in mutations:
+                with transaction.atomic():
+                    mutate()
+                    assert self.client.get(read_url).status_code == 404
+                    transaction.set_rollback(True)
+                assert self.client.get(read_url).status_code == 200
             from django.conf import settings
 
             previous_key = settings.SECRET_KEY
@@ -193,9 +240,23 @@ class TestBlindQualityBoundary(APITestCase):
             with self.settings(SECRET_KEY='synthetic-replacement-key', SECRET_KEY_FALLBACKS=[previous_key]):
                 for member, handle in zip(members, handles):
                     assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+            self.client.force_authenticate(members[0])
+            ordinary_url = f'/api/tasks/blind/{handles[0].task_handle}/'
+            assert self.client.get(ordinary_url).status_code == 200
+            with transaction.atomic():
+                User.objects.filter(pk=members[0].pk).update(active_organization=None)
+                assert self.client.get(ordinary_url).status_code in (403, 404)
+                transaction.set_rollback(True)
+            assert self.client.get(ordinary_url).status_code == 200
             memberships[0].enabled = False
             memberships[0].save(update_fields=['enabled'])
+            assert self.client.get(ordinary_url).status_code == 404
             record_label_metadata_access(account_id=members[1].pk)
+            with self.assertRaises(ValidationError):
+                checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                      fence=fence)
+            with self.assertRaises(ValidationError):
+                checked_quality_proof(assignment=assignments[1], marker=quality_marker, lock_epoch=False)
             for member, handle in zip(members, handles):
                 with self.assertRaises(NotFound):
                     resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
@@ -1031,12 +1092,24 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_task_handles import issue_handle
 
         handle = issue_handle(principal=local_principal(self.annotator), assignment_id=self.assignment.pk)
+        other_task = TaskFactory(project=self.project, data={'text': 'other ordinary work'})
+        other_assignment = TaskAssignment.objects.create(task=other_task, project=self.project,
+            assignee=self.annotator, assigned_by=self.manager)
+        other_handle = issue_handle(principal=local_principal(self.annotator), assignment_id=other_assignment.pk)
         token = {'assignment_id': handle.assignment_handle, 'assignment_version': self.assignment.version}
         root = f'/api/tasks/blind/{handle.task_handle}'
         config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
                   'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
         self.client.force_authenticate(self.annotator)
         with self.settings(**config):
+            other_token = {'assignment_id': other_handle.assignment_handle,
+                           'assignment_version': other_assignment.version}
+            other_root = f'/api/tasks/blind/{other_handle.task_handle}'
+            other_draft = self.client.post(other_root + '/drafts', {**other_token, 'result': []}, format='json')
+            assert other_draft.status_code == 201, other_draft.data
+            crossed = self.client.patch(root + f'/drafts/{other_draft.data["id"]}',
+                {**token, 'result': [], 'draft_revision': other_draft.data['revision']}, format='json')
+            assert crossed.status_code == 404
             created = self.client.post(root + '/drafts', {**token, 'result': []}, format='json')
             assert created.status_code == 201, created.json()
             draft = created.json()
@@ -1247,9 +1320,9 @@ class TestBlindQualityBoundary(APITestCase):
         task = next(i for i, sql in enumerate(locks) if f'"{Task._meta.db_table}"' in sql)
         assert epoch < task
 
-    def test_locked_quality_write_checks_full_proof_once(self):
+    def test_locked_quality_write_checks_attested_live_evidence_once(self):
         from access_control.project_operations import local_principal
-        from classification_disagreements import blind_provenance
+        from classification_disagreements import blind_attested_live
         from classification_disagreements.blind_task_handles import issue_handle, lock_handle_for_write
         from classification_disagreements.tests.test_gold_scoring import answer
 
@@ -1257,7 +1330,8 @@ class TestBlindQualityBoundary(APITestCase):
         self.assignment.refresh_from_db()
         principal = local_principal(self.annotator)
         handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
-        with patch.object(blind_provenance, 'checked_quality_proof', wraps=blind_provenance.checked_quality_proof) as check:
+        with patch.object(blind_attested_live, 'checked_attested_work',
+                          wraps=blind_attested_live.checked_attested_work) as check:
             with transaction.atomic():
                 assignment = lock_handle_for_write(
                     principal=principal, task_handle=handle.task_handle, assignment_handle=handle.assignment_handle,
@@ -1268,7 +1342,7 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_editor_checks_quality_once_before_issuing_annotation_and_draft_handles(self):
         from access_control.project_operations import local_principal
-        from classification_disagreements import blind_provenance
+        from classification_disagreements import blind_attested_live
         from classification_disagreements.blind_task_handles import issue_handle
         from classification_disagreements.tests.test_gold_scoring import answer
         from tasks.models import AnnotationDraft
@@ -1282,13 +1356,32 @@ class TestBlindQualityBoundary(APITestCase):
                   'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
         self.client.force_authenticate(self.annotator)
         with self.settings(**config), patch.object(
-            blind_provenance, 'checked_quality_proof', wraps=blind_provenance.checked_quality_proof,
+            blind_attested_live, 'checked_attested_work', wraps=blind_attested_live.checked_attested_work,
         ) as check:
             response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
         assert response.status_code == 200, response.data
         assert check.call_count == 1
         assert response.data['annotations'][0]['id'] != self.assignment.annotation_id
         assert response.data['drafts'][0]['id'] != draft.pk
+
+    def test_legacy_quality_without_attestation_keeps_full_live_check(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_provenance
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+
+        with patch('classification_disagreements.blind_read_attestation.seal_attestation'):
+            self.qualified_submission(answer('Positive'))
+        handle = issue_handle(principal=local_principal(self.annotator), assignment_id=self.assignment.pk)
+        self.client.force_authenticate(self.annotator)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch.object(
+            blind_provenance, 'checked_quality_proof', wraps=blind_provenance.checked_quality_proof,
+        ) as check:
+            response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
+        assert response.status_code == 200
+        assert check.call_count == 1
 
     def test_quality_handle_is_revoked_when_pinned_config_or_task_data_changes(self):
         from access_control.project_operations import local_principal

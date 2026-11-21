@@ -97,3 +97,22 @@ def resolve_resource_handle(*, principal, kind, handle):
             or assignment.project_id != record.project_id_frozen):
         _unavailable()
     return _object(assignment, kind, record.object_id_frozen)
+
+
+def _resolve_for_locked_assignment(*, principal, assignment, kind, handle, fence):
+    """Resolve a nested resource under the caller's already-authorized fences."""
+    if not connection.in_atomic_block:
+        raise RuntimeError('Locked resource resolution requires a transaction.')
+    from .blind_provenance import require_capture_fence
+
+    require_capture_fence(fence)
+    if (kind not in ('annotation', 'draft') or type(handle) is not int
+            or not HANDLE_BASE <= handle < HANDLE_LIMIT or type(principal.local_user_id) is not int
+            or assignment.assignee_id != principal.local_user_id):
+        _unavailable()
+    record = BlindResourceHandle.objects.filter(kind=kind, handle=handle,
+        actor_id_frozen=principal.local_user_id, assignment_id_frozen=assignment.pk,
+        task_id_frozen=assignment.task_id, project_id_frozen=assignment.project_id).first()
+    if record is None:
+        _unavailable()
+    return _object(assignment, kind, record.object_id_frozen, lock=True)

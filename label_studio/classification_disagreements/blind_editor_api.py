@@ -64,7 +64,7 @@ class BlindWorkListAPI(APIView):
         project, actor = lock_project_operation(candidate.pk, principal, READ_WORK)
         if not sensitive_nonmanager(project, principal):
             raise NotFound('Work is unavailable.')
-        lock_capture_epoch_for_read()
+        fence = lock_capture_epoch_for_read(with_fence=True)
         raw_page = request.query_params.get('page', '1')
         if (set(request.query_params) - {'page'} or len(request.query_params.getlist('page')) > 1
                 or not raw_page.isascii() or not raw_page.isdecimal() or len(raw_page) > 4
@@ -86,7 +86,7 @@ class BlindWorkListAPI(APIView):
         result = []
         can_label = project_operation_policy(project).allows(EDIT)
         for assignment in rows[:limit]:
-            handle = issue_handle(principal=principal, assignment_id=assignment.pk)
+            handle = issue_handle(principal=principal, assignment_id=assignment.pk, _epoch_fence=fence)
             # issue_handle has just checked the authenticated actor and locked
             # the exact project, task and assignment in this transaction.
             current = TaskAssignment.objects.select_related('task').filter(
@@ -121,7 +121,7 @@ class BlindEditorReadAPI(APIView):
         project, _ = lock_project_operation(record.project_id_frozen, principal, READ_WORK)
         if not sensitive_nonmanager(project, principal):
             raise NotFound('Work is unavailable.')
-        lock_capture_epoch_for_read()
+        fence = lock_capture_epoch_for_read(with_fence=True)
         # Keep the same task and assignment locks previously obtained by
         # issue_handle; the ledger is not authority and may point to stale work.
         task_locked = _lock_bounded_task(task_id=record.task_id_frozen, project_id=project.pk)
@@ -135,7 +135,8 @@ class BlindEditorReadAPI(APIView):
         # the immutable handle and its task through a separate queryset.
         task_locked.project = project
         assignment_locked.task, assignment_locked.project = task_locked, project
-        assignment = validate_locked_handle(principal=principal, record=record, assignment=assignment_locked)
+        assignment = validate_locked_handle(principal=principal, record=record, assignment=assignment_locked,
+                                            _epoch_fence=fence)
         task = task_locked
         annotation = None
         if assignment.annotation_id:

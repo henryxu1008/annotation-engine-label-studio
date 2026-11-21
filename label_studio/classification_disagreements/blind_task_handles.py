@@ -43,7 +43,7 @@ def _lock_bounded_task(*, project_id, task_id):
     return task
 
 
-def _validate(principal, assignment, record=None, *, locked_task=False):
+def _validate(principal, assignment, record=None, *, locked_task=False, epoch_fence=None):
     from users.models import User
 
     actor_id = principal.local_user_id
@@ -51,14 +51,21 @@ def _validate(principal, assignment, record=None, *, locked_task=False):
             or principal.principal_id != f'{LOCAL_IDENTITY_SOURCE}:{actor_id}'
             or assignment is None or assignment.assignee_id != actor_id
             or assignment.status not in TaskAssignment.ACTIVE_STATUSES
-            or assignment.task_id is None or assignment.project_id != assignment.task.project_id
-            or not User.objects.filter(pk=actor_id, is_active=True,
-                                       active_organization_id=assignment.project.organization_id).exists()):
+            or assignment.task_id is None or assignment.project_id != assignment.task.project_id):
         _unavailable()
     from .blind_read_binding import verify_mixed_read_binding
 
-    verify_mixed_read_binding(assignment)
-    live = authorization.active_task_assignment(principal, assignment.task, _locked_task=locked_task)
+    verified = verify_mixed_read_binding(assignment)
+    if epoch_fence is not None:
+        from .blind_provenance import require_capture_fence
+
+        require_capture_fence(epoch_fence)
+    binding = verified[0] if epoch_fence is not None and verified and verified[1] is not None else None
+    if binding is None and not User.objects.filter(pk=actor_id, is_active=True,
+            active_organization_id=assignment.project.organization_id).exists():
+        _unavailable()
+    live = authorization.active_task_assignment(principal, assignment.task, _locked_task=locked_task,
+                                                _attested_binding=binding, _attested_fence=epoch_fence if binding else None)
     if live is None or live.pk != assignment.pk or live.project_id != assignment.project_id:
         _unavailable()
     if record is not None and (record.assignment_id_frozen != assignment.pk
@@ -69,7 +76,7 @@ def _validate(principal, assignment, record=None, *, locked_task=False):
     return assignment
 
 
-def validate_locked_handle(*, principal, record, assignment):
+def validate_locked_handle(*, principal, record, assignment, _epoch_fence=None):
     """Validate an immutable handle against the caller's already-locked work."""
     db = transaction.get_connection()
     if not db.in_atomic_block:
@@ -78,11 +85,11 @@ def validate_locked_handle(*, principal, record, assignment):
             or not HANDLE_BASE <= record.task_handle < HANDLE_LIMIT
             or not HANDLE_BASE <= record.assignment_handle < HANDLE_LIMIT):
         _unavailable()
-    return _validate(principal, assignment, record, locked_task=True)
+    return _validate(principal, assignment, record, locked_task=True, epoch_fence=_epoch_fence)
 
 
 @transaction.atomic
-def issue_handle(*, principal, assignment_id):
+def issue_handle(*, principal, assignment_id, _epoch_fence=None):
     """Issue one stable, randomly distributed pair after checking live access."""
     if type(assignment_id) is not int or assignment_id <= 0 or type(principal.local_user_id) is not int:
         _unavailable()
@@ -108,7 +115,7 @@ def issue_handle(*, principal, assignment_id):
     existing = BlindTaskHandle.objects.filter(assignment_id_frozen=assignment_id).first()
     # Check the live assignment once while its project, task and assignment are
     # locked. Existing handles still have all frozen bindings checked here.
-    _validate(principal, assignment, existing, locked_task=True)
+    _validate(principal, assignment, existing, locked_task=True, epoch_fence=_epoch_fence)
     if existing is not None:
         return existing
     for _ in range(16):
@@ -122,7 +129,7 @@ def issue_handle(*, principal, assignment_id):
         except IntegrityError:
             existing = BlindTaskHandle.objects.filter(assignment_id_frozen=assignment_id).first()
             if existing is not None:
-                _validate(principal, assignment, existing, locked_task=True)
+                _validate(principal, assignment, existing, locked_task=True, epoch_fence=_epoch_fence)
                 return existing
     _unavailable()
 
@@ -174,7 +181,7 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
             or (expected_project_id is not None and record.project_id_frozen != expected_project_id)):
         raise AssignmentConflictError()
     project, _ = lock_project_operation(record.project_id_frozen, principal, EDIT)
-    lock_capture_epoch_for_write()
+    epoch = lock_capture_epoch_for_write(with_fence=True)
     task = _lock_bounded_task(task_id=record.task_id_frozen, project_id=project.pk)
     assignment = TaskAssignment.objects.select_for_update().filter(
         pk=record.assignment_id_frozen, task=task, project=project,
@@ -183,7 +190,7 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
         _unavailable()
     task.project = project
     assignment.task, assignment.project = task, project
-    _validate(principal, assignment, record, locked_task=True)
+    _validate(principal, assignment, record, locked_task=True, epoch_fence=epoch._blind_capture_fence)
     # _validate already checks the live role, active assignment and complete
     # quality proof while the project and epoch fences are held. The EDIT
     # operation was checked when the project lock was acquired.

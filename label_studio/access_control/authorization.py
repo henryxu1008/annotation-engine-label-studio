@@ -70,7 +70,8 @@ class AuthorizationService:
         return cls.project_role(principal, project) == ProjectMember.Role.REVIEWER
 
     @classmethod
-    def active_task_assignment(cls, principal: Principal, task, *, _locked_task=False):
+    def active_task_assignment(cls, principal: Principal, task, *, _locked_task=False, _attested_binding=None,
+                               _attested_fence=None):
         """Return a live assignment; callers may reuse a task they have locked.
 
         The private flag requires the caller to hold the project and task locks
@@ -84,6 +85,8 @@ class AuthorizationService:
 
             if not transaction.get_connection().in_atomic_block:
                 raise RuntimeError('A locked task requires an open transaction.')
+        elif _attested_binding is not None:
+            raise RuntimeError('Attested authorization requires a fenced task.')
 
         from projects.models import ProjectMember
         from tasks.models import TaskAssignment
@@ -124,6 +127,7 @@ class AuthorizationService:
         from classification_disagreements.blind_provenance import checked_quality_proof
         from rest_framework.exceptions import ValidationError
 
+        marker = None
         if assignment._quality_task:
             if assignment._quality_marker_id is None:
                 return None
@@ -132,10 +136,16 @@ class AuthorizationService:
                 project_id=assignment._quality_project_id, assignee_id=assignment._quality_assignee_id,
                 reference_id=assignment._quality_reference_id, reference_hash=assignment._quality_reference_hash,
             )
-            try:
+        try:
+            if _attested_binding is not None:
+                from classification_disagreements.blind_attested_live import checked_attested_work
+
+                checked_attested_work(assignment=assignment, marker=marker, binding=_attested_binding,
+                                      fence=_attested_fence)
+            elif marker is not None:
                 checked_quality_proof(assignment=assignment, marker=marker, lock_epoch=False)
-            except ValidationError:
-                return None
+        except ValidationError:
+            return None
         return assignment
 
     @classmethod

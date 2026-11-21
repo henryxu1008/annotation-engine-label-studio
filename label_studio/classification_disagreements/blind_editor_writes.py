@@ -13,7 +13,7 @@ from rest_framework.exceptions import APIException, NotFound, ValidationError
 from tasks.api import AnnotationAPI, AnnotationDraftAPI, AnnotationDraftListAPI, AnnotationsListAPI
 
 from .blind_participant_projection import sensitive_nonmanager
-from .blind_resource_handles import _issue_for_locked_assignment, resolve_resource_handle
+from .blind_resource_handles import _issue_for_locked_assignment, _resolve_for_locked_assignment
 
 
 class BlindWriteMixin:
@@ -56,7 +56,7 @@ class BlindWriteMixin:
         # Writers can later validate quality evidence under an exclusive epoch
         # lock. Acquire that lock now, rather than upgrading a shared read lock
         # while another project's writer does the same.
-        lock_capture_epoch_for_write()
+        self.blind_epoch_fence = lock_capture_epoch_for_write(with_fence=True)._blind_capture_fence
         task = _lock_bounded_task(project_id=project.pk, task_id=record.task_id_frozen)
         assignment = TaskAssignment.objects.select_for_update().filter(
                 pk=record.assignment_id_frozen, project=project, task=task,
@@ -67,7 +67,7 @@ class BlindWriteMixin:
         task.project = project
         assignment.task, assignment.project = task, project
         self.blind_assignment = validate_locked_handle(
-            principal=self.blind_principal, record=record, assignment=assignment,
+            principal=self.blind_principal, record=record, assignment=assignment, _epoch_fence=self.blind_epoch_fence,
         )
         if not sensitive_nonmanager(self.blind_assignment.project, self.blind_principal):
             raise NotFound('Work is unavailable.')
@@ -110,7 +110,8 @@ class BlindWriteMixin:
     def _resolve_resource(self, kind, handle):
         if isinstance(handle, str) and handle.isascii() and handle.isdecimal() and len(handle) <= 16:
             handle = int(handle)
-        obj = resolve_resource_handle(principal=self.blind_principal, kind=kind, handle=handle)
+        obj = _resolve_for_locked_assignment(principal=self.blind_principal, assignment=self.blind_assignment,
+                                             kind=kind, handle=handle, fence=self.blind_epoch_fence)
         if obj.task_id != self.blind_assignment.task_id:
             raise NotFound('Work is unavailable.')
         if kind == 'annotation' and obj.pk != self.blind_assignment.annotation_id:
@@ -136,7 +137,8 @@ class BlindWriteMixin:
             raise NotFound('Work is unavailable.')
         task.project = project
         current.task, current.project = task, project
-        validate_locked_handle(principal=self.blind_principal, record=self.blind_record, assignment=current)
+        validate_locked_handle(principal=self.blind_principal, record=self.blind_record, assignment=current,
+                               _epoch_fence=self.blind_epoch_fence)
         resource = _issue_for_locked_assignment(principal=self.blind_principal, assignment=current,
                                                 kind=kind, object_id=raw['id'])
         fields = ('result', 'was_cancelled') if kind == 'annotation' else ('result', 'revision', 'was_postponed')

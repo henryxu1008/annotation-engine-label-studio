@@ -24,6 +24,28 @@ from .models import (
 )
 
 
+class _CaptureFence:
+    """Transaction-local witness that the capture row was locked."""
+
+    def __init__(self, db):
+        if not db.in_atomic_block or not db.atomic_blocks:
+            raise RuntimeError('A capture fence requires an atomic block.')
+        self.connection = db
+        self.atomic_block = db.atomic_blocks[-1]
+        self.savepoints = tuple(db.savepoint_ids)
+        self.sentinel = lambda: None
+        transaction.on_commit(self.sentinel, using=db.alias)
+
+
+def require_capture_fence(fence, using='default'):
+    db = connections[using]
+    if (not isinstance(fence, _CaptureFence) or fence.connection is not db or not db.in_atomic_block or db.needs_rollback
+            or not any(block is fence.atomic_block for block in db.atomic_blocks)
+            or tuple(db.savepoint_ids[:len(fence.savepoints)]) != fence.savepoints
+            or not any(entry[1] is fence.sentinel for entry in db.run_on_commit)):
+        raise RuntimeError('A live capture fence is required.')
+
+
 def _local_upload_backend_supported():
     from django.conf import settings
     from django.core.files.storage import FileSystemStorage, storages
@@ -114,7 +136,7 @@ def record_uploaded_file_access(*, account_id, upload):
     return record_project_file_accesses(account_id=account_id, project_ids=project_ids)
 
 
-def lock_capture_epoch_for_write(using='default'):
+def lock_capture_epoch_for_write(using='default', *, with_fence=False):
     """Serialize a participant write with admission and exposure recording.
 
     Take this after the project lock and before task or assignment locks. Both
@@ -129,6 +151,8 @@ def lock_capture_epoch_for_write(using='default'):
         from rest_framework.exceptions import NotFound
 
         raise NotFound('Work is unavailable.')
+    if with_fence:
+        epoch._blind_capture_fence = _CaptureFence(connection)
     return epoch
 
 
@@ -145,7 +169,7 @@ def lock_active_capture_for_write(using='default'):
     return None
 
 
-def lock_capture_epoch_for_read(using='default'):
+def lock_capture_epoch_for_read(using='default', *, with_fence=False):
     """Fence exposure/revocation until the participant response is assembled.
 
     PostgreSQL shared row locks allow concurrent readers, but conflict with the
@@ -170,6 +194,7 @@ def lock_capture_epoch_for_read(using='default'):
         from rest_framework.exceptions import NotFound
 
         raise NotFound('Work is unavailable.')
+    return _CaptureFence(connection) if with_fence else None
 
 
 def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_id, using='default'):
