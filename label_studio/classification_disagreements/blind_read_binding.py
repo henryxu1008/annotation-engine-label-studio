@@ -37,13 +37,17 @@ def seal_ordinary_read_binding(*, assignment):
             or BlindEligibilityProof.objects.filter(assignment_id=assignment.pk).exists()
             or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()):
         _unavailable()
-    return _seal({
+    binding = _seal({
         'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
         'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
         'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
         'decision_request_hash': None, 'purpose': 'ordinary', 'reference_id_frozen': None,
         'reference_hash': None, 'proof_hash': None,
     })
+    from .blind_read_attestation import seal_attestation
+
+    seal_attestation(binding=binding, assignment=assignment)
+    return binding
 
 
 def seal_unmixed_quality_read_binding(*, assignment, marker):
@@ -59,13 +63,17 @@ def seal_unmixed_quality_read_binding(*, assignment, marker):
         proof = checked_quality_proof(assignment=assignment, marker=marker, lock_epoch=False)
     except ValidationError:
         _unavailable()
-    return _seal({
+    binding = _seal({
         'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
         'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
         'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
         'decision_request_hash': None, 'purpose': 'quality', 'reference_id_frozen': marker.reference_id,
         'reference_hash': marker.reference_hash, 'proof_hash': proof.manifest_hash,
     })
+    from .blind_read_attestation import seal_attestation
+
+    seal_attestation(binding=binding, assignment=assignment, marker=marker, proof=proof)
+    return binding
 
 
 def seal_mixed_read_binding(*, assignment, decision):
@@ -106,7 +114,11 @@ def seal_mixed_read_binding(*, assignment, decision):
         'reference_hash': marker.reference_hash if marker else None,
         'proof_hash': proof.manifest_hash if proof else None,
     }
-    return _seal(values)
+    binding = _seal(values)
+    from .blind_read_attestation import seal_attestation
+
+    seal_attestation(binding=binding, assignment=assignment, marker=marker, proof=proof)
+    return binding
 
 
 def verify_mixed_read_binding(assignment):
@@ -166,3 +178,6 @@ def verify_mixed_read_binding(assignment):
             _unavailable()
     else:
         _unavailable()
+    from .blind_read_attestation import read_attestation
+
+    return row, read_attestation(row)

@@ -280,6 +280,13 @@ class BlindReadBinding(models.Model):
         )]
 
 
+class BlindReadAttestation(models.Model):
+    """Server-signed static facts for one retained read binding."""
+
+    assignment_id_frozen = models.PositiveBigIntegerField(unique=True)
+    signed_payload = models.TextField()
+
+
 class BlindTaskHandle(models.Model):
     """Retained opaque participant identifiers for one assignment, not a public API."""
 

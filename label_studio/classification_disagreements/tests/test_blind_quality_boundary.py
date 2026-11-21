@@ -106,7 +106,8 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_provenance import record_label_metadata_access
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
-        from classification_disagreements.models import BlindReadBinding
+        from classification_disagreements.blind_read_attestation import read_attestation
+        from classification_disagreements.models import BlindReadAttestation, BlindReadBinding
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
 
@@ -134,20 +135,119 @@ class TestBlindQualityBoundary(APITestCase):
             assert rows[0].reference_id_frozen is None
             assert rows[1].reference_id_frozen == reference.pk and rows[1].proof_hash
             for row in rows:
+                attestation = BlindReadAttestation.objects.get(assignment_id_frozen=row.assignment_id_frozen)
+                verified = read_attestation(row)
+                assert verified['purpose'] == row.purpose
+                assert 'synthetic classification text' not in json.dumps(verified)
+                assert 'Positive' not in json.dumps(verified)
                 with self.assertRaises(DatabaseError), transaction.atomic():
                     BlindReadBinding.objects.filter(pk=row.pk).update(actor_id_frozen=self.manager.pk)
                 with self.assertRaises(DatabaseError), transaction.atomic():
                     BlindReadBinding.objects.filter(pk=row.pk).delete()
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindReadAttestation.objects.filter(pk=attestation.pk).update(signed_payload='forged')
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindReadAttestation.objects.filter(pk=attestation.pk).delete()
             handles = [issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
                        for member, assignment in zip(members, assignments)]
             for member, handle in zip(members, handles):
                 assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+            from django.conf import settings
+
+            previous_key = settings.SECRET_KEY
+            with self.settings(SECRET_KEY='synthetic-replacement-key', SECRET_KEY_FALLBACKS=[]):
+                for member, handle in zip(members, handles):
+                    with self.assertRaises(NotFound):
+                        resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+            with self.settings(SECRET_KEY='synthetic-replacement-key', SECRET_KEY_FALLBACKS=[previous_key]):
+                for member, handle in zip(members, handles):
+                    assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
             memberships[0].enabled = False
             memberships[0].save(update_fields=['enabled'])
             record_label_metadata_access(account_id=members[1].pk)
             for member, handle in zip(members, handles):
                 with self.assertRaises(NotFound):
                     resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+
+    def test_forged_read_attestation_never_becomes_authority(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadAttestation
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ), patch('classification_disagreements.blind_read_attestation.seal_attestation'):
+            assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                principal=local_principal(self.manager), key=uuid4())
+            BlindReadAttestation.objects.create(assignment_id_frozen=assignment.pk, signed_payload='forged')
+            with self.assertRaises(NotFound):
+                issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+
+    def test_legacy_binding_uses_full_checks_until_manager_replays(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadAttestation
+        from projects.models import ProjectMember
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        args = {'task': task, 'assignee': member, 'references': [], 'ratio_basis_points': 0,
+                'principal': local_principal(self.manager), 'key': uuid4()}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            with patch('classification_disagreements.blind_read_attestation.seal_attestation'):
+                assignment = create_mixed_assignment(**args)
+            assert not BlindReadAttestation.objects.filter(assignment_id_frozen=assignment.pk).exists()
+            assert issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            assert create_mixed_assignment(**args).pk == assignment.pk
+            assert BlindReadAttestation.objects.filter(assignment_id_frozen=assignment.pk).exists()
+
+    def test_signing_failure_rolls_back_mixed_assignment_and_decision(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.models import BlindMixDecision, BlindReadBinding
+        from projects.models import ProjectMember
+
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+        key = uuid4()
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ), patch('django.core.signing.Signer.sign_object', side_effect=RuntimeError('synthetic signing failure')):
+            with self.assertRaises(RuntimeError):
+                create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                    principal=local_principal(self.manager), key=key)
+        assert not TaskAssignment.objects.filter(task=task, assignee=member).exists()
+        assert not BlindMixDecision.objects.filter(project=self.project, key=key).exists()
+        assert not BlindReadBinding.objects.filter(task_id_frozen=task.pk, actor_id_frozen=member.pk).exists()
 
     def test_old_mixed_slot_requires_manager_replay_before_handle_issuance(self):
         from access_control.identity import LocalIdentityProvider

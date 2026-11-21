@@ -434,6 +434,15 @@ its manager replays the original idempotent command and the checks succeed.
 Legacy non-mixed assignments and direct assignment inserts still use the old
 path until a safe migration exists. The additional binding does not establish
 uniform timing or authorize public dispatch.
+New bindings also receive a Django-signed, immutable static attestation after
+the complete quality proof and reference have been checked. It contains only
+proof metadata, hashes and text lengths, not task text or answers. The current
+read path verifies the signature and still performs all original live and
+hash checks; legacy bindings without an attestation continue on that original
+path. A forged or oversized attestation is denied. Deployments must keep
+signing keys consistent across web and worker instances and retain old keys
+in Django's fallback list during rotation; removing a key invalidates its
+attestations, and re-signing an immutable row is not yet supported.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

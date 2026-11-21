@@ -55,12 +55,12 @@ def _validate(principal, assignment, record=None):
             or not User.objects.filter(pk=actor_id, is_active=True,
                                        active_organization_id=assignment.project.organization_id).exists()):
         _unavailable()
-    live = authorization.active_task_assignment(principal, assignment.task)
-    if live is None or live.pk != assignment.pk or live.project_id != assignment.project_id:
-        _unavailable()
     from .blind_read_binding import verify_mixed_read_binding
 
     verify_mixed_read_binding(assignment)
+    live = authorization.active_task_assignment(principal, assignment.task)
+    if live is None or live.pk != assignment.pk or live.project_id != assignment.project_id:
+        _unavailable()
     if record is not None and (record.assignment_id_frozen != assignment.pk
                                or record.task_id_frozen != assignment.task_id
                                or record.project_id_frozen != assignment.project_id
