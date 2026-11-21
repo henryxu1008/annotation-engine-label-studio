@@ -457,6 +457,9 @@ contents are fetched with their size checks, and live eligibility, exposure,
 reference and proof existence are checked in one later snapshot. These changes
 retain the full proof and reference hash checks and do not alone establish
 uniform participant timing or authorize public dispatch.
+For the handle paths that already hold project and task locks, authorization
+reuses those locked objects after checking that the assignment belongs to the
+same project. Other callers continue to load their own related objects.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

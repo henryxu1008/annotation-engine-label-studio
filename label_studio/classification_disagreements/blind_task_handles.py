@@ -43,7 +43,7 @@ def _lock_bounded_task(*, project_id, task_id):
     return task
 
 
-def _validate(principal, assignment, record=None):
+def _validate(principal, assignment, record=None, *, locked_task=False):
     from users.models import User
 
     actor_id = principal.local_user_id
@@ -58,7 +58,7 @@ def _validate(principal, assignment, record=None):
     from .blind_read_binding import verify_mixed_read_binding
 
     verify_mixed_read_binding(assignment)
-    live = authorization.active_task_assignment(principal, assignment.task)
+    live = authorization.active_task_assignment(principal, assignment.task, _locked_task=locked_task)
     if live is None or live.pk != assignment.pk or live.project_id != assignment.project_id:
         _unavailable()
     if record is not None and (record.assignment_id_frozen != assignment.pk
@@ -78,7 +78,7 @@ def validate_locked_handle(*, principal, record, assignment):
             or not HANDLE_BASE <= record.task_handle < HANDLE_LIMIT
             or not HANDLE_BASE <= record.assignment_handle < HANDLE_LIMIT):
         _unavailable()
-    return _validate(principal, assignment, record)
+    return _validate(principal, assignment, record, locked_task=True)
 
 
 @transaction.atomic
@@ -108,7 +108,7 @@ def issue_handle(*, principal, assignment_id):
     existing = BlindTaskHandle.objects.filter(assignment_id_frozen=assignment_id).first()
     # Check the live assignment once while its project, task and assignment are
     # locked. Existing handles still have all frozen bindings checked here.
-    _validate(principal, assignment, existing)
+    _validate(principal, assignment, existing, locked_task=True)
     if existing is not None:
         return existing
     for _ in range(16):
@@ -122,7 +122,7 @@ def issue_handle(*, principal, assignment_id):
         except IntegrityError:
             existing = BlindTaskHandle.objects.filter(assignment_id_frozen=assignment_id).first()
             if existing is not None:
-                _validate(principal, assignment, existing)
+                _validate(principal, assignment, existing, locked_task=True)
                 return existing
     _unavailable()
 
@@ -183,7 +183,7 @@ def lock_handle_for_write(*, principal, task_handle, assignment_handle, assignme
         _unavailable()
     task.project = project
     assignment.task, assignment.project = task, project
-    _validate(principal, assignment, record)
+    _validate(principal, assignment, record, locked_task=True)
     # _validate already checks the live role, active assignment and complete
     # quality proof while the project and epoch fences are held. The EDIT
     # operation was checked when the project lock was acquired.

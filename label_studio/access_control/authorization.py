@@ -70,10 +70,20 @@ class AuthorizationService:
         return cls.project_role(principal, project) == ProjectMember.Role.REVIEWER
 
     @classmethod
-    def active_task_assignment(cls, principal: Principal, task):
-        """Return the principal's active assignment for a task, if any."""
+    def active_task_assignment(cls, principal: Principal, task, *, _locked_task=False):
+        """Return a live assignment; callers may reuse a task they have locked.
+
+        The private flag requires the caller to hold the project and task locks
+        until the operation completes. It never skips live role/assignment or
+        quality checks. Ordinary unfenced callers retain fresh related reads.
+        """
         if principal.local_user_id is None:
             return None
+        if _locked_task:
+            from django.db import transaction
+
+            if not transaction.get_connection().in_atomic_block:
+                raise RuntimeError('A locked task requires an open transaction.')
 
         from projects.models import ProjectMember
         from tasks.models import TaskAssignment
@@ -107,6 +117,10 @@ class AuthorizationService:
         )
         if assignment is None:
             return None
+        if _locked_task:
+            if assignment.project_id != task.project_id:
+                return None
+            assignment.task, assignment.project = task, task.project
         from classification_disagreements.blind_provenance import checked_quality_proof
         from rest_framework.exceptions import ValidationError
 
