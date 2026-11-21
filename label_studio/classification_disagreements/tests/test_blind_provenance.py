@@ -470,6 +470,28 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_ordinary_binding_migration_preserves_existing_binding_and_guards(self):
+        from classification_disagreements.models import BlindReadBinding
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0046_blind_read_binding')])
+        try:
+            binding = BlindReadBinding.objects.create(
+                assignment_id_frozen=9876543, task_id_frozen=1, project_id_frozen=1, actor_id_frozen=1,
+                decision_id_frozen=1, source_id_frozen=9876543, source_task_id_frozen=1,
+                decision_request_hash='1' * 64, purpose='ordinary', reference_id_frozen=None,
+                reference_hash=None, proof_hash=None, binding_hash='2' * 64,
+            )
+            binding_id = binding.pk
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert BlindReadBinding.objects.get(pk=binding_id).binding_hash == '2' * 64
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadBinding.objects.filter(pk=binding_id).update(binding_hash='3' * 64)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadBinding.objects.filter(pk=binding_id).delete()
+
     def test_reference_identity_migration_backfills_live_and_retired_evidence(self):
         from classification_disagreements.models import BlindEvidenceIdentity, BlindQualityAssignment
 

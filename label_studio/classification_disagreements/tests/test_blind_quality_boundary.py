@@ -232,6 +232,47 @@ class TestBlindQualityBoundary(APITestCase):
             with self.assertRaises(NotFound):
                 resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
 
+    def test_new_ordinary_assignment_shares_binding_without_freezing_task_text(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadBinding
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+        from tasks.assignments import create_assignment
+
+        Project.objects.filter(pk=self.project.pk).update(label_config=CONFIG)
+        task = TaskFactory(project=self.project, data={'text': 'before'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.annotator)
+        with self.settings(**config):
+            assignment = create_assignment(task=task, assignee=self.annotator, principal=local_principal(self.manager))
+            binding = BlindReadBinding.objects.get(assignment_id_frozen=assignment.pk)
+            assert binding.purpose == 'ordinary' and binding.decision_id_frozen is None
+            handle = issue_handle(principal=local_principal(self.annotator), assignment_id=assignment.pk)
+            response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
+            assert response.status_code == 200 and response.data['data']['text'] == 'before'
+            Task.objects.filter(pk=task.pk).update(data={'text': 'changed'})
+            response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
+            assert response.status_code == 200 and response.data['data']['text'] == 'changed'
+
+    def test_unmixed_quality_uses_same_binding_and_denies_after_reference_deletion(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.models import BlindReadBinding
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from rest_framework.exceptions import NotFound
+
+        reference, _ = self.qualified_submission(answer('Positive'))
+        binding = BlindReadBinding.objects.get(assignment_id_frozen=self.assignment.pk)
+        assert binding.purpose == 'quality' and binding.decision_id_frozen is None
+        assert binding.reference_id_frozen == reference.pk and binding.proof_hash
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        assert resolve_handle(principal=principal, task_handle=handle.task_handle)
+        reference.delete()
+        with self.assertRaises(NotFound):
+            resolve_handle(principal=principal, task_handle=handle.task_handle)
+
     def test_opaque_handles_are_stable_owner_bound_and_never_grant_stale_access(self):
         from dataclasses import replace
         from access_control.project_operations import local_principal

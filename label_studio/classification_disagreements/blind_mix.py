@@ -176,7 +176,7 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
         reference_id = item['id']
         chosen = create_quality_task(project_id=project.pk, reference_id=item['id'],
                                      expected_reference_hash=item['hash'], assignee=source.assignee,
-                                     principal=principal, key=key)
+                                     principal=principal, key=key, _defer_blind_binding=True)
     decision = BlindMixDecision.objects.create(
         project=project, source_assignment=source, chosen_assignment=chosen,
         source_id_frozen=source.pk, source_task_id_frozen=source.task_id, source_assignee_id_frozen=source.assignee_id,
@@ -214,7 +214,7 @@ def _create_mixed_assignment(*, task, assignee, references, ratio_basis_points, 
         if epoch is not None and BlindAssignmentExposure.objects.filter(
                 account_id=assignee.pk, task_id=task.pk, generation=epoch.generation).exists():
             unavailable()
-        source = create_assignment(task=task, assignee=assignee, principal=principal)
+        source = create_assignment(task=task, assignee=assignee, principal=principal, _defer_blind_binding=True)
     return _choose_assignment(source=source, expected_version=1, references=references,
                              ratio_basis_points=ratio_basis_points, principal=principal, key=key,
                              predecessor_id=predecessor_id)

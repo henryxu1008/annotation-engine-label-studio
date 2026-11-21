@@ -19,6 +19,55 @@ def _unavailable():
     raise NotFound('Work is unavailable.')
 
 
+def _seal(values):
+    value_hash = digest({'schema': 'blind-mixed-read-binding/v1', **values})
+    previous = BlindReadBinding.objects.filter(assignment_id_frozen=values['assignment_id_frozen']).first()
+    if previous:
+        if previous.binding_hash != value_hash or any(getattr(previous, key) != value for key, value in values.items()):
+            _unavailable()
+        return previous
+    return BlindReadBinding.objects.create(**values, binding_hash=value_hash)
+
+
+def seal_ordinary_read_binding(*, assignment):
+    """Bind an ordinary assignment without freezing its editable task data."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError('Ordinary read binding requires an atomic transaction.')
+    if (BlindQualityAssignment.objects.filter(task_id=assignment.task_id).exists()
+            or BlindEligibilityProof.objects.filter(assignment_id=assignment.pk).exists()
+            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()):
+        _unavailable()
+    return _seal({
+        'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+        'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
+        'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
+        'decision_request_hash': None, 'purpose': 'ordinary', 'reference_id_frozen': None,
+        'reference_hash': None, 'proof_hash': None,
+    })
+
+
+def seal_unmixed_quality_read_binding(*, assignment, marker):
+    """Bind an existing quality assignment after validating its full proof."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError('Quality read binding requires an atomic transaction.')
+    if (marker is None or marker.assignment_id != assignment.pk or marker.task_id != assignment.task_id
+            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()):
+        _unavailable()
+    from .blind_provenance import checked_quality_proof
+
+    try:
+        proof = checked_quality_proof(assignment=assignment, marker=marker, lock_epoch=False)
+    except ValidationError:
+        _unavailable()
+    return _seal({
+        'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+        'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
+        'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
+        'decision_request_hash': None, 'purpose': 'quality', 'reference_id_frozen': marker.reference_id,
+        'reference_hash': marker.reference_hash, 'proof_hash': proof.manifest_hash,
+    })
+
+
 def seal_mixed_read_binding(*, assignment, decision):
     """Seal validated immutable evidence before the mixed slot can commit.
 
@@ -57,13 +106,7 @@ def seal_mixed_read_binding(*, assignment, decision):
         'reference_hash': marker.reference_hash if marker else None,
         'proof_hash': proof.manifest_hash if proof else None,
     }
-    value_hash = digest({'schema': 'blind-mixed-read-binding/v1', **values})
-    previous = BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).first()
-    if previous:
-        if previous.binding_hash != value_hash or any(getattr(previous, key) != value for key, value in values.items()):
-            _unavailable()
-        return previous
-    return BlindReadBinding.objects.create(**values, binding_hash=value_hash)
+    return _seal(values)
 
 
 def verify_mixed_read_binding(assignment):
@@ -86,11 +129,13 @@ def verify_mixed_read_binding(assignment):
         source_id_frozen=OuterRef('source_id_frozen'), source_task_id_frozen=OuterRef('source_task_id_frozen'),
         source_assignee_id_frozen=OuterRef('actor_id_frozen'), request_hash=OuterRef('decision_request_hash'),
     )
+    any_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=OuterRef('assignment_id_frozen'))
     row = BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).annotate(
         has_marker=Exists(markers), matching_marker=Exists(matching_marker),
         has_proof=Exists(proofs), matching_proof=Exists(proofs.filter(manifest_hash=OuterRef('proof_hash'))),
         ordinary_decision=Exists(decisions.filter(selected=False, reference_id_frozen__isnull=True)),
         quality_decision=Exists(decisions.filter(selected=True, reference_id_frozen=OuterRef('reference_id_frozen'))),
+        has_decision=Exists(any_decisions),
     ).first()
     if row is None:
         if BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists():
@@ -99,16 +144,22 @@ def verify_mixed_read_binding(assignment):
     values = {field: getattr(row, field) for field in FIELDS}
     if (values['assignment_id_frozen'] != assignment.pk or values['task_id_frozen'] != assignment.task_id
             or values['project_id_frozen'] != assignment.project_id or values['actor_id_frozen'] != assignment.assignee_id
-            or not re.fullmatch(r'[0-9a-f]{64}', row.decision_request_hash or '')
             or row.binding_hash != digest({'schema': 'blind-mixed-read-binding/v1', **values})):
+        _unavailable()
+    mixed = row.decision_id_frozen is not None
+    if mixed and not re.fullmatch(r'[0-9a-f]{64}', row.decision_request_hash or ''):
+        _unavailable()
+    if not mixed and (row.has_decision or row.source_id_frozen is not None
+                      or row.source_task_id_frozen is not None or row.decision_request_hash is not None):
         _unavailable()
     if row.purpose == 'ordinary':
         if (row.reference_id_frozen is not None or row.reference_hash is not None or row.proof_hash is not None
-                or row.has_marker or row.has_proof or not row.ordinary_decision
-                or row.source_id_frozen != assignment.pk or row.source_task_id_frozen != assignment.task_id):
+                or row.has_marker or row.has_proof
+                or (mixed and (not row.ordinary_decision or row.source_id_frozen != assignment.pk
+                               or row.source_task_id_frozen != assignment.task_id))):
             _unavailable()
     elif row.purpose == 'quality':
-        if (not row.matching_marker or not row.matching_proof or not row.quality_decision
+        if ((mixed and not row.quality_decision) or not row.matching_marker or not row.matching_proof
                 or type(row.reference_id_frozen) is not int
                 or row.reference_id_frozen <= 0 or not re.fullmatch(r'[0-9a-f]{64}', row.reference_hash or '')
                 or not re.fullmatch(r'[0-9a-f]{64}', row.proof_hash or '')):

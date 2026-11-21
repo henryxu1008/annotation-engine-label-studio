@@ -140,11 +140,15 @@ def reassign_quality_task(*, task, assignee, principal):
     assignment = TaskAssignment.objects.create(task=task, project=project, assignee=assignee, assigned_by=actor)
     marker = BlindQualityAssignment.objects.filter(assignment_id=assignment.pk).first()
     _issue_proof(assignment, marker, reference, epoch, history, source_task_id, actor, principal)
+    from .blind_read_binding import seal_unmixed_quality_read_binding
+
+    seal_unmixed_quality_read_binding(assignment=assignment, marker=marker)
     return assignment
 
 
 @transaction.atomic
-def create_quality_task(*, project_id, reference_id, expected_reference_hash, assignee, principal, key):
+def create_quality_task(*, project_id, reference_id, expected_reference_hash, assignee, principal, key,
+                        _defer_blind_binding=False):
     """Create one frozen, private assignment atomically; not a public dispatch API."""
     import copy
     import re
@@ -167,6 +171,11 @@ def create_quality_task(*, project_id, reference_id, expected_reference_hash, as
         if (receipt.request_hash != request_hash or receipt.actor_id != actor.pk
                 or receipt.assignment_id is None or receipt.assignment_id != receipt.assignment_id_frozen):
             raise ValidationError({'detail': 'Quality assignment is unavailable.'})
+        if not _defer_blind_binding:
+            from .blind_read_binding import seal_unmixed_quality_read_binding
+
+            marker = BlindQualityAssignment.objects.filter(assignment_id=receipt.assignment_id).first()
+            seal_unmixed_quality_read_binding(assignment=receipt.assignment, marker=marker)
         return receipt.assignment
     get_object_or_404(ClassificationGoldEvidence.objects.select_for_update(), pk=reference_id, project=project)
     reference = checked(project, reference_id, 'reference')
@@ -196,6 +205,10 @@ def create_quality_task(*, project_id, reference_id, expected_reference_hash, as
     )
     checked_blind_reference(marker=marker, project=project, task=task)
     _issue_proof(assignment, marker, reference, epoch, history, source_task_id, actor, principal)
+    if not _defer_blind_binding:
+        from .blind_read_binding import seal_unmixed_quality_read_binding
+
+        seal_unmixed_quality_read_binding(assignment=assignment, marker=marker)
     BlindDispatchReceipt.objects.create(project=project, assignment=assignment, key=key,
                                         assignment_id_frozen=assignment.pk, request_hash=request_hash, actor_id=actor.pk)
     return assignment

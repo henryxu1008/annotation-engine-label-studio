@@ -423,20 +423,32 @@ changes and the same bounded lookup for ordinary and sampled work before it can
 replace the current checks. No such permit is implemented or enabled here.
 An internal mixed slot now receives an immutable read binding in the same
 transaction as its decision, whether the selected result is ordinary or
-quality work. The binding records the decision and source identities and, for
-quality work, the verified reference and eligibility-proof hashes. Handle
-validation checks this binding after the existing live authorization; it does
-not replace the current proof, membership, exposure or content checks. A
-pre-existing mixed decision without a binding is unavailable until its manager
-replays the original idempotent command and the current checks succeed.
-Ordinary non-mixed work still follows the legacy path, and the additional
-binding does not establish uniform timing or authorize public dispatch.
+quality work. New ordinary assignments created through the assignment service
+in a sensitive project and new standalone quality assignments use the same
+binding model; ordinary text stays editable. The binding records decision and
+source identities when present and, for quality work, the verified reference
+and eligibility-proof hashes. Handle validation checks it after the existing
+live authorization; it does not replace proof, membership, exposure or content
+checks. A pre-existing mixed decision without a binding is unavailable until
+its manager replays the original idempotent command and the checks succeed.
+Legacy non-mixed assignments and direct assignment inserts still use the old
+path until a safe migration exists. The additional binding does not establish
+uniform timing or authorize public dispatch.
+The ordinary-binding schema migration disables the current capture generation
+and restores the database guards after the schema change. Once non-mixed
+bindings with null decision fields exist, rolling it back requires a separate
+data and compatibility plan; a failed reverse must not be treated as recovery.
 An isolated PostgreSQL run with 14 warm paired reads after this change measured
 quality work at a 48.1 ms median (44.2–58.4 ms, 32 SQL queries) and ordinary
 work at a 22.5 ms median (20.5–32.8 ms, 20 SQL queries). The ranges did not
 overlap in this synthetic sample. These observations are diagnostic rather
 than production or statistical acceptance evidence; the separate quality
 proof path still prevents public rollout.
+After extending the binding to service-created ordinary and standalone quality
+assignments, another fresh isolated PostgreSQL run measured quality at a
+43.6 ms median (40.6–54.2 ms, 32 queries) and ordinary at 20.2 ms
+(18.8–24.3 ms, 20 queries), again with 14 warm paired samples. This confirms
+that sharing the binding has not eliminated the separate quality-read cost.
 Gold evidence identities now have a retained, immutable registry. Its migration
 backfills live evidence and IDs retained by quality markers or reference
 provenance, and disables the existing capture generation. A new evidence row

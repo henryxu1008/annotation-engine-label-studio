@@ -41,7 +41,7 @@ def validate_assignment_target(task, assignee):
 
 
 @transaction.atomic
-def create_assignment(*, task, assignee, principal):
+def create_assignment(*, task, assignee, principal, _defer_blind_binding=False):
     project, actor = lock_project_operation(
         task.project_id,
         principal,
@@ -64,7 +64,15 @@ def create_assignment(*, task, assignee, principal):
     # current target after concurrent membership/account changes commit.
     assignee.refresh_from_db()
     validate_assignment_target(task, assignee)
-    return TaskAssignment.objects.create(task=task, project=project, assignee=assignee, assigned_by=actor)
+    assignment = TaskAssignment.objects.create(task=task, project=project, assignee=assignee, assigned_by=actor)
+    if not _defer_blind_binding:
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        if sensitive_project(project):
+            from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+
+            seal_ordinary_read_binding(assignment=assignment)
+    return assignment
 
 
 @transaction.atomic

@@ -254,10 +254,10 @@ class BlindReadBinding(models.Model):
     task_id_frozen = models.PositiveBigIntegerField()
     project_id_frozen = models.PositiveBigIntegerField()
     actor_id_frozen = models.PositiveBigIntegerField()
-    decision_id_frozen = models.PositiveBigIntegerField()
-    source_id_frozen = models.PositiveBigIntegerField()
-    source_task_id_frozen = models.PositiveBigIntegerField()
-    decision_request_hash = models.CharField(max_length=64)
+    decision_id_frozen = models.PositiveBigIntegerField(null=True)
+    source_id_frozen = models.PositiveBigIntegerField(null=True)
+    source_task_id_frozen = models.PositiveBigIntegerField(null=True)
+    decision_request_hash = models.CharField(max_length=64, null=True)
     purpose = models.CharField(max_length=12)
     reference_id_frozen = models.PositiveBigIntegerField(null=True)
     reference_hash = models.CharField(max_length=64, null=True)
@@ -271,6 +271,12 @@ class BlindReadBinding(models.Model):
                        | models.Q(purpose='quality', reference_id_frozen__isnull=False,
                                   reference_hash__isnull=False, proof_hash__isnull=False)),
             name='blind_read_binding_purpose_valid',
+        ), models.CheckConstraint(
+            condition=(models.Q(decision_id_frozen__isnull=True, source_id_frozen__isnull=True,
+                                source_task_id_frozen__isnull=True, decision_request_hash__isnull=True)
+                       | models.Q(decision_id_frozen__isnull=False, source_id_frozen__isnull=False,
+                                  source_task_id_frozen__isnull=False, decision_request_hash__isnull=False)),
+            name='blind_read_binding_decision_valid',
         )]
 
 
