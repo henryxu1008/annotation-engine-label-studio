@@ -2814,10 +2814,11 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment, reassign_mixed_assignment
+        from classification_disagreements.blind_provenance import current_quality_assignment_ids
         from classification_disagreements.blind_reassignment import reassign_quality_task
         from classification_disagreements.blind_task_handles import issue_handle, lock_handle_for_write, resolve_handle
         from classification_disagreements.blind_scoring import score_quality_revision
-        from classification_disagreements.models import BlindMixCompletion, BlindMixDecision
+        from classification_disagreements.models import BlindCompletionReadState, BlindMixCompletion, BlindMixDecision
         from classification_disagreements.tests.test_gold_scoring import answer
         from projects.models import ProjectMember
         from projects.models import ProjectSummary
@@ -2900,6 +2901,52 @@ class TestBlindQualityBoundary(APITestCase):
         source.refresh_from_db()
         assert source.status == TaskAssignment.Status.CANCELLED
         assert BlindMixCompletion.objects.filter(decision_id_frozen=decision.pk, submission_id_frozen=submission.pk).exists()
+        assert not BlindCompletionReadState.objects.get(pk=submission.pk).revoked
+        if connection.vendor == 'sqlite':
+            for model, key in ((BlindCompletionReadState, 'submission_id'), (Submission, 'id')):
+                table = connection.ops.quote_name(model._meta.db_table)
+                with self.assertRaises(DatabaseError), transaction.atomic(), connection.cursor() as cursor:
+                    cursor.execute(f'INSERT OR REPLACE INTO {table} SELECT * FROM {table} WHERE {key} = %s',
+                                   [submission.pk])
+            assert not BlindCompletionReadState.objects.get(pk=submission.pk).revoked
+        with transaction.atomic():
+            replacement_id = submission.pk + 1000000
+            Submission.objects.filter(pk=submission.pk).update(id=replacement_id)
+            assert BlindCompletionReadState.objects.get(pk=submission.pk).revoked
+            Submission.objects.filter(pk=replacement_id).update(id=submission.pk)
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=participant, task_handle=handle.task_handle)
+            transaction.set_rollback(True)
+        with transaction.atomic():
+            Submission.objects.filter(pk=submission.pk).update(submitted_by=None)
+            assert BlindCompletionReadState.objects.get(pk=submission.pk).revoked
+            Submission.objects.filter(pk=submission.pk).update(submitted_by=member)
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=participant, task_handle=handle.task_handle)
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                BlindCompletionReadState.objects.filter(pk=submission.pk).update(revoked=False)
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                BlindCompletionReadState.objects.filter(pk=submission.pk).delete()
+            transaction.set_rollback(True)
+        # A deleted completion submission must not regain authority by
+        # inserting another row with the retained numeric identity.
+        with transaction.atomic():
+            submission_id = submission.pk
+            Submission.objects.filter(pk=submission_id).delete()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=participant, task_handle=handle.task_handle)
+            if connection.vendor == 'sqlite':
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    Submission.objects.create(id=submission_id, assignment=chosen, submitted_by=member,
+                                              revision=1, result_snapshot=[], result_hash='0' * 64)
+            else:
+                Submission.objects.create(id=submission_id, assignment=chosen, submitted_by=member,
+                                          revision=1, result_snapshot=[], result_hash='0' * 64)
+            assert BlindCompletionReadState.objects.get(pk=submission_id).revoked
+            assert chosen.pk not in current_quality_assignment_ids(member.pk).values_list('assignment_id', flat=True)
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=participant, task_handle=handle.task_handle)
+            transaction.set_rollback(True)
         assert score_quality_revision(submission.pk).submission_id == submission.pk
         assert Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         assert resolve_handle(principal=participant, task_handle=handle.task_handle,

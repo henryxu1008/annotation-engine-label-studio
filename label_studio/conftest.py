@@ -26,10 +26,10 @@ def flush_sqlite_capture_identity_for_tests():
             name == ':memory:' or (name.startswith('file:memorydb_') and 'mode=memory' in name)
         ):
             return original(command, *args, **options)
-        names = ('blind_capture_identity_delete', 'blind_retired_evidence_delete',
+        names = ('blind_capture_identity_delete', 'blind_retired_evidence_delete', 'blind_completion_state_delete',
                  'blind_retire_event', 'blind_retire_privilege')
         with db.cursor() as cursor:
-            cursor.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (%s,%s,%s,%s)", names)
+            cursor.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (%s,%s,%s,%s,%s)", names)
             triggers = cursor.fetchall()
             for trigger, _ in triggers:
                 cursor.execute(f'DROP TRIGGER {db.ops.quote_name(trigger)}')

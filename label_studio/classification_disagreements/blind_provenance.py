@@ -12,6 +12,7 @@ from .models import (
     BlindEligibilityProof,
     BlindMixDecision,
     BlindMixCompletion,
+    BlindCompletionReadState,
     BlindMixEvidence,
     BlindPrivilegeHistory,
     BlindLabelExposure,
@@ -222,10 +223,13 @@ def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_
     completed_submission = Submission.objects.using(using).filter(
         pk=OuterRef('submission_id_frozen'), assignment_id=OuterRef('chosen_id_frozen'), submitted_by_id=account_id,
     )
+    completion_state = BlindCompletionReadState.objects.using(using).filter(
+        submission_id=OuterRef('submission_id_frozen'), revoked=False,
+    )
     completion = BlindMixCompletion.objects.using(using).filter(
         decision_id_frozen=OuterRef('pk'), project_id_frozen=OuterRef('project_id'),
         source_id_frozen=OuterRef('source_id_frozen'), chosen_id_frozen=OuterRef('chosen_id_frozen'),
-    ).filter(Exists(completed_source), Exists(completed_submission))
+    ).filter(Exists(completed_source), Exists(completed_submission), Exists(completion_state))
     valid = mixes.filter(
         project_id=project_id, chosen_assignment_id=assignment_id, reference_id_frozen=reference_id,
         source_assignee_id_frozen=account_id, source_assignment_id=F('source_id_frozen'),

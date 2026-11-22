@@ -268,6 +268,13 @@ class BlindMixCompletion(models.Model):
     submission_id_frozen = models.PositiveBigIntegerField(unique=True)
 
 
+class BlindCompletionReadState(models.Model):
+    """Retained, irreversible revocation state for a completed mixed slot."""
+
+    submission_id = models.PositiveBigIntegerField(primary_key=True)
+    revoked = models.BooleanField(default=False)
+
+
 class BlindReadBinding(models.Model):
     """Retained server-verified identity evidence for a mixed work slot."""
 

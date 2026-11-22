@@ -19,6 +19,7 @@ from .models import (
     BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
     BlindQualityAssignment, BlindReadBinding, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
+    BlindCompletionReadState,
     ClassificationGoldEvidence,
 )
 
@@ -124,9 +125,11 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         version=OuterRef('source_version_after'))
     submitted = Submission.objects.filter(pk=OuterRef('submission_id_frozen'), assignment_id=assignment.pk,
                                           submitted_by_id=assignment.assignee_id)
+    completion_state = BlindCompletionReadState.objects.filter(submission_id=OuterRef('submission_id_frozen'),
+                                                                 revoked=False)
     completion = BlindMixCompletion.objects.filter(decision_id_frozen=binding.decision_id_frozen,
         project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
-        chosen_id_frozen=assignment.pk).filter(Exists(released), Exists(submitted))
+        chosen_id_frozen=assignment.pk).filter(Exists(released), Exists(submitted), Exists(completion_state))
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
     exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
                                        lengths=lengths, assignment_id=assignment.pk)

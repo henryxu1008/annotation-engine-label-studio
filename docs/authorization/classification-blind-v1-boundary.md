@@ -774,6 +774,20 @@ of scoring must not roll back ordinary annotation writes. Queue failures leave
 outbox rows pending, but operator scheduling, end-to-end queue recovery and
 explicit degraded behavior still require validation.
 
+Completion read state is retained after submission deletion, or a change to
+its identity, assignment or submitter. Revocation is irreversible even if the same
+submission number or actor is later restored; a rolled-back change does not
+revoke the completion. Existing completion records are conservatively
+revoked during migration because historical submission-number reuse cannot be
+ruled out. They require a separate recovery process before further access;
+this migration does not reconstruct their history. Once state exists, rolling
+back this migration is intentionally blocked. This state covers completion
+evidence only and is not the common live-read projection.
+After adding it, an isolated PostgreSQL diagnostic measured 100 warm pairs:
+ordinary median 29.1 ms and quality median 41.7 ms (rank probability 0.9729).
+Four fresh-process pairs measured medians of 106.1 ms and 121.1 ms; this small
+sample shares the database cache and does not establish timing privacy.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.
