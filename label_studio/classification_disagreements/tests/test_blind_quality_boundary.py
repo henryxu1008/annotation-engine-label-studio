@@ -1385,6 +1385,26 @@ class TestBlindQualityBoundary(APITestCase):
             lock_handle_for_write(principal=principal, task_handle=handle.task_handle,
                 assignment_handle=handle.assignment_handle, assignment_version=self.assignment.version)
 
+    def test_revoked_capture_cannot_be_restored_for_stale_quality_handle(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.models import BlindCaptureCertificate
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from rest_framework.exceptions import NotFound
+
+        self.qualified_submission(answer('Positive'))
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        certificate = BlindCaptureCertificate.objects.get(account_id=self.annotator.pk)
+        generation = certificate.generation
+        certificate.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=self.annotator.pk, generation=generation)
+        with self.assertRaises(NotFound):
+            resolve_handle(principal=principal, task_handle=handle.task_handle)
+        with self.assertRaises(NotFound):
+            issue_handle(principal=principal, assignment_id=self.assignment.pk)
+
     def test_reissuing_existing_quality_handle_checks_the_live_proof_once(self):
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_provenance

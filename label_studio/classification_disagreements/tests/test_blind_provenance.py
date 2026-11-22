@@ -16,6 +16,7 @@ from classification_disagreements.models import (
     BlindPrivilegeHistory,
     BlindCaptureCertificate,
     BlindCaptureEpoch,
+    BlindCaptureIdentity,
     BlindProvenanceEvent,
     BlindProvenanceFence,
     ClassificationGoldEvidence,
@@ -309,6 +310,62 @@ class TestBlindProvenance(TestCase):
         MigrationRecorder.Migration.objects.filter(pk=migration.pk).update(name=str(uuid4()))
         assert not account_has_untainted_privilege_history(account_id=member.pk)
 
+    def test_revoked_certificate_cannot_be_reinserted_or_inherited_by_reused_account(self):
+        member = UserFactory()
+        account_id = member.pk
+        certificate = BlindCaptureCertificate.objects.get(account_id=account_id)
+        generation = certificate.generation
+        assert account_has_untainted_privilege_history(account_id=account_id)
+        certificate.delete()
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=account_id, generation=generation)
+        User.objects.filter(pk=account_id).delete()
+        BlindPrivilegeHistory.objects.filter(account_id=account_id).delete()
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).delete()
+        replacement = UserFactory(id=account_id)
+        assert replacement.pk == account_id
+        assert not BlindCaptureCertificate.objects.filter(account_id=account_id).exists()
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=account_id, generation=generation)
+
+    def test_account_born_outside_capture_cannot_receive_late_certificate(self):
+        BlindCaptureEpoch.objects.filter(pk=1).update(enabled=False)
+        member = UserFactory()
+        enable_test_capture()
+        generation = BlindCaptureEpoch.objects.get(pk=1).generation
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=member.pk, generation=generation)
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=member.pk).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=member.pk, generation=generation)
+        assert not account_has_untainted_privilege_history(account_id=member.pk)
+
+    def test_capture_identity_is_immutable_and_certificate_revocation_rolls_back(self):
+        member = UserFactory()
+        identity = BlindCaptureIdentity.objects.get(account_id=member.pk)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            identity.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureIdentity.objects.filter(pk=member.pk).update(account_id=member.pk + 100000)
+        with self.assertRaises(ValueError), transaction.atomic():
+            BlindCaptureCertificate.objects.filter(account_id=member.pk).delete()
+            raise ValueError('roll back revocation')
+        assert BlindCaptureCertificate.objects.filter(account_id=member.pk).exists()
+        assert account_has_untainted_privilege_history(account_id=member.pk)
+
+    def test_aborted_account_birth_does_not_retire_the_identifier(self):
+        with self.assertRaises(ValueError), transaction.atomic():
+            candidate = UserFactory()
+            account_id = candidate.pk
+            assert BlindCaptureIdentity.objects.filter(pk=account_id).exists()
+            raise ValueError('roll back account birth')
+        assert not BlindCaptureIdentity.objects.filter(pk=account_id).exists()
+        member = UserFactory(id=account_id)
+        assert BlindCaptureCertificate.objects.filter(account_id=account_id).exists()
+        assert account_has_untainted_privilege_history(account_id=member.pk)
+
 
 class SyntheticTransactionTestCase(TransactionTestCase):
     def _fixture_teardown(self):
@@ -470,6 +527,46 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_capture_identity_migration_backfills_live_and_retained_accounts(self):
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0048_blind_read_attestation')])
+        try:
+            live = UserFactory()
+            live_id = live.pk
+            BlindPrivilegeHistory.objects.filter(account_id=live_id).delete()
+            BlindProvenanceEvent.objects.filter(kind='account', subject_id=live_id).delete()
+            event_only = UserFactory()
+            event_id = event_only.pk
+            User.objects.filter(pk=event_id).delete()
+            BlindPrivilegeHistory.objects.filter(account_id=event_id).delete()
+            history_only = UserFactory()
+            history_id = history_only.pk
+            User.objects.filter(pk=history_id).delete()
+            BlindProvenanceEvent.objects.filter(kind='account', subject_id=history_id).delete()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert set(BlindCaptureIdentity.objects.filter(pk__in=[live_id, event_id, history_id])
+                   .values_list('pk', flat=True)) == {live_id, event_id, history_id}
+        assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+        enable_test_capture()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureCertificate.objects.create(account_id=live_id,
+                generation=BlindCaptureEpoch.objects.get(pk=1).generation)
+
+    def test_capture_identity_migration_refuses_to_lose_orphaned_identity(self):
+        member = UserFactory()
+        account_id = member.pk
+        User.objects.filter(pk=account_id).delete()
+        BlindPrivilegeHistory.objects.filter(account_id=account_id).delete()
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).delete()
+        BlindCaptureCertificate.objects.filter(account_id=account_id).delete()
+        assert BlindCaptureIdentity.objects.filter(pk=account_id).exists()
+        with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+            MigrationExecutor(connection).migrate([('classification_disagreements', '0048_blind_read_attestation')])
+        assert BlindCaptureIdentity.objects.filter(pk=account_id).exists()
+
     def test_ordinary_binding_migration_preserves_existing_binding_and_guards(self):
         from classification_disagreements.models import BlindReadBinding
 

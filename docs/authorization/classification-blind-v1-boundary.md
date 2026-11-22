@@ -492,6 +492,22 @@ repair endpoint does not enable participant dispatch or automatically migrate
 all existing work. Manager-only GET lists active assignments missing a binding
 or attestation in pages of 50 using `after`; it does not prove that existing
 signatures are valid or that a project is ready for blind dispatch.
+The capture-identity migration retains every known account ID independently of
+the deletable capture certificate. A certificate can be issued only at the
+first recorded birth; deleting a certificate or provenance event cannot make
+an existing or reused account eligible again. Account birth while capture is
+disabled also records the identity and cannot be certified retrospectively.
+The migration disables capture and backfills identities from existing users,
+history, account events and certificates. It cannot reconstruct identities
+whose user and all three evidence records disappeared before the migration.
+Run this migration with account and blind-work writes quiesced: its epoch and
+table locks otherwise can contend with account-birth triggers. The migration
+does not schedule that operational pause or activate capture afterward.
+Rollback disables capture and refuses to discard an identity if no remaining
+user or historical record could reconstruct it. Re-enabling the previous
+implementation after rollback would restore its weaker certificate checks.
+This guard does not implement the common live-read projection or establish
+timing privacy.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

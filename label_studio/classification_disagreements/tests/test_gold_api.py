@@ -1,6 +1,7 @@
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from unittest import skipUnless
 from unittest.mock import patch
 
 from classification_disagreements.models import ClassificationGoldEvidence
@@ -191,6 +192,7 @@ class TestGoldAPI(APITestCase):
 
 
 @override_settings(ANNOTATION_CLASSIFICATION_DISAGREEMENTS_ENABLED=True, ANNOTATION_CLASSIFICATION_GOLD_ENABLED=True)
+@skipUnless(connection.vendor == 'postgresql', 'PostgreSQL row-lock semantics required')
 class TestGoldConcurrency(APITransactionTestCase):
     make_source = fixtures.TestClassification.make_source
     set_answer = fixtures.TestClassification.set_answer

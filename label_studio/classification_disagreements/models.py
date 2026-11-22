@@ -60,6 +60,12 @@ class BlindCaptureCertificate(models.Model):
     generation = models.PositiveBigIntegerField()
 
 
+class BlindCaptureIdentity(models.Model):
+    """Retained account IDs prevent late or replayed capture certificates."""
+
+    account_id = models.PositiveBigIntegerField(primary_key=True)
+
+
 class BlindAssignmentExposure(models.Model):
     """Forward-only task assignments observed during a certified generation."""
 
