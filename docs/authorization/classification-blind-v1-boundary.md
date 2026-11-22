@@ -702,6 +702,10 @@ In an isolated PostgreSQL run, 100 warm pairs measured 28.6 ms ordinary and
 40.5 ms quality medians, with a 0.9884 quality-versus-ordinary rank statistic.
 Four fresh-process pairs measured 96.2 ms and 124.9 ms medians respectively;
 the small cold sample and shared database cache cannot establish indistinguishability.
+At commit `46c5875`, a fresh isolated PostgreSQL run measured 100 warm pairs:
+27.8 ms ordinary and 41.9 ms quality medians, with rank probability 0.9922.
+Ten fresh-process pairs measured 104.4 ms and 125.9 ms medians (rank 0.83);
+the database cache remained shared and the result is diagnostic only.
 The existing personal-work flow can consume that store and open the editor by
 handle when its caller explicitly supplies the disabled protocol mode. A
 synthetic browser harness has exercised ordinary work in English and Chinese,
@@ -710,6 +714,10 @@ separate synthetic fixture uses the internal sampler to give a newly eligible
 member both quality and ordinary work, and exercises their common opaque editor
 and submission in both languages. This test explicitly constructs the disabled
 protocol; it does not activate dispatch or the interface for normal users.
+The synthetic browser harness also tests project-membership revocation in both
+languages for ordinary and quality work: a denied stale submit closes the
+editor. Its guarded test fixture enables a separate manager token only in the
+synthetic organization, so the participant browser session remains active.
 The protocol must remain disabled until the remaining legacy-route
 fencing, mixed dispatch and browser tests are completed together. The
 common API proxy also rejects direct legacy and raw

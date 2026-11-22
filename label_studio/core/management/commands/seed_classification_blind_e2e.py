@@ -36,6 +36,7 @@ class Command(BaseCommand):
         from classification_disagreements.gold_api import GoldAPI
         from classification_disagreements.models import BlindCaptureEpoch, BlindMixDecision
         from projects.models import Project, ProjectMember
+        from rest_framework.authtoken.models import Token
         from rest_framework.test import APIRequestFactory, force_authenticate
         from tasks.models import Submission, Task
         from users.models import User
@@ -49,6 +50,14 @@ class Command(BaseCommand):
             raise CommandError('The source fixture is not the isolated classification fixture.')
         manager = User.objects.get(pk=source['users']['manager']['id'],
                                    email='manager@classification81.example.test')
+        if manager.active_organization is None or manager.active_organization.title != 'Synthetic classification disagreement':
+            raise CommandError('The manager is not in the synthetic fixture organization.')
+        # Only this guarded synthetic organization needs a second manager
+        # session while a participant browser session remains active.
+        jwt_settings = manager.active_organization.jwt
+        jwt_settings.legacy_api_tokens_enabled = True
+        jwt_settings.save(update_fields=['legacy_api_tokens_enabled'])
+        manager_token, _ = Token.objects.get_or_create(user=manager)
         if User.objects.filter(email__startswith='blind-e2e-', email__endswith='@classification81.example.test').exists():
             raise CommandError('The synthetic blind fixture already exists.')
         # This command spans projects in one transaction. Taking an epoch lock
@@ -109,11 +118,29 @@ class Command(BaseCommand):
                     key=uuid4())
                 if draft_quality.task_id == draft_carrier.pk:
                     raise CommandError('The synthetic draft quality assignment was not selected.')
+                revocations = {}
+                for kind in ('ordinary', 'quality'):
+                    revoke_email = f'blind-e2e-revoke-{kind}-{locale.lower()}@classification81.example.test'
+                    revoke_member = User.objects.create_user(revoke_email, source['password'], username=revoke_email,
+                                                             active_organization=project.organization)
+                    project.organization.add_user(revoke_member)
+                    membership = ProjectMember.objects.create(project=project, user=revoke_member, role='annotator')
+                    text = f'Synthetic revoke {kind} carrier for {locale} qqqqqqqqqqq'
+                    revoke_task = Task.objects.create(project=project, data={'text': text})
+                    chosen = create_mixed_assignment(task=revoke_task, assignee=revoke_member,
+                        references=[references[locale]], ratio_basis_points=10000 if kind == 'quality' else 0,
+                        principal=local_principal(manager), key=uuid4())
+                    if (chosen.task_id != revoke_task.pk) != (kind == 'quality'):
+                        raise CommandError('The synthetic revocation work has the wrong purpose.')
+                    revocations[kind] = {'email': revoke_email, 'membership': membership.pk,
+                                         'text': 'Synthetic 分类 split' if kind == 'quality' else text}
                 projects[locale] = {'id': project.pk, 'email': email, 'quality_task': quality.task_id,
                                     'ordinary_task': ordinary.pk, 'reference': references[locale]['id'],
-                                    'draft_email': draft_email, 'draft_quality_task': draft_quality.task_id}
+                                    'draft_email': draft_email, 'draft_quality_task': draft_quality.task_id,
+                                    'revocations': revocations}
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open('x', encoding='utf-8') as stream:
             json.dump({'synthetic': 'classification-blind-e2e/v1', 'password': source['password'],
+                       'manager_token': manager_token.key,
                        'projects': projects}, stream, indent=2)
         self.stdout.write('Created isolated synthetic blind-mix fixtures.')
