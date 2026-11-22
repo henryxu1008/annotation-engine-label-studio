@@ -396,6 +396,17 @@ class SyntheticTransactionTestCase(TransactionTestCase):
                     cursor.execute(sql)
 
 
+class TestCaptureIdentityTestDatabaseFlush(TransactionTestCase):
+    def test_a_django_can_flush_after_creating_an_account(self):
+        member = UserFactory()
+        assert BlindCaptureIdentity.objects.filter(pk=member.pk).exists()
+
+    def test_b_flush_restores_the_identity_delete_guard(self):
+        member = UserFactory()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindCaptureIdentity.objects.filter(pk=member.pk).delete()
+
+
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL transaction-lock test')
 class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
     def setUp(self):
