@@ -3,7 +3,10 @@
 import json
 import os
 import statistics
+import subprocess
+import sys
 import time
+from argparse import SUPPRESS
 from bisect import bisect_left, bisect_right
 from pathlib import Path
 
@@ -19,6 +22,8 @@ class Command(BaseCommand):
         parser.add_argument('--source', required=True)
         parser.add_argument('--fixture', required=True)
         parser.add_argument('--samples', type=int, default=14)
+        parser.add_argument('--cold-processes', type=int, default=0)
+        parser.add_argument('--_cold-kind', choices=('ordinary', 'quality'), help=SUPPRESS)
 
     def handle(self, *args, **options):
         from classification_disagreements.models import BlindQualityAssignment, BlindTaskHandle
@@ -31,6 +36,8 @@ class Command(BaseCommand):
             raise CommandError('An explicitly marked isolated synthetic database is required.')
         if not 1 <= options['samples'] <= 1000:
             raise CommandError('Sample count must be between 1 and 1000.')
+        if not 0 <= options['cold_processes'] <= 10 or (options['_cold_kind'] and options['cold_processes']):
+            raise CommandError('Cold process count must be between 0 and 10.')
         try:
             source = json.loads(Path(options['source']).read_text(encoding='utf-8'))
             fixture = json.loads(Path(options['fixture']).read_text(encoding='utf-8'))
@@ -46,8 +53,25 @@ class Command(BaseCommand):
         client = APIClient()
         client.force_authenticate(actor)
         mode = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': enabled,
-                'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': enabled}
+                'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': enabled,
+                'LATEST_VERSION_CHECK': False}
         with override_settings(**mode):
+            if options['_cold_kind']:
+                kind = options['_cold_kind']
+                task_id = scope['quality_task'] if kind == 'quality' else scope['ordinary_task']
+                candidates = list(BlindTaskHandle.objects.filter(actor_id_frozen=actor.pk,
+                    project_id_frozen=scope['id'], task_id_frozen=task_id)[:2])
+                if (len(candidates) != 1 or BlindQualityAssignment.objects.filter(
+                        assignment_id=candidates[0].assignment_id_frozen).exists() != (kind == 'quality')):
+                    raise CommandError('Synthetic paired work is unavailable.')
+                start = time.perf_counter()
+                with CaptureQueriesContext(connection) as queries:
+                    response = client.get(f'/api/tasks/blind/{candidates[0].task_handle}/')
+                elapsed = (time.perf_counter() - start) * 1000
+                if response.status_code != 200:
+                    raise CommandError('Synthetic paired read failed.')
+                self.stdout.write(json.dumps({'cold_sample': kind, 'ms': elapsed, 'queries': len(queries)}))
+                return
             listing = client.get(f"/api/projects/{scope['id']}/blind-work/")
             if listing.status_code != 200:
                 raise CommandError('Synthetic work list is unavailable.')
@@ -96,3 +120,42 @@ class Command(BaseCommand):
                        for value in quality) / (len(ordinary) * len(quality))
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
+            cold = {'ordinary': [], 'quality': []}
+            manage = Path(__file__).resolve().parents[3] / 'manage.py'
+            for iteration in range(options['cold_processes']):
+                for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+                    try:
+                        result = subprocess.run([
+                            sys.executable, str(manage), 'measure_classification_blind_e2e',
+                            '--source', options['source'], '--fixture', options['fixture'], '--_cold-kind', kind,
+                        ], capture_output=True, text=True, encoding='utf-8', timeout=60, check=True,
+                            env={**os.environ, 'LATEST_VERSION_CHECK': 'false', 'PYTHONIOENCODING': 'utf-8'})
+                        samples = []
+                        for line in result.stdout.splitlines():
+                            try:
+                                value = json.loads(line)
+                            except ValueError:
+                                continue
+                            if isinstance(value, dict) and value.get('cold_sample') == kind:
+                                samples.append(value)
+                        if (len(samples) != 1 or type(samples[0].get('ms')) not in (int, float)
+                                or type(samples[0].get('queries')) is not int):
+                            raise ValueError('Invalid child sample')
+                    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                        raise CommandError('Synthetic cold-process measurement failed.') from exc
+                    cold[kind].append((samples[0]['ms'], samples[0]['queries']))
+            if options['cold_processes']:
+                for kind, samples in cold.items():
+                    self.stdout.write(json.dumps({'kind': kind, 'mode': 'fresh-process', 'samples': len(samples),
+                        'median_ms': round(statistics.median(sample[0] for sample in samples), 1),
+                        'min_ms': round(min(sample[0] for sample in samples), 1),
+                        'max_ms': round(max(sample[0] for sample in samples), 1),
+                        'queries': sorted({sample[1] for sample in samples}), 'database_cache': 'shared',
+                        'diagnostic_only': True}))
+                ordinary = sorted(value[0] for value in cold['ordinary'])
+                quality = [value[0] for value in cold['quality']]
+                rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
+                           for value in quality) / (len(ordinary) * len(quality))
+                self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'fresh-process',
+                    'rank_probability': round(rank, 4), 'samples_per_kind': len(quality),
+                    'database_cache': 'shared', 'diagnostic_only': True}))

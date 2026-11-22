@@ -694,6 +694,14 @@ reads and reports aggregate latency and query counts without returning handles.
 It requires `TEST_ENVIRONMENT`, the explicit synthetic fixture flag and the
 synthetic database name. It is not a production measurement or an acceptance
 threshold; the command cannot prove the absence of a timing side channel.
+The optional `--cold-processes` argument runs up to ten first reads of each
+purpose in fresh application processes, alternating their order. These reads
+include first-request application initialization, while the database and its
+cache remain shared; the report labels that limitation and remains diagnostic.
+In an isolated PostgreSQL run, 100 warm pairs measured 28.6 ms ordinary and
+40.5 ms quality medians, with a 0.9884 quality-versus-ordinary rank statistic.
+Four fresh-process pairs measured 96.2 ms and 124.9 ms medians respectively;
+the small cold sample and shared database cache cannot establish indistinguishability.
 The existing personal-work flow can consume that store and open the editor by
 handle when its caller explicitly supplies the disabled protocol mode. A
 synthetic browser harness has exercised ordinary work in English and Chinese,
