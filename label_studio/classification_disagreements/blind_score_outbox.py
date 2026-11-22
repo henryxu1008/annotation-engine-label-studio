@@ -92,7 +92,7 @@ def reconcile(*, limit=50, stale_seconds=600):
     cutoff = timezone.now() - timedelta(seconds=stale_seconds)
     ids = list(BlindScoreOutbox.objects.filter(
         Q(state='pending') | Q(state='queued', queued_at__lt=cutoff) | Q(state='queued', queued_at__isnull=True),
-    ).order_by('pk').values_list('pk', flat=True)[:limit])
+    ).order_by('updated_at', 'pk').values_list('pk', flat=True)[:limit])
     for outbox_id in ids:
         with transaction.atomic():
             row = BlindScoreOutbox.objects.select_for_update().filter(pk=outbox_id).first()
@@ -102,5 +102,8 @@ def reconcile(*, limit=50, stale_seconds=600):
                 row.state, row.token, row.queued_at = 'pending', uuid4(), None
                 row.save(update_fields=['state', 'token', 'queued_at', 'updated_at'])
             if row.state == 'pending':
+                # Rotate attempts even when enqueue fails. Otherwise a bounded
+                # page of permanently failing records can starve later work.
+                row.save(update_fields=['updated_at'])
                 transaction.on_commit(lambda pk=row.pk: dispatch(pk))
     return len(ids)

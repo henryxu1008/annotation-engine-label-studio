@@ -777,6 +777,8 @@ explicit degraded behavior still require validation.
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.
+A failed enqueue remains pending and rotates behind older unattempted records,
+so a repeatedly failing row does not monopolize a bounded retry page.
 A worker must also consume the configured approved-export RQ queue. Installing
 the example timer, validating permissions, inspecting service failures and
 verifying the actual worker are deployment operations; the source files do not

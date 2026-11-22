@@ -3776,6 +3776,36 @@ class TestBlindQualityBoundary(APITestCase):
         assert row.state == 'scored'
         assert BlindGoldScore.objects.filter(submission=submission).count() == 1
 
+    def test_reconcile_rotates_failed_pending_records_before_retry(self):
+        from classification_disagreements.blind_score_outbox import reconcile
+        from classification_disagreements.models import BlindScoreOutbox
+
+        first_submission = Submission.objects.create(
+            assignment=self.assignment, submitted_by=self.annotator, revision=1,
+            result_snapshot=[], result_hash='0' * 64,
+        )
+        second_submission = Submission.objects.create(
+            assignment=self.assignment, submitted_by=self.annotator, revision=2,
+            result_snapshot=[], result_hash='0' * 64,
+        )
+        first = BlindScoreOutbox.objects.create(submission=first_submission)
+        second = BlindScoreOutbox.objects.create(submission=second_submission)
+        BlindScoreOutbox.objects.filter(pk=first.pk).update(updated_at=timezone.now() - timedelta(minutes=2))
+        BlindScoreOutbox.objects.filter(pk=second.pk).update(updated_at=timezone.now() - timedelta(minutes=1))
+
+        with patch('data_export.approved.api_queue') as queue:
+            queue.return_value.enqueue.side_effect = [RuntimeError('synthetic failure'), None]
+            with self.captureOnCommitCallbacks(execute=True):
+                assert reconcile(limit=1) == 1
+            first.refresh_from_db()
+            assert first.state == 'pending'
+            with self.captureOnCommitCallbacks(execute=True):
+                assert reconcile(limit=1) == 1
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert first.state == 'pending'
+        assert second.state == 'queued'
+
     @skipUnless(os.environ.get('LS82_TEST_REDIS_URL'), 'Dedicated synthetic Redis is not configured')
     def test_real_redis_worker_scores_quality_job(self):
         from classification_disagreements.blind_score_outbox import reconcile
