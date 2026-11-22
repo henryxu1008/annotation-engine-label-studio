@@ -508,6 +508,12 @@ user or historical record could reconstruct it. Re-enabling the previous
 implementation after rollback would restore its weaker certificate checks.
 This guard does not implement the common live-read projection or establish
 timing privacy.
+For a completed mixed slot, the completion receipt depends on the retained
+submission and its actor. PostgreSQL updates or deletes of a referenced
+submission take the same exclusive capture fence as other live revocations;
+an in-flight reader therefore completes before that mutation can commit, and
+the next read rechecks the completion. This trigger does not take the fence for
+unrelated submissions. SQLite readers use the existing write reservation.
 The ordinary-binding schema migration disables the current capture generation
 and restores the database guards after the schema change. Once non-mixed
 bindings with null decision fields exist, rolling it back requires a separate

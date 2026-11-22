@@ -4830,6 +4830,112 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_editor_read_completes_before_certificate_revocation(self):
         self._assert_editor_read_fenced_from_revocation(certificate=True)
 
+    def test_completed_mix_read_fences_submission_deletion(self):
+        self._assert_completed_mix_read_fences_submission_change(update=False)
+
+    def test_completed_mix_read_fences_submission_actor_change(self):
+        self._assert_completed_mix_read_fences_submission_change(update=True)
+
+    def _assert_completed_mix_read_fences_submission_change(self, *, update):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_editor_api
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        organization = fixtures.OrganizationFactory()
+        manager = organization.created_by
+        project = ProjectFactory(organization=organization, created_by=manager)
+        self.organization, self.manager, self.project = organization, manager, project
+        self.task = TaskFactory(project=project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        ProjectMember.objects.create(project=project, user=member, role='annotator')
+        carrier = TaskFactory(project=project, data={'text': 'independent source 98765'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{organization.pk}:{project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{organization.pk}:{project.pk}': True}}
+        entered, release, deleting = Event(), Event(), Event()
+        original = blind_editor_api.participant_text_data
+
+        def pause(*args):
+            entered.set()
+            if not release.wait(15):
+                raise AssertionError('editor read was not released')
+            return original(*args)
+
+        def read(token):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(User.objects.get(pk=member.pk))
+                return client.get(f'/api/tasks/blind/{token}/').status_code
+            finally:
+                close_old_connections()
+
+        def change_submission(submission_id):
+            close_old_connections()
+            try:
+                deleting.set()
+                if update:
+                    Submission.objects.filter(pk=submission_id).update(submitted_by=None)
+                else:
+                    Submission.objects.filter(pk=submission_id).delete()
+            finally:
+                close_old_connections()
+
+        def change_unrelated(submission_id):
+            close_old_connections()
+            try:
+                return Submission.objects.filter(pk=submission_id).update(result_hash='1' * 64)
+            finally:
+                close_old_connections()
+
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            chosen = create_mixed_assignment(task=carrier, assignee=member,
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(manager), key=uuid4())
+            handle = issue_handle(principal=local_principal(member), assignment_id=chosen.pk)
+            client = APIClient()
+            client.force_authenticate(member)
+            response = client.post(f'/api/tasks/blind/{handle.task_handle}/annotations/', {
+                'result': answer('Positive'), 'assignment_id': handle.assignment_handle,
+                'assignment_version': chosen.version, 'submit_for_review': True,
+            }, format='json')
+            assert response.status_code == 201, response.data
+            submission_id = Submission.objects.get(assignment=chosen, revision=1).pk
+            unrelated_task = TaskFactory(project=project, data={'text': 'unrelated ordinary submission'})
+            unrelated_assignment = TaskAssignment.objects.create(task=unrelated_task, project=project,
+                                                                 assignee=manager, assigned_by=manager)
+            unrelated = Submission.objects.create(assignment=unrelated_assignment, submitted_by=manager,
+                revision=1, result_snapshot=[], result_hash='0' * 64)
+            assert read(handle.task_handle) == 200
+            with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    reading = pool.submit(read, handle.task_handle)
+                    try:
+                        assert entered.wait(10)
+                        unrelated_update = pool.submit(change_unrelated, unrelated.pk)
+                        assert unrelated_update.result(timeout=5) == 1
+                        removal = pool.submit(change_submission, submission_id)
+                        assert deleting.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            removal.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    assert reading.result(timeout=20) == 200
+                    removal.result(timeout=20)
+            assert read(handle.task_handle) == 404
+
     def test_cross_project_assignment_fences_editor_and_revokes_next_read(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
