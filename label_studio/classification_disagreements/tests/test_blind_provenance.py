@@ -17,6 +17,7 @@ from classification_disagreements.models import (
     BlindCaptureCertificate,
     BlindCaptureEpoch,
     BlindCaptureIdentity,
+    BlindRetiredEvidence,
     BlindProvenanceEvent,
     BlindProvenanceFence,
     ClassificationGoldEvidence,
@@ -117,6 +118,77 @@ class TestBlindProvenance(TestCase):
         assert account_born_after_reference(account_id=after.pk, reference_id=reference.pk)
         User.objects.filter(pk=before.pk).update(date_joined='2099-01-01T00:00:00Z')
         assert not account_born_after_reference(account_id=before.pk, reference_id=reference.pk)
+
+    def test_revoked_account_history_cannot_be_replayed(self):
+        reference = self.reference()
+        member = UserFactory()
+        history = BlindPrivilegeHistory.objects.get(account_id=member.pk)
+        assert account_has_untainted_privilege_history(account_id=member.pk)
+        assert account_born_after_reference(account_id=member.pk, reference_id=reference.pk)
+        history.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindPrivilegeHistory.objects.create(account_id=member.pk, elevated=False,
+                                                   had_assignment=False, first_assignment_id=None)
+        assert not account_has_untainted_privilege_history(account_id=member.pk)
+
+    def test_revoked_account_event_cannot_be_replayed(self):
+        reference = self.reference()
+        member = UserFactory()
+        event = BlindProvenanceEvent.objects.get(kind='account', subject_id=member.pk)
+        sequence = event.sequence
+        event.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindProvenanceEvent.objects.create(kind='account', subject_id=member.pk, sequence=sequence)
+        assert not account_born_after_reference(account_id=member.pk, reference_id=reference.pk)
+
+    def test_revoked_reference_event_cannot_be_replayed(self):
+        reference = self.reference()
+        member = UserFactory()
+        event = BlindProvenanceEvent.objects.get(kind='reference', subject_id=reference.pk)
+        sequence = event.sequence
+        assert account_born_after_reference(account_id=member.pk, reference_id=reference.pk)
+        event.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindProvenanceEvent.objects.create(kind='reference', subject_id=reference.pk, sequence=sequence)
+        assert not account_born_after_reference(account_id=member.pk, reference_id=reference.pk)
+
+    def test_evidence_retirement_is_monotonic_and_transactional(self):
+        member = UserFactory()
+        event = BlindProvenanceEvent.objects.get(kind='account', subject_id=member.pk)
+        event_id = event.pk
+        state = BlindRetiredEvidence.objects.get(kind='account', subject_id=member.pk)
+        assert not state.retired
+        with self.assertRaises(ValueError), transaction.atomic():
+            BlindProvenanceEvent.objects.filter(pk=event_id).delete()
+            assert BlindRetiredEvidence.objects.get(pk=state.pk).retired
+            raise ValueError('rollback')
+        assert not BlindRetiredEvidence.objects.get(pk=state.pk).retired
+        assert BlindProvenanceEvent.objects.filter(pk=event_id).exists()
+        BlindProvenanceEvent.objects.filter(pk=event_id).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindRetiredEvidence.objects.filter(pk=state.pk).update(retired=False)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindRetiredEvidence.objects.filter(pk=state.pk).update(id=state.pk + 100000)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindRetiredEvidence.objects.filter(pk=state.pk).delete()
+        if connection.vendor == 'sqlite':
+            table = connection.ops.quote_name(BlindRetiredEvidence._meta.db_table)
+            with self.assertRaises(DatabaseError), transaction.atomic(), connection.cursor() as cursor:
+                cursor.execute(f'INSERT OR REPLACE INTO {table} (id, kind, subject_id, retired) VALUES (%s, %s, %s, %s)',
+                               [state.pk, 'account', member.pk, False])
+
+    def test_revoked_evidence_does_not_block_reused_ordinary_account(self):
+        member = UserFactory()
+        account_id = member.pk
+        User.objects.filter(pk=account_id).delete()
+        BlindCaptureCertificate.objects.filter(account_id=account_id).delete()
+        BlindPrivilegeHistory.objects.filter(account_id=account_id).delete()
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).delete()
+        replacement = UserFactory(id=account_id)
+        assert replacement.pk == account_id
+        assert not account_has_untainted_privilege_history(account_id=account_id)
+        assert BlindPrivilegeHistory.objects.get(account_id=account_id).elevated
+        assert not BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).exists()
 
     def test_reused_account_id_cannot_inherit_eligibility_or_replace_birth_evidence(self):
         reference = self.reference()
@@ -396,6 +468,7 @@ class SyntheticTransactionTestCase(TransactionTestCase):
                     cursor.execute(sql)
 
 
+@skipUnless(connection.vendor == 'sqlite', 'SQLite test database flush guard')
 class TestCaptureIdentityTestDatabaseFlush(TransactionTestCase):
     def test_a_django_can_flush_after_creating_an_account(self):
         member = UserFactory()
@@ -411,6 +484,78 @@ class TestCaptureIdentityTestDatabaseFlush(TransactionTestCase):
 class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
     def setUp(self):
         enable_test_capture()
+
+    def test_retirement_fences_concurrent_replay_with_old_snapshot(self):
+        for kind in ('account', 'reference', 'privilege'):
+            with self.subTest(kind=kind):
+                member = UserFactory()
+                if kind == 'account':
+                    original = BlindProvenanceEvent.objects.get(kind='account', subject_id=member.pk)
+                    values = {'kind': 'account', 'subject_id': member.pk, 'sequence': original.sequence}
+                    model = BlindProvenanceEvent
+                    subject_id = member.pk
+                elif kind == 'reference':
+                    project = ProjectFactory(created_by=member)
+                    reference = ClassificationGoldEvidence.objects.create(
+                        project=project, created_by=member, actor_id_frozen=member.pk,
+                        principal='local:test', principal_source='local', kind='reference', idempotency_key=uuid4(),
+                        request_hash='0' * 64, manifest={}, manifest_hash='1' * 64,
+                    )
+                    original = BlindProvenanceEvent.objects.get(kind='reference', subject_id=reference.pk)
+                    values = {'kind': 'reference', 'subject_id': reference.pk, 'sequence': original.sequence}
+                    model = BlindProvenanceEvent
+                    subject_id = reference.pk
+                else:
+                    original = BlindPrivilegeHistory.objects.get(account_id=member.pk)
+                    values = {'account_id': member.pk, 'elevated': False,
+                              'had_assignment': False, 'first_assignment_id': None}
+                    model = BlindPrivilegeHistory
+                    subject_id = member.pk
+                snapshot, deleted, attempting, release = Event(), Event(), Event(), Event()
+
+                def replay():
+                    close_old_connections()
+                    try:
+                        with transaction.atomic():
+                            with connection.cursor() as cursor:
+                                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                            assert model.objects.filter(pk=original.pk).exists()
+                            snapshot.set()
+                            if not deleted.wait(15):
+                                raise AssertionError('revocation did not start')
+                            attempting.set()
+                            model.objects.create(**values)
+                        return 'replayed'
+                    except DatabaseError:
+                        return 'denied'
+                    finally:
+                        close_old_connections()
+
+                def revoke():
+                    close_old_connections()
+                    try:
+                        with transaction.atomic():
+                            model.objects.filter(pk=original.pk).delete()
+                            deleted.set()
+                            if not release.wait(15):
+                                raise AssertionError('revocation was not released')
+                    finally:
+                        close_old_connections()
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    inserting = pool.submit(replay)
+                    try:
+                        assert snapshot.wait(10)
+                        removing = pool.submit(revoke)
+                        assert deleted.wait(10) and attempting.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            inserting.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    removing.result(timeout=20)
+                    assert inserting.result(timeout=20) == 'denied'
+                assert not model.objects.filter(pk=original.pk).exists()
+                assert BlindRetiredEvidence.objects.get(kind=kind, subject_id=subject_id).retired
 
     def test_epoch_deletion_waits_for_inflight_certificate(self):
         started, release, deleting = Event(), Event(), Event()
@@ -538,6 +683,28 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_evidence_state_migration_backfills_and_preserves_revocation(self):
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0050_blind_completion_submission_fence')])
+        try:
+            member = UserFactory()
+            account_id = member.pk
+            assert BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).exists()
+            assert BlindPrivilegeHistory.objects.filter(account_id=account_id).exists()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        states = dict(BlindRetiredEvidence.objects.filter(subject_id=account_id, kind__in=('account', 'privilege'))
+                      .values_list('kind', 'retired'))
+        assert states == {'account': False, 'privilege': False}
+        assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+        BlindProvenanceEvent.objects.filter(kind='account', subject_id=account_id).delete()
+        assert BlindRetiredEvidence.objects.get(kind='account', subject_id=account_id).retired
+        with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+            MigrationExecutor(connection).migrate([('classification_disagreements', '0050_blind_completion_submission_fence')])
+        assert BlindRetiredEvidence.objects.get(kind='account', subject_id=account_id).retired
+
     def test_capture_identity_migration_backfills_live_and_retained_accounts(self):
         BlindCaptureEpoch.objects.get_or_create(pk=1)
         executor = MigrationExecutor(connection)

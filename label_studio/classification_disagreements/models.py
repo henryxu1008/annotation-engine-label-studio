@@ -66,6 +66,21 @@ class BlindCaptureIdentity(models.Model):
     account_id = models.PositiveBigIntegerField(primary_key=True)
 
 
+class BlindRetiredEvidence(models.Model):
+    """Retain evidence identity and irreversible revocation after deletion."""
+
+    kind = models.CharField(max_length=24)
+    subject_id = models.PositiveBigIntegerField()
+    retired = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['kind', 'subject_id'], name='blind_retired_evidence_unique'),
+            models.CheckConstraint(condition=models.Q(kind__in=['account', 'reference', 'privilege']),
+                                   name='blind_retired_evidence_kind_valid'),
+        ]
+
+
 class BlindAssignmentExposure(models.Model):
     """Forward-only task assignments observed during a certified generation."""
 

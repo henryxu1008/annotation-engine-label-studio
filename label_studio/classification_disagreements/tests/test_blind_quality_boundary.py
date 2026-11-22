@@ -1405,6 +1405,26 @@ class TestBlindQualityBoundary(APITestCase):
         with self.assertRaises(NotFound):
             issue_handle(principal=principal, assignment_id=self.assignment.pk)
 
+    def test_retired_provenance_cannot_restore_stale_quality_handle(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.models import BlindProvenanceEvent
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from rest_framework.exceptions import NotFound
+
+        self.qualified_submission(answer('Positive'))
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        event = BlindProvenanceEvent.objects.get(kind='account', subject_id=self.annotator.pk)
+        sequence = event.sequence
+        event.delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindProvenanceEvent.objects.create(kind='account', subject_id=self.annotator.pk, sequence=sequence)
+        with self.assertRaises(NotFound):
+            resolve_handle(principal=principal, task_handle=handle.task_handle)
+        with self.assertRaises(NotFound):
+            issue_handle(principal=principal, assignment_id=self.assignment.pk)
+
     def test_reissuing_existing_quality_handle_checks_the_live_proof_once(self):
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_provenance

@@ -508,6 +508,16 @@ user or historical record could reconstruct it. Re-enabling the previous
 implementation after rollback would restore its weaker certificate checks.
 This guard does not implement the common live-read projection or establish
 timing privacy.
+An additional retained evidence state records account and reference provenance
+events and account privilege histories. Deleting one atomically retires its
+identity; the retired state cannot be reset or deleted, and recreating the old
+event or unprivileged history is rejected. A reused account ID can still be
+created for ordinary use but cannot regain eligibility from retired evidence.
+The migration disables the current capture generation and backfills evidence
+that still exists; it cannot reconstruct rows deleted before migration. Run it
+with account, evidence and blind-work writes quiesced. Rollback refuses to
+discard retired identities. This is one revocation dependency, not a complete
+shared work-read state or a timing-privacy guarantee.
 For a completed mixed slot, the completion receipt depends on the retained
 submission and its actor. PostgreSQL updates or deletes of a referenced
 submission take the same exclusive capture fence as other live revocations;
