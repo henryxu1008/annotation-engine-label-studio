@@ -4933,6 +4933,9 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_completed_mix_read_fences_submission_actor_change(self):
         self._assert_completed_mix_read_fences_submission_change(update=True)
 
+    def test_completed_mix_read_rejects_direct_state_revocation(self):
+        self._assert_completed_mix_read_fences_submission_change(update='state')
+
     def _assert_completed_mix_read_fences_submission_change(self, *, update):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
@@ -4981,7 +4984,11 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             close_old_connections()
             try:
                 deleting.set()
-                if update:
+                if update == 'state':
+                    from classification_disagreements.models import BlindCompletionReadState
+                    with self.assertRaises(DatabaseError):
+                        BlindCompletionReadState.objects.filter(pk=submission_id).update(revoked=True)
+                elif update:
                     Submission.objects.filter(pk=submission_id).update(submitted_by=None)
                 else:
                     Submission.objects.filter(pk=submission_id).delete()
@@ -5025,12 +5032,18 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                         assert unrelated_update.result(timeout=5) == 1
                         removal = pool.submit(change_submission, submission_id)
                         assert deleting.wait(10)
-                        with self.assertRaises(TimeoutError):
-                            removal.result(timeout=0.3)
+                        if update == 'state':
+                            removal.result(timeout=5)
+                        else:
+                            with self.assertRaises(TimeoutError):
+                                removal.result(timeout=0.3)
                     finally:
                         release.set()
                     assert reading.result(timeout=20) == 200
                     removal.result(timeout=20)
+            if update == 'state':
+                assert read(handle.task_handle) == 200
+                Submission.objects.filter(pk=submission_id).delete()
             assert read(handle.task_handle) == 404
 
     def test_cross_project_assignment_fences_editor_and_revokes_next_read(self):

@@ -783,6 +783,10 @@ ruled out. They require a separate recovery process before further access;
 this migration does not reconstruct their history. Once state exists, rolling
 back this migration is intentionally blocked. This state covers completion
 evidence only and is not the common live-read projection.
+On PostgreSQL the retained state cannot be updated directly: submission
+deletion or identity changes take the capture fence before their trigger
+revokes it. This preserves the lock order while excluding a direct state
+update that could otherwise race a response or deadlock a submission change.
 After adding it, an isolated PostgreSQL diagnostic measured 100 warm pairs:
 ordinary median 29.1 ms and quality median 41.7 ms (rank probability 0.9729).
 Four fresh-process pairs measured medians of 106.1 ms and 121.1 ms; this small
