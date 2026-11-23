@@ -16,8 +16,8 @@ from tasks.models import Task, TaskAssignment
 
 from .blind_reassignment import _lock_admission, _locked_project, create_quality_task
 from .gold_api import checked
-from .models import (BlindAssignmentExposure, BlindCaptureEpoch, BlindMixCompletion, BlindMixDecision, BlindMixEvidence,
-                     BlindQualityAssignment, ClassificationGoldEvidence)
+from .models import (BlindAssignmentExposure, BlindCaptureEpoch, BlindEligibilityProof, BlindMixCompletion,
+                     BlindMixDecision, BlindMixEvidence, BlindQualityAssignment, ClassificationGoldEvidence)
 
 
 def deferred_source_ids(account_id):
@@ -222,42 +222,54 @@ def _create_mixed_assignment(*, task, assignee, references, ratio_basis_points, 
 
 @transaction.atomic
 def reassign_mixed_assignment(*, previous_id, task, assignee, principal, key):
-    """Replace one cancelled, unsubmitted sample using a new atomic mix slot.
+    """Replace cancelled, unsubmitted mixed work using a new atomic slot.
 
-    Only a new eligible member can receive the same frozen reference. A
-    replacement has a fresh ordinary source and its own durable decision; the
-    old task identity is never reassigned directly. One predecessor may have
-    at most one successor, including across retries and concurrent commands.
+    Preserve the original sampling outcome. A selected replacement uses the
+    same frozen reference and a fresh ordinary source; an unselected one
+    reassigns its original ordinary task. One predecessor has at most one
+    successor, including across retries and concurrent commands.
     """
     if type(previous_id) is not int or previous_id <= 0 or not isinstance(key, UUID):
         unavailable()
     project, _ = _locked_project(task.project_id, assignee, principal)
     previous = get_object_or_404(BlindMixDecision.objects.select_for_update(), pk=previous_id, project=project)
-    if (not previous.selected or previous.chosen_assignment_id != previous.chosen_id_frozen
-            or previous.reference_id_frozen is None):
+    if previous.chosen_assignment_id != previous.chosen_id_frozen:
         unavailable()
-    if not BlindMixEvidence.objects.filter(
+    evidence = BlindMixEvidence.objects.filter(
         decision_id_frozen=previous.pk, project_id_frozen=project.pk, source_id_frozen=previous.source_id_frozen,
         source_task_id_frozen=previous.source_task_id_frozen,
         source_assignee_id_frozen=previous.source_assignee_id_frozen, chosen_id_frozen=previous.chosen_id_frozen,
-    ).exists():
-        unavailable()
+    )
     original = get_object_or_404(TaskAssignment.objects.select_for_update(), pk=previous.chosen_id_frozen,
                                  project=project, task__project=project)
     marker = BlindQualityAssignment.objects.filter(assignment_id=original.pk, task_id=original.task_id,
                                                     project_id=project.pk).first()
-    if (original.status != TaskAssignment.Status.CANCELLED or original.submissions.exists() or marker is None
-            or marker.reference_id != previous.reference_id_frozen or not marker.reference_hash):
+    if original.status != TaskAssignment.Status.CANCELLED or original.submissions.exists():
         unavailable()
+    if previous.selected:
+        if (not evidence.exists() or previous.reference_id_frozen is None or marker is None
+                or marker.reference_id != previous.reference_id_frozen or not marker.reference_hash):
+            unavailable()
+        references = [{'id': marker.reference_id, 'hash': marker.reference_hash}]
+        ratio = 10000
+    else:
+        if (previous.reference_id_frozen is not None or previous.chosen_id_frozen != previous.source_id_frozen
+                or original.task_id != previous.source_task_id_frozen or task.pk != original.task_id
+                or BlindMixEvidence.objects.filter(decision_id_frozen=previous.pk).exists()
+                or BlindQualityAssignment.objects.filter(task_id=original.task_id).exists()
+                or BlindEligibilityProof.objects.filter(assignment_id=original.pk).exists()):
+            unavailable()
+        references, ratio = [], 0
     successor = BlindMixDecision.objects.select_for_update().filter(predecessor_id_frozen=previous.pk).first()
     if successor is not None and (successor.project_id != project.pk or successor.key != key):
         unavailable()
     chosen = _create_mixed_assignment(
-        task=task, assignee=assignee, references=[{'id': marker.reference_id, 'hash': marker.reference_hash}],
-        ratio_basis_points=10000, principal=principal, key=key, predecessor_id=previous.pk,
+        task=task, assignee=assignee, references=references,
+        ratio_basis_points=ratio, principal=principal, key=key, predecessor_id=previous.pk,
     )
     decision = BlindMixDecision.objects.get(project=project, key=key)
-    if not decision.selected or decision.predecessor_id_frozen != previous.pk or chosen.pk != decision.chosen_id_frozen:
+    if (decision.selected != previous.selected or decision.predecessor_id_frozen != previous.pk
+            or chosen.pk != decision.chosen_id_frozen):
         unavailable()
     if previous.source_assignment_id != previous.source_id_frozen:
         unavailable()

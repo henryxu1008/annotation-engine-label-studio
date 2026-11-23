@@ -3348,6 +3348,78 @@ class TestBlindQualityBoundary(APITestCase):
                 normal = self.client.post(url, ordinary, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4()))
                 assert normal.status_code == 200 and set(normal.data) == set(result.data)
                 assert not BlindMixDecision.objects.get(pk=normal.data['decision_id']).selected
+                TaskAssignment.objects.get(pk=normal.data['assignment_id']).cancel()
+                normal_url = f"{url}{normal.data['decision_id']}/reassign/"
+                normal_request = {'task_id': tasks[0].pk, 'assignee_id': members[0].pk}
+                normal_key = str(uuid4())
+                normal_retry = self.client.post(normal_url, normal_request, format='json', HTTP_IDEMPOTENCY_KEY=normal_key)
+                assert normal_retry.status_code == 200 and set(normal_retry.data) == set(replaced.data)
+                assert self.client.post(normal_url, normal_request, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=normal_key).data == normal_retry.data
+                assert TaskAssignment.objects.get(pk=normal_retry.data['assignment_id']).task_id == tasks[0].pk
+
+    def test_unselected_mixed_reassignment_preserves_work_and_rechecks_access(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment, reassign_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindMixDecision
+        from projects.models import ProjectMember
+
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(3)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        source = TaskFactory(project=self.project, data={'text': 'original ordinary task'})
+        other = TaskFactory(project=self.project, data={'text': 'different task'})
+        scope = {f'{self.organization.pk}:{self.project.pk}': True}
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': scope,
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': scope}
+        principal, first_key, retry_key = local_principal(self.manager), uuid4(), uuid4()
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ), patch('classification_disagreements.blind_mix.randbelow', return_value=9999) as random:
+            first = create_mixed_assignment(task=source, assignee=members[0], principal=principal, key=first_key,
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=5000)
+            predecessor = BlindMixDecision.objects.get(project=self.project, key=first_key)
+            assert not predecessor.selected and first.task_id == source.pk
+            old_handle = issue_handle(principal=local_principal(members[0]), assignment_id=first.pk)
+            old_url = f'/api/tasks/blind/{old_handle.task_handle}/'
+            self.client.force_authenticate(members[0])
+            assert self.client.get(old_url).status_code == 200
+            args = {'previous_id': predecessor.pk, 'task': source, 'assignee': members[1],
+                    'principal': principal, 'key': retry_key}
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**args)
+            first.cancel()
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**{**args, 'task': other})
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**{**args, 'assignee': members[0]})
+            assert not BlindMixDecision.objects.filter(predecessor_id_frozen=predecessor.pk).exists()
+            replacement = reassign_mixed_assignment(**args)
+            assert replacement.pk != first.pk and replacement.task_id == source.pk
+            assert reassign_mixed_assignment(**args).pk == replacement.pk
+            assert random.call_count == 1  # Retrying or reassigning never resamples.
+            assert self.client.get(old_url).status_code == 404
+            new_handle = issue_handle(principal=local_principal(members[1]), assignment_id=replacement.pk)
+            self.client.force_authenticate(members[1])
+            assert self.client.get(old_url).status_code == 404
+            assert self.client.get(f'/api/tasks/blind/{new_handle.task_handle}/').status_code == 200
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**{**args, 'key': uuid4()})
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**{**args, 'assignee': members[2]})
+            with self.assertRaises(PermissionDenied):
+                reassign_mixed_assignment(**{**args, 'principal': local_principal(members[1])})
+            ProjectMember.objects.filter(project=self.project, user=members[1]).update(enabled=False)
+            with self.assertRaises(ValidationError):
+                reassign_mixed_assignment(**args)
+        successor = BlindMixDecision.objects.get(project=self.project, key=retry_key)
+        assert not successor.selected and successor.predecessor_id_frozen == predecessor.pk
+        assert successor.reference_id_frozen is None and successor.chosen_id_frozen == replacement.pk
 
     def test_mixed_reassignment_preserves_reference_and_has_one_idempotent_successor(self):
         from access_control.identity import LocalIdentityProvider
@@ -6142,6 +6214,12 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                                   assignment_handle=results[0][2], assignment_version=assignment.version)
 
     def test_only_one_concurrent_mixed_reassignment_can_commit(self):
+        self._assert_only_one_concurrent_mixed_reassignment(selected=True)
+
+    def test_only_one_concurrent_ordinary_reassignment_can_commit(self):
+        self._assert_only_one_concurrent_mixed_reassignment(selected=False)
+
+    def _assert_only_one_concurrent_mixed_reassignment(self, *, selected):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment, reassign_mixed_assignment
@@ -6171,8 +6249,8 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
         ):
             first = create_mixed_assignment(task=tasks[0], assignee=members[0],
-                references=[{'id': reference.pk, 'hash': reference.manifest_hash}],
-                ratio_basis_points=10000, principal=principal, key=first_key)
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}] if selected else [],
+                ratio_basis_points=10000 if selected else 0, principal=principal, key=first_key)
             first.cancel()
             previous = BlindMixDecision.objects.get(project=self.project, key=first_key)
             start = Event()
@@ -6183,7 +6261,7 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                     if not start.wait(10):
                         raise AssertionError('concurrent reassignment was not released')
                     try:
-                        chosen = reassign_mixed_assignment(previous_id=previous.pk, task=tasks[index],
+                        chosen = reassign_mixed_assignment(previous_id=previous.pk, task=tasks[index] if selected else tasks[0],
                                                            assignee=members[index], principal=principal, key=uuid4())
                         return ('success', chosen.pk)
                     except ValidationError:
@@ -6197,7 +6275,10 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                 results = [item.result(timeout=30) for item in attempts]
         assert sorted(result[0] for result in results) == ['denied', 'success']
         assert BlindMixDecision.objects.filter(predecessor_id_frozen=previous.pk).count() == 1
-        assert TaskAssignment.objects.filter(task_id__in=[tasks[1].pk, tasks[2].pk]).count() == 1
+        if selected:
+            assert TaskAssignment.objects.filter(task_id__in=[tasks[1].pk, tasks[2].pk]).count() == 1
+        else:
+            assert TaskAssignment.objects.filter(task=tasks[0], status__in=TaskAssignment.ACTIVE_STATUSES).count() == 1
 
     def test_privilege_change_waits_for_binding_and_then_rejects(self):
         from projects.models import ProjectMember

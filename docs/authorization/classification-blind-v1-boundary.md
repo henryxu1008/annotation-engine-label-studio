@@ -70,10 +70,15 @@ automatic substitute for that evidence.
    Manager command routes for mixed dispatch and reassignment are wired to the
    internal services but remain hard-disabled pending the timing and resource
    boundary acceptance described below. A default-off setting is an additional
-   gate, not an override of that release block. The replacement command currently
-   handles cancelled selected samples only; unselected ordinary work still needs
-   an explicit compatible reassignment contract before public rollout. Neither
-   the command routes nor their service tests constitute a browser workflow. The marker
+   gate, not an override of that release block. Replacement preserves the
+   original decision: selected work retains its frozen reference and unselected
+   work reuses its original ordinary task, without another random draw. Both
+   require cancellation, a current authorized recipient who has not seen the
+   ordinary source, and one idempotent successor; selected work also requires
+   the existing reference eligibility proof. The successor records a forced
+   0/10000 continuation, not a new sampling probability; the predecessor
+   retains the original ratio and decision for audit.
+   Neither the command routes nor their service tests constitute a browser workflow. The marker
    insert guard rejects prior annotations, drafts and submissions, but by itself
    cannot prove that an already-visible task was never read. Atomic creation
    before assignment exposure, every review and delivery route, in-flight
