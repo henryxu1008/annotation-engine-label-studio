@@ -815,6 +815,12 @@ back this migration is blocked. This identity state covers only assignment
 identity and is not a replacement for live eligibility, reference, exposure,
 membership or decision checks. It does not establish timing privacy or enable
 public dispatch.
+After adding this state, an isolated PostgreSQL fixture measured 100 warm
+pairs: ordinary median 32.7 ms and quality median 47.7 ms, with a 0.9928
+quality-versus-ordinary rank statistic. Four fresh application-process pairs
+measured medians of 109.0 ms and 124.9 ms respectively. These process starts
+shared the database cache and the samples are too small to establish cold
+cache behavior or timing privacy. The remaining difference is a blocker.
 
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same
