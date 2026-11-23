@@ -486,6 +486,46 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
     def setUp(self):
         enable_test_capture()
 
+    def test_privilege_read_state_serializes_invalidation_and_retains_rollback(self):
+        from classification_disagreements.models import BlindPrivilegeReadState
+
+        member = UserFactory()
+        assert not BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+        table = connection.ops.quote_name(BlindPrivilegeReadState._meta.db_table)
+        started = Event()
+
+        def elevate():
+            close_old_connections()
+            try:
+                started.set()
+                BlindPrivilegeHistory.objects.filter(pk=member.pk).update(elevated=True)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(f'SELECT invalidated FROM {table} WHERE account_id = %s FOR SHARE', [member.pk])
+                    assert cursor.fetchone() == (False,)
+                writer = pool.submit(elevate)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+                assert not BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+            writer.result(timeout=20)
+        assert BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindPrivilegeReadState.objects.filter(pk=member.pk).update(invalidated=False)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindPrivilegeReadState.objects.filter(pk=member.pk).delete()
+
+        other = UserFactory()
+        with transaction.atomic():
+            BlindPrivilegeHistory.objects.filter(pk=other.pk).delete()
+            assert BlindPrivilegeReadState.objects.get(pk=other.pk).invalidated
+            transaction.set_rollback(True)
+        assert not BlindPrivilegeReadState.objects.get(pk=other.pk).invalidated
+
     def test_direct_certificate_insert_fences_concurrent_file_exposure(self):
         from classification_disagreements.models import BlindAccountExposureState, BlindProjectFileExposure
 
@@ -710,6 +750,53 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
+    def test_privilege_state_upgrade_waits_for_inflight_account_creation(self):
+        from classification_disagreements.models import BlindPrivilegeReadState
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0061_blind_provenance_sequence_backfill')])
+        started = Event()
+
+        def migrate():
+            close_old_connections()
+            try:
+                started.set()
+                MigrationExecutor(connection).migrate(after)
+            finally:
+                close_old_connections()
+
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    member = UserFactory()
+                    migration = pool.submit(migrate)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        migration.result(timeout=0.3)
+                migration.result(timeout=30)
+            assert not BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL retained privilege state')
+    def test_privilege_state_upgrade_backfills_existing_accounts(self):
+        from classification_disagreements.models import BlindPrivilegeReadState
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0061_blind_provenance_sequence_backfill')])
+        try:
+            clean = UserFactory()
+            elevated = UserFactory(is_staff=True)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert not BlindPrivilegeReadState.objects.get(pk=clean.pk).invalidated
+        assert BlindPrivilegeReadState.objects.get(pk=elevated.pk).invalidated
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindPrivilegeReadState.objects.filter(pk=elevated.pk).update(invalidated=False)
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
     def test_sequence_upgrade_waits_for_inflight_proof_before_reconciliation(self):
         from classification_disagreements.models import BlindEligibilityProof, BlindReadBinding, BlindReadIdentityState

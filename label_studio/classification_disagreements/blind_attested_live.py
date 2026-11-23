@@ -19,7 +19,7 @@ from .models import (
     BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
     BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
-    BlindCompletionReadState, ClassificationGoldEvidence,
+    BlindCompletionReadState, BlindPrivilegeReadState, ClassificationGoldEvidence,
 )
 
 
@@ -35,6 +35,18 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     if not connection.in_atomic_block or connection.vendor not in ('postgresql', 'sqlite'):
         _deny()
     require_capture_fence(fence)
+    privilege_clean = False
+    if connection.vendor == 'postgresql':
+        # Shared row locks permit concurrent readers and make privilege
+        # invalidation wait until the fenced response is assembled. Both work
+        # purposes acquire this lock; ordinary work does not require a clean
+        # quality-eligibility history.
+        table = connection.ops.quote_name(BlindPrivilegeReadState._meta.db_table)
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT invalidated FROM {table} WHERE account_id = %s FOR SHARE',
+                           [assignment.assignee_id])
+            row = cursor.fetchone()
+            privilege_clean = row is not None and not row[0]
     if (binding is None or binding.purpose not in ('ordinary', 'quality')
             or binding.assignment_id_frozen != assignment.pk or binding.task_id_frozen != assignment.task_id
             or binding.project_id_frozen != assignment.project_id or binding.actor_id_frozen != assignment.assignee_id
@@ -86,6 +98,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                     or (binding.decision_id_frozen is not None and not guard['matching_decision'])):
                 _deny()
             return
+        if connection.vendor == 'postgresql' and not privilege_clean:
+            _deny()
         facts = signed['quality']
         value, lengths = facts['proof'], facts['text_lengths']
         generation = value['capture_generation']
@@ -145,8 +159,6 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     checks = {
         'certificate': Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
                                                                       generation=generation)),
-        'history': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
-                                                                elevated=False, had_assignment=True)),
         'proof': Exists(BlindEligibilityProof.objects.filter(assignment_id=assignment.pk,
                                                              manifest_hash=binding.proof_hash)),
         'marker': Exists(BlindQualityAssignment.objects.filter(pk=marker.pk, assignment_id=assignment.pk,
@@ -172,6 +184,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                                     sequence=value['reference_sequence'])),
             reference=Exists(ClassificationGoldEvidence.objects.filter(pk=marker.reference_id,
                              project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
+            history=Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
+                                                                elevated=False, had_assignment=True)),
             file_exposure=Exists(BlindProjectFileExposure.objects.filter(account_id=assignment.assignee_id,
                                                                          generation=generation)),
             label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
@@ -183,10 +197,10 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
              .annotate(**checks).values(*checks).first())
     if (guard is None or (connection.vendor == 'sqlite' and (not all(
-            guard[name] for name in ('account_event', 'reference_event', 'reference'))
+            guard[name] for name in ('account_event', 'reference_event', 'reference', 'history'))
             or guard['file_exposure'] or guard['label_exposure']))
             or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
-            'certificate', 'history', 'proof', 'marker')) or any(guard[name] for name in scopes)
+            'certificate', 'proof', 'marker')) or any(guard[name] for name in scopes)
             or guard['length_exposed']
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['mix'] != guard['mix_history']

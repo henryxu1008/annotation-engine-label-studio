@@ -336,6 +336,13 @@ class BlindAccountExposureState(models.Model):
     label_exposed = models.BooleanField(default=False)
 
 
+class BlindPrivilegeReadState(models.Model):
+    """Retained account privilege status for transaction-fenced reads."""
+
+    account_id = models.PositiveBigIntegerField(primary_key=True)
+    invalidated = models.BooleanField(default=False)
+
+
 class BlindTaskHandle(models.Model):
     """Retained opaque participant identifiers for one assignment, not a public API."""
 

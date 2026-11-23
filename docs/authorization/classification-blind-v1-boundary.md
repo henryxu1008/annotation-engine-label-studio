@@ -882,7 +882,25 @@ file and label access, rather than reading those event tables a second time.
 The flags are generation-bound, backfilled under migration locks and set in
 the same transaction as each exposure; unsigned work keeps its live path.
 SQLite retains the additional live exposure checks.
-After this change, 100 warm PostgreSQL pairs in another synthetic fixture
+PostgreSQL signed reads also lock a retained per-account privilege state in
+shared mode for both purposes. Privilege history promotion or deletion
+invalidates that state transactionally; a reader holding it finishes before
+the writer commits. The state is backfilled under the history-table migration
+lock and cannot be reset or deleted. Ordinary work does not require a clean
+quality-eligibility history, while quality work requires the state as well as
+the existing live certificate check. A signed proof is issued only after
+assignment history is validated, migration 0057 revoked invalid historical
+bindings, and assignment history cannot be reset. PostgreSQL can therefore
+read the retained privilege state instead of repeating the live privilege
+history predicate. Update triggers do not
+acquire the global capture epoch after locking the history row, avoiding an
+inverted epoch/history lock order. SQLite retains its existing live path.
+After adding the privilege state, 100 warm PostgreSQL pairs in a synthetic
+fixture measured ordinary/quality medians of 32.7/43.4 ms (rank 0.958), with
+20 SQL statements per read. Two fresh-process pairs measured 99.3/120.1 ms,
+sharing the database cache; they do not establish cold-cache behavior.
+Before the privilege state, after file-exposure consolidation, 100 warm
+PostgreSQL pairs in another synthetic fixture
 measured ordinary and quality medians of 28.6 ms and 39.1 ms (rank 0.9681).
 Two fresh-process pairs measured 114.3 ms and 115.8 ms with a shared
 database cache. The very small fresh-process sample does not establish cold

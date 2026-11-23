@@ -288,7 +288,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
         from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
-            BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
+            BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState)
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -347,11 +347,11 @@ class TestBlindQualityBoundary(APITestCase):
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
             fence = lock_capture_epoch_for_read(with_fence=True)
             _ = assignments[0].project.organization_id, assignments[0].task.project_id
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
                 checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding, fence=fence)
             assert checked_quality_proof(assignment=assignments[1], marker=quality_marker, lock_epoch=False)
             _ = assignments[1].project.label_config, assignments[1].task.data
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=fence)
             with transaction.atomic():
@@ -414,6 +414,19 @@ class TestBlindQualityBoundary(APITestCase):
                 task=other_task, assignee=members[1], references=[{'id': reference.pk, 'hash': reference.manifest_hash}],
                 ratio_basis_points=0, principal=local_principal(self.manager), key=uuid4(),
             )
+            same_actor_binding, _ = verify_mixed_read_binding(same_actor_ordinary)
+            with transaction.atomic():
+                BlindPrivilegeHistory.objects.filter(account_id=members[1].pk).delete()
+                if connection.vendor == 'postgresql':
+                    assert BlindPrivilegeReadState.objects.get(pk=members[1].pk).invalidated
+                with self.assertRaises(ValidationError):
+                    checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                          binding=quality_binding, fence=fence)
+                checked_attested_work(assignment=same_actor_ordinary, marker=None,
+                                      binding=same_actor_binding, fence=fence)
+                transaction.set_rollback(True)
+            if connection.vendor == 'postgresql':
+                assert not BlindPrivilegeReadState.objects.get(pk=members[1].pk).invalidated
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             previous_generation = BlindCaptureEpoch.objects.get(pk=1).generation - 1
             BlindProjectFileExposure.objects.create(account_id=members[1].pk, project_id=self.project.pk,
