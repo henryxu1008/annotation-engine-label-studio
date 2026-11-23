@@ -877,6 +877,16 @@ state. The signature, proof, marker and remaining live checks are still
 required. This consolidation does not by itself establish timing privacy.
 SQLite retains the three live checks pending separate resolution of its
 retained-evidence replacement semantics.
+PostgreSQL signed reads also use the retained account exposure flags for
+file and label access, rather than reading those event tables a second time.
+The flags are generation-bound, backfilled under migration locks and set in
+the same transaction as each exposure; unsigned work keeps its live path.
+SQLite retains the additional live exposure checks.
+After this change, 100 warm PostgreSQL pairs in another synthetic fixture
+measured ordinary and quality medians of 28.6 ms and 39.1 ms (rank 0.9681).
+Two fresh-process pairs measured 114.3 ms and 115.8 ms with a shared
+database cache. The very small fresh-process sample does not establish cold
+cache behavior; the warm results still show a substantial timing difference.
 In a separate isolated PostgreSQL fixture after consolidation, 100 warm
 paired reads measured ordinary and quality medians of 29.6 ms and 41.2 ms.
 Two fresh-process pairs measured 109.7 ms and 127.0 ms with a shared database

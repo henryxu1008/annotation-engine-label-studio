@@ -281,7 +281,7 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment
-        from classification_disagreements.blind_provenance import record_label_metadata_access
+        from classification_disagreements.blind_provenance import record_label_metadata_access, record_project_file_access
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.blind_read_attestation import read_attestation
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
@@ -421,6 +421,18 @@ class TestBlindQualityBoundary(APITestCase):
             BlindLabelExposure.objects.create(account_id=members[1].pk, generation=previous_generation)
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             assert verify_mixed_read_binding(assignments[1])
+            with transaction.atomic():
+                record_project_file_access(account_id=members[1].pk, project_id=self.project.pk)
+                assert BlindAccountExposureState.objects.get(pk=members[1].pk).file_exposed
+                assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                with self.assertRaises(ValidationError):
+                    checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                          binding=quality_binding, fence=fence)
+                assert issue_handle(principal=local_principal(members[1]), assignment_id=same_actor_ordinary.pk)
+                transaction.set_rollback(True)
+            assert not BlindAccountExposureState.objects.get(pk=members[1].pk).file_exposed
+            checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                  fence=fence)
             record_label_metadata_access(account_id=members[1].pk)
             assert BlindAccountExposureState.objects.get(pk=members[1].pk).label_exposed
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked

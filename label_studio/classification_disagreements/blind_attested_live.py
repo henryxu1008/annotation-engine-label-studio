@@ -140,6 +140,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     # migrations 0057/0061 backfill invalid history and deletion triggers
     # revoke read_identity under the caller's capture fence. Keep the live
     # proof/marker checks and all conditions not represented by that state.
+    # For PostgreSQL, exposure_clean uses the generation-bound flags that are
+    # set by file/label exposure triggers in the same fenced transaction.
     checks = {
         'certificate': Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
                                                                       generation=generation)),
@@ -151,10 +153,6 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                           task_id=assignment.task_id, project_id=assignment.project_id,
                           assignee_id=assignment.assignee_id, reference_id=marker.reference_id,
                           reference_hash=marker.reference_hash)),
-        'file_exposure': Exists(BlindProjectFileExposure.objects.filter(account_id=assignment.assignee_id,
-                                                                         generation=generation)),
-        'label_exposure': Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
-                                                                   generation=generation)),
         'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
                                    task_id=value.get('source_task_id'), generation=generation)),
         'first_assignment': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
@@ -174,17 +172,22 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                                     sequence=value['reference_sequence'])),
             reference=Exists(ClassificationGoldEvidence.objects.filter(pk=marker.reference_id,
                              project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
+            file_exposure=Exists(BlindProjectFileExposure.objects.filter(account_id=assignment.assignee_id,
+                                                                         generation=generation)),
+            label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
+                                                                   generation=generation)),
         )
     checks.update(common)
     scopes = _external_scope_checks()
     checks.update(scopes)
     guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
              .annotate(**checks).values(*checks).first())
-    if (guard is None or (connection.vendor == 'sqlite' and not all(
-            guard[name] for name in ('account_event', 'reference_event', 'reference')))
+    if (guard is None or (connection.vendor == 'sqlite' and (not all(
+            guard[name] for name in ('account_event', 'reference_event', 'reference'))
+            or guard['file_exposure'] or guard['label_exposure']))
             or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
             'certificate', 'history', 'proof', 'marker')) or any(guard[name] for name in scopes)
-            or guard['file_exposure'] or guard['label_exposure'] or guard['length_exposed']
+            or guard['length_exposed']
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['mix'] != guard['mix_history']
             or (binding.decision_id_frozen is None and guard['mix'])
