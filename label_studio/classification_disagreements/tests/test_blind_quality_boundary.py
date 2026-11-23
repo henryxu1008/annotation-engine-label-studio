@@ -1102,6 +1102,18 @@ class TestBlindQualityBoundary(APITestCase):
                                            annotation=annotation, result=oversized)
             assert self.client.get(url).status_code == 404
 
+    def test_data_manager_member_filter_values_have_stable_order(self):
+        from data_manager.functions import get_all_columns
+        from users.models import User
+
+        member_ids = sorted({self.manager.pk, self.annotator.pk})
+        self.project.__dict__['all_members'] = User.objects.filter(pk__in=member_ids).order_by('-id')
+        with patch('data_manager.functions.flag_set', return_value=False):
+            columns = get_all_columns(self.project)['columns']
+        for name in ('annotators', 'updated_by'):
+            column = next(column for column in columns if column['id'] == name)
+            assert list(column['schema']['items']) == member_ids
+
     def test_data_manager_project_state_hides_other_work_for_participants(self):
         from tasks.tests.factories import PredictionFactory
 

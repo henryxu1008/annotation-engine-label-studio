@@ -110,7 +110,7 @@ def get_all_columns(project, *_):
     if remove_members_schema:
         project_members = []
     else:
-        project_members = project.all_members.values_list('id', flat=True)
+        project_members = project.all_members.order_by('id').values_list('id', flat=True)
 
     result['columns'] += [
         {
