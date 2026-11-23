@@ -287,8 +287,9 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
-        from classification_disagreements.models import (BlindCaptureCertificate, BlindReadAttestation, BlindReadBinding,
-                                                          BlindReadIdentityState)
+        from classification_disagreements.models import (BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
+            BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
+            BlindReadBinding, BlindReadIdentityState)
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
         from users.models import User
@@ -370,16 +371,22 @@ class TestBlindQualityBoundary(APITestCase):
             read_url = f'/api/tasks/blind/{handles[1].task_handle}/'
             assert self.client.get(read_url).status_code == 200
             mutations = (
-                lambda: ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete(),
-                lambda: BlindCaptureCertificate.objects.filter(account_id=members[1].pk).delete(),
-                lambda: Project.objects.filter(pk=self.project.pk).update(label_config='<View/>'),
-                lambda: Task.objects.filter(pk=assignments[1].task_id).update(data={'text': 'changed'}),
+                (lambda: ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete(), True),
+                (lambda: BlindCaptureCertificate.objects.filter(account_id=members[1].pk).delete(), True),
+                (lambda: BlindPrivilegeHistory.objects.filter(account_id=members[1].pk).delete(), True),
+                (lambda: BlindProvenanceEvent.objects.filter(kind='account', subject_id=members[1].pk).delete(), True),
+                (lambda: BlindProvenanceEvent.objects.filter(kind='reference', subject_id=reference.pk).delete(), True),
+                (lambda: Project.objects.filter(pk=self.project.pk).update(label_config='<View/>'), False),
+                (lambda: Task.objects.filter(pk=assignments[1].task_id).update(data={'text': 'changed'}), False),
             )
-            for mutate in mutations:
+            for mutate, retained in mutations:
                 with transaction.atomic():
                     mutate()
+                    assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked is retained
+                    assert not BlindReadIdentityState.objects.get(pk=assignments[0].pk).revoked
                     assert self.client.get(read_url).status_code == 404
                     transaction.set_rollback(True)
+                assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
                 assert self.client.get(read_url).status_code == 200
             from django.conf import settings
 
@@ -402,7 +409,23 @@ class TestBlindQualityBoundary(APITestCase):
             memberships[0].enabled = False
             memberships[0].save(update_fields=['enabled'])
             assert self.client.get(ordinary_url).status_code == 404
+            other_task = TaskFactory(project=self.project, data={'text': 'ordinary unrelated ' + 'x' * 123})
+            same_actor_ordinary = create_mixed_assignment(
+                task=other_task, assignee=members[1], references=[{'id': reference.pk, 'hash': reference.manifest_hash}],
+                ratio_basis_points=0, principal=local_principal(self.manager), key=uuid4(),
+            )
+            assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+            previous_generation = BlindCaptureEpoch.objects.get(pk=1).generation - 1
+            BlindProjectFileExposure.objects.create(account_id=members[1].pk, project_id=self.project.pk,
+                                                    generation=previous_generation)
+            BlindLabelExposure.objects.create(account_id=members[1].pk, generation=previous_generation)
+            assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+            assert verify_mixed_read_binding(assignments[1])
             record_label_metadata_access(account_id=members[1].pk)
+            assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+            assert not BlindReadIdentityState.objects.get(pk=assignments[0].pk).revoked
+            assert not BlindReadIdentityState.objects.get(pk=same_actor_ordinary.pk).revoked
+            assert issue_handle(principal=local_principal(members[1]), assignment_id=same_actor_ordinary.pk)
             with self.assertRaises(ValidationError):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=fence)
@@ -1693,7 +1716,7 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_collection_prefilter_does_not_verify_exact_reference_text_lengths(self):
         from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
-        from classification_disagreements.models import BlindReferenceTextLength, BlindTextLengthExposure
+        from classification_disagreements.models import BlindReadIdentityState, BlindReferenceTextLength, BlindTextLengthExposure
         from classification_disagreements.tests.test_gold_scoring import answer
 
         self.qualified_submission(answer('Positive'))
@@ -1706,6 +1729,7 @@ class TestBlindQualityBoundary(APITestCase):
                         .values_list('byte_length', flat=True))
         extra = max({0, *occupied}) + 1
         BlindReferenceTextLength.objects.create(reference_id=marker.reference_id, byte_length=extra)
+        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
         # SQL checks for exposed lengths but does not establish that the set
         # exactly matches the frozen reference. The object check must deny.
         assert ids.filter(assignment_id=self.assignment.pk).exists()
@@ -3415,12 +3439,14 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_later_source_assignment_revokes_quality_access_and_scoring(self):
         from classification_disagreements.blind_scoring import score_quality_revision
+        from classification_disagreements.models import BlindReadIdentityState
         from classification_disagreements.tests.test_gold_scoring import answer
 
         reference, submission = self.qualified_submission(answer('Positive'), prior_ordinary=True)
         source = TaskFactory(project=self.project, id=reference.manifest['contents']['source']['task_id'])
         TaskAssignment.objects.create(task=source, project=self.project, assignee=self.annotator,
                                       assigned_by=self.manager)
+        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
         assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
         assert not submission.has_permission(self.annotator)
         with self.assertRaises(ValidationError):
@@ -3484,12 +3510,14 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_later_matching_text_revokes_quality_and_scoring(self):
         from classification_disagreements.blind_scoring import score_quality_revision
+        from classification_disagreements.models import BlindReadIdentityState
         from classification_disagreements.tests.test_gold_scoring import answer
 
         reference, submission = self.qualified_submission(answer('Positive'), prior_ordinary=True)
         ordinary = TaskAssignment.objects.get(assignee=self.annotator, project=self.project,
                                                status=TaskAssignment.Status.ASSIGNED)
         Task.objects.filter(pk=ordinary.task_id).update(data=reference.manifest['contents']['task_data'])
+        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
         assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
         assert not submission.has_permission(self.annotator)
         with self.assertRaises(ValidationError):
@@ -3497,7 +3525,7 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_project_upload_read_revokes_quality_without_blocking_file(self):
         from classification_disagreements.blind_scoring import score_quality_revision
-        from classification_disagreements.models import BlindCaptureEpoch, BlindProjectFileExposure
+        from classification_disagreements.models import BlindCaptureEpoch, BlindProjectFileExposure, BlindReadIdentityState
         from classification_disagreements.tests.test_gold_scoring import answer
         from data_import.models import FileUpload
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -3514,6 +3542,7 @@ class TestBlindQualityBoundary(APITestCase):
             generation = BlindCaptureEpoch.objects.get(pk=1).generation
             exposure = BlindProjectFileExposure.objects.get(account_id=self.annotator.pk,
                                                             project_id=self.project.pk, generation=generation)
+            assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
             assert not submission.has_permission(self.annotator)
             with self.assertRaises(ValidationError):
@@ -5349,6 +5378,7 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_provenance import record_label_metadata_access
         from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadIdentityState
         from projects.models import ProjectMember
         from rest_framework.test import APIClient
         from users.models import User
@@ -5417,6 +5447,7 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                         release.set()
                     assert reading.result(timeout=20) == 200
                     exposure.result(timeout=20)
+            assert BlindReadIdentityState.objects.get(pk=chosen.pk).revoked
             assert read(handle) == 404
 
     def test_annotator_directory_rechecks_membership_after_waiting_for_project_lock(self):

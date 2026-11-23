@@ -296,6 +296,8 @@ class BlindReadBinding(models.Model):
     binding_hash = models.CharField(max_length=64)
 
     class Meta:
+        indexes = [models.Index(fields=['actor_id_frozen', 'purpose'], name='blind_read_actor_scope_idx'),
+                   models.Index(fields=['reference_id_frozen', 'purpose'], name='blind_read_ref_scope_idx')]
         constraints = [models.CheckConstraint(
             condition=(models.Q(purpose='ordinary', reference_id_frozen__isnull=True,
                                 reference_hash__isnull=True, proof_hash__isnull=True)
@@ -319,7 +321,7 @@ class BlindReadAttestation(models.Model):
 
 
 class BlindReadIdentityState(models.Model):
-    """Retained identity and cancellation revocation for bound work."""
+    """Retained identity, cancellation and selected evidence revocation."""
 
     assignment_id = models.PositiveBigIntegerField(primary_key=True)
     revoked = models.BooleanField(default=False)

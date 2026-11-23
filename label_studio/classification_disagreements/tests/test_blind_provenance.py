@@ -684,6 +684,116 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
+    def test_read_evidence_upgrade_fences_inflight_exposure_before_backfill(self):
+        from classification_disagreements.models import BlindProjectFileExposure, BlindReadBinding, BlindReadIdentityState
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0056_blind_read_identity_state')])
+        try:
+            owner = UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            enable_test_capture()
+            member = UserFactory()
+            assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                       assignee=member, assigned_by=owner)
+            BlindReadBinding.objects.create(
+                assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                project_id_frozen=project.pk, actor_id_frozen=member.pk, purpose='quality',
+                reference_id_frozen=reference.pk, reference_hash='1' * 64,
+                proof_hash='2' * 64, binding_hash='3' * 64,
+            )
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            started = Event()
+
+            def migrate():
+                close_old_connections()
+                try:
+                    started.set()
+                    MigrationExecutor(connection).migrate(after)
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    BlindProjectFileExposure.objects.create(account_id=member.pk, project_id=project.pk,
+                                                            generation=generation)
+                    migration = pool.submit(migrate)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        migration.result(timeout=0.3)
+                migration.result(timeout=30)
+            assert BlindReadIdentityState.objects.get(pk=assignment.pk).revoked
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    def test_read_evidence_upgrade_backfills_revoked_quality_without_touching_ordinary(self):
+        from classification_disagreements.models import (BlindAssignmentExposure, BlindEligibilityProof,
+            BlindLabelExposure, BlindProjectFileExposure, BlindReadBinding, BlindReadIdentityState,
+            BlindReferenceTextLength, BlindTextLengthExposure)
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0056_blind_read_identity_state')])
+        try:
+            owner, old_member = UserFactory(), UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            enable_test_capture()
+            file_member, label_member, clean_member, text_member, source_member, unrelated_member = (
+                UserFactory() for _ in range(6)
+            )
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            actors = [file_member, label_member, file_member, clean_member, old_member, clean_member,
+                      text_member, source_member, unrelated_member]
+            purposes = ['quality', 'quality', 'ordinary', 'quality', 'quality', 'quality',
+                        'quality', 'quality', 'quality']
+            assignments = []
+            for index, (member, purpose) in enumerate(zip(actors, purposes)):
+                assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                           assignee=member, assigned_by=owner)
+                assignments.append(assignment)
+                BlindReadBinding.objects.create(
+                    assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                    project_id_frozen=project.pk, actor_id_frozen=member.pk, purpose=purpose,
+                    reference_id_frozen=(reference.pk + 1000000 if index == 5 else reference.pk)
+                    if purpose == 'quality' else None,
+                    reference_hash='1' * 64 if purpose == 'quality' else None,
+                    proof_hash='2' * 64 if purpose == 'quality' else None, binding_hash='3' * 64,
+                )
+            BlindProjectFileExposure.objects.create(account_id=file_member.pk, project_id=project.pk,
+                                                    generation=generation)
+            BlindLabelExposure.objects.create(account_id=label_member.pk, generation=generation)
+            BlindLabelExposure.objects.create(account_id=clean_member.pk, generation=generation - 1)
+            BlindReferenceTextLength.objects.create(reference_id=reference.pk, byte_length=8191)
+            BlindTextLengthExposure.objects.create(account_id=text_member.pk, assignment_id=999999,
+                                                   generation=generation, byte_length=8191)
+            BlindTextLengthExposure.objects.create(account_id=unrelated_member.pk, assignment_id=999998,
+                                                   generation=generation, byte_length=8192)
+            for assignment, source_id, observed_id in ((assignments[7], 9876543, 9876543),
+                                                        (assignments[8], 9876543, 9876544)):
+                BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='2' * 64,
+                    manifest={'rule': 'local-unseen-source/v2', 'source_task_id': source_id})
+                BlindAssignmentExposure.objects.create(account_id=assignment.assignee_id, task_id=observed_id,
+                                                       project_id=project.pk, generation=generation)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert list(BlindReadIdentityState.objects.filter(pk__in=[a.pk for a in assignments])
+                    .order_by('pk').values_list('revoked', flat=True)) == [True, True, False, False, True, True,
+                                                                           True, True, False]
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadIdentityState.objects.filter(pk=assignments[0].pk).update(revoked=False)
+
     def test_read_identity_upgrade_backfills_current_and_missing_assignments(self):
         from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
         from classification_disagreements.models import BlindReadIdentityState
@@ -738,7 +848,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
 
     @skipUnless(connection.vendor in ('postgresql', 'sqlite'), 'Supported blind read databases only')
     def test_exposure_index_migration_resumes_after_existing_matching_index(self):
-        from classification_disagreements.models import BlindProjectFileExposure, BlindTextLengthExposure
+        from classification_disagreements.models import BlindProjectFileExposure, BlindReadBinding, BlindTextLengthExposure
 
         executor = MigrationExecutor(connection)
         after = executor.loader.graph.leaf_nodes()
@@ -752,10 +862,13 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
             with connection.cursor() as cursor:
                 file_indexes = connection.introspection.get_constraints(cursor, BlindProjectFileExposure._meta.db_table)
                 text_indexes = connection.introspection.get_constraints(cursor, BlindTextLengthExposure._meta.db_table)
+                binding_indexes = connection.introspection.get_constraints(cursor, BlindReadBinding._meta.db_table)
             assert file_indexes['blind_file_read_scope_idx']['columns'] == ['account_id', 'generation']
             assert text_indexes['blind_text_read_scope_idx']['columns'] == [
                 'account_id', 'generation', 'byte_length', 'assignment_id',
             ]
+            assert binding_indexes['blind_read_actor_scope_idx']['columns'] == ['actor_id_frozen', 'purpose']
+            assert binding_indexes['blind_read_ref_scope_idx']['columns'] == ['reference_id_frozen', 'purpose']
         finally:
             MigrationExecutor(connection).migrate(after)
 

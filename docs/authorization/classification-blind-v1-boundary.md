@@ -806,16 +806,30 @@ Bound ordinary and quality assignments also have a retained read-identity
 state. Assignment cancellation, deletion or a change to its task, project, assignee or ID
 revokes that state in the same transaction; restoring the old values does not
 restore the binding, while rolling back the change rolls back revocation.
+Deletion of a quality binding's capture certificate, privilege history,
+account/reference provenance event or pinned reference also revokes it
+transactionally, as does a file or label exposure recorded for its
+certified account and generation. Matching text-length exposure, exposure to
+the frozen source task and an additional reference text length revoke the
+quality binding under the same transaction. Ordinary bindings are unaffected by these
+quality-specific events. The migration backfills currently missing or invalid
+history, missing provenance, references or certificates and matching recorded exposures
+while source tables are locked;
+rollback of an event also rolls back the revocation. The state is retained
+even if evidence is later restored. Historical events that are no longer
+present cannot be reconstructed by this backfill.
 Both bound read paths require the retained state in addition to all existing
 live checks. At upgrade, bindings with a currently active matching assignment retain
 their previous access and missing or mismatched assignments are revoked.
 Identity changes before this migration cannot be reconstructed, so the state
 proves continuity only from the upgrade onward. Once state exists, rolling
 back this migration is blocked. This identity state covers only assignment
-identity and is not a replacement for live eligibility, reference, exposure,
-membership or decision checks. It does not establish timing privacy or enable
-public dispatch.
-After adding this state, an isolated PostgreSQL fixture measured 100 warm
+identity and these selected evidence events; it is not a replacement for live
+eligibility, reference, exposure, membership or decision checks. Evidence
+mutations currently update quality bindings only, so their write cost is also
+a possible timing side channel. Neither this state nor these checks establish
+timing privacy or enable public dispatch.
+After adding identity state and before the evidence-state migration, an isolated PostgreSQL fixture measured 100 warm
 pairs: ordinary median 32.7 ms and quality median 47.7 ms, with a 0.9928
 quality-versus-ordinary rank statistic. Four fresh application-process pairs
 measured medians of 109.0 ms and 124.9 ms respectively. These process starts

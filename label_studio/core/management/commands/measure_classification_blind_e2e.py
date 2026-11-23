@@ -14,7 +14,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from rest_framework.test import APIClient
 
@@ -26,6 +26,7 @@ class Command(BaseCommand):
         parser.add_argument('--samples', type=int, default=14)
         parser.add_argument('--cold-processes', type=int, default=0)
         parser.add_argument('--profile-samples', type=int, default=0)
+        parser.add_argument('--exposure-samples', type=int, default=0)
         parser.add_argument('--_cold-kind', choices=('ordinary', 'quality'), help=SUPPRESS)
 
     def handle(self, *args, **options):
@@ -43,6 +44,8 @@ class Command(BaseCommand):
             raise CommandError('Cold process count must be between 0 and 10.')
         if not 0 <= options['profile_samples'] <= 100 or (options['_cold_kind'] and options['profile_samples']):
             raise CommandError('Profile count must be between 0 and 100.')
+        if not 0 <= options['exposure_samples'] <= 500 or (options['_cold_kind'] and options['exposure_samples']):
+            raise CommandError('Exposure sample count must be between 0 and 500.')
         try:
             source = json.loads(Path(options['source']).read_text(encoding='utf-8'))
             fixture = json.loads(Path(options['fixture']).read_text(encoding='utf-8'))
@@ -125,6 +128,56 @@ class Command(BaseCommand):
                        for value in quality) / (len(ordinary) * len(quality))
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
+            if options['exposure_samples']:
+                from classification_disagreements.models import (BlindCaptureCertificate, BlindCaptureEpoch,
+                    BlindLabelExposure, BlindReadBinding, BlindReadIdentityState)
+
+                try:
+                    epoch = BlindCaptureEpoch.objects.get(pk=1, enabled=True)
+                    targets = {}
+                    for kind in ('ordinary', 'quality'):
+                        account = User.objects.get(email=scope['revocations'][kind]['email'])
+                        rows = list(BlindReadBinding.objects.filter(actor_id_frozen=account.pk,
+                            project_id_frozen=scope['id']).values('assignment_id_frozen', 'purpose')[:2])
+                        if (len(rows) != 1 or rows[0]['purpose'] != kind
+                                or not BlindCaptureCertificate.objects.filter(account_id=account.pk,
+                                    generation=epoch.generation).exists()
+                                or BlindLabelExposure.objects.filter(account_id=account.pk,
+                                    generation=epoch.generation).exists()
+                                or not BlindReadIdentityState.objects.filter(pk=rows[0]['assignment_id_frozen'],
+                                    revoked=False).exists()):
+                            raise ValueError('Unexpected synthetic exposure fixture')
+                        targets[kind] = (account.pk, rows[0]['assignment_id_frozen'])
+                except (KeyError, TypeError, ValueError, User.DoesNotExist, BlindCaptureEpoch.DoesNotExist) as exc:
+                    raise CommandError('Synthetic exposure fixture is unavailable.') from exc
+                writes = {kind: [] for kind in targets}
+                for iteration in range(options['exposure_samples'] + 2):
+                    for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+                        account_id, assignment_id = targets[kind]
+                        with transaction.atomic():
+                            start = time.perf_counter()
+                            BlindLabelExposure.objects.create(account_id=account_id, generation=epoch.generation)
+                            elapsed = (time.perf_counter() - start) * 1000
+                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != (kind == 'quality'):
+                                raise CommandError('Synthetic exposure revocation is inconsistent.')
+                            transaction.set_rollback(True)
+                        writes[kind].append(elapsed)
+                for kind, values in writes.items():
+                    samples = values[2:]
+                    account_id, assignment_id = targets[kind]
+                    if (BlindLabelExposure.objects.filter(account_id=account_id, generation=epoch.generation).exists()
+                            or BlindReadIdentityState.objects.get(pk=assignment_id).revoked):
+                        raise CommandError('Synthetic exposure rollback failed.')
+                    self.stdout.write(json.dumps({'kind': kind, 'mode': 'rolled-back-label-insert',
+                        'samples': len(samples), 'median_ms': round(statistics.median(samples), 2),
+                        'min_ms': round(min(samples), 2), 'max_ms': round(max(samples), 2),
+                        'diagnostic_only': True}))
+                ordinary = sorted(writes['ordinary'][2:])
+                quality = writes['quality'][2:]
+                rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
+                           for value in quality) / (len(ordinary) * len(quality))
+                self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'rolled-back-label-insert',
+                    'rank_probability': round(rank, 4), 'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['profile_samples']:
                 profiles = {kind: cProfile.Profile() for kind in handles}
                 for iteration in range(options['profile_samples']):
