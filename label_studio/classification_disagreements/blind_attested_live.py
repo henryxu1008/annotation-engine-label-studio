@@ -29,10 +29,40 @@ def _deny():
     raise ValidationError({'detail': 'The quality admission evidence is unavailable.'})
 
 
+def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
+    """Read and require both purposes' common facts in the branch's fenced query."""
+    from tasks.models import TaskAssignment
+    from users.models import User
+
+    required = {
+        'active_user': Exists(User.objects.filter(pk=assignment.assignee_id, is_active=True,
+                              active_organization_id=assignment.project.organization_id)),
+        'active_assignment': Exists(TaskAssignment.objects.filter(pk=assignment.pk, task_id=assignment.task_id,
+            project_id=assignment.project_id, assignee_id=assignment.assignee_id,
+            status__in=TaskAssignment.ACTIVE_STATUSES, task__project_id=assignment.project_id)),
+        'binding': Exists(BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash,
+                            assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
+        'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
+    }
+    # Both purposes load this fact; only quality eligibility requires it.
+    exposure_clean = Exists(BlindAccountExposureState.objects.filter(
+        account_id=assignment.assignee_id, generation=OuterRef('generation'),
+        file_exposed=False, label_exposed=False))
+    epoch = BlindCaptureEpoch.objects.filter(pk=1)
+    if binding.purpose == 'quality':
+        if quality_generation is None:
+            _deny()
+        epoch = epoch.filter(enabled=True, generation=quality_generation)
+    guard = (epoch.annotate(**required, exposure_clean=exposure_clean, **checks)
+             .values(*required, 'exposure_clean', *checks).first())
+    if guard is None or not all(guard[name] for name in required):
+        _deny()
+    return guard
+
+
 def checked_attested_work(*, assignment, marker, binding, fence):
     """Check signed work and live fences while caller holds project/task/epoch locks."""
     from tasks.models import Submission, TaskAssignment
-    from users.models import User
 
     if not connection.in_atomic_block or connection.vendor not in ('postgresql', 'sqlite'):
         _deny()
@@ -72,34 +102,20 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         signed = read_attestation(binding, payload=binding.bounded_attestation, has_row=binding.has_attestation)
         if signed is None:
             _deny()
-        common = {
-            'active_user': Exists(User.objects.filter(pk=assignment.assignee_id, is_active=True,
-                                  active_organization_id=assignment.project.organization_id)),
-            'active_assignment': Exists(TaskAssignment.objects.filter(pk=assignment.pk, task_id=assignment.task_id,
-                project_id=assignment.project_id, assignee_id=assignment.assignee_id,
-                status__in=TaskAssignment.ACTIVE_STATUSES, task__project_id=assignment.project_id)),
-            'binding': Exists(BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash,
-                                assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
-            'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
-            'exposure_clean': Exists(BlindAccountExposureState.objects.filter(
-                account_id=assignment.assignee_id, generation=OuterRef('generation'),
-                file_exposed=False, label_exposed=False)),
-        }
         if binding.purpose == 'ordinary':
             markers = BlindQualityAssignment.objects.filter(task_id=assignment.task_id)
             proofs = BlindEligibilityProof.objects.filter(assignment_id=assignment.pk)
             decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
-            common.update(marker=Exists(markers), proof=Exists(proofs), decision=Exists(decisions))
+            checks = {'marker': Exists(markers), 'proof': Exists(proofs), 'decision': Exists(decisions)}
             if binding.decision_id_frozen is not None:
                 matching = decisions.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
                     selected=False, chosen_assignment_id=assignment.pk, source_assignment_id=assignment.pk,
                     source_id_frozen=assignment.pk,
                     source_task_id_frozen=assignment.task_id, source_assignee_id_frozen=assignment.assignee_id,
                     request_hash=binding.decision_request_hash, reference_id_frozen__isnull=True)
-                common['matching_decision'] = Exists(matching)
-            guard = BlindCaptureEpoch.objects.filter(pk=1).annotate(**common).values(*common).first()
-            if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity'))
-                    or guard['marker'] or guard['proof']
+                checks['matching_decision'] = Exists(matching)
+            guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
+            if (guard['marker'] or guard['proof']
                     or (binding.decision_id_frozen is None and guard['decision'])
                     or (binding.decision_id_frozen is not None and not guard['matching_decision'])):
                 _deny()
@@ -201,17 +217,15 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
                                                                    generation=generation)),
         )
-    checks.update(common)
     scopes = _external_scope_checks()
     checks.update(scopes)
-    guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
-             .annotate(**checks).values(*checks).first())
-    if (guard is None or (connection.vendor == 'sqlite' and (not all(
+    guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks, quality_generation=generation)
+    if ((connection.vendor == 'sqlite' and (not all(
             guard[name] for name in ('account_event', 'reference_event', 'reference', 'history', 'certificate'))
             or guard['file_exposure'] or guard['label_exposure']
             or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])))
-            or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
-            'proof', 'marker')) or any(guard[name] for name in scopes)
+            or not all(guard[name] for name in ('exposure_clean', 'proof', 'marker'))
+            or any(guard[name] for name in scopes)
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['length_exposed'] or (rule == 'local-unseen-source/v2' and guard['source_exposure'])
             or guard['mix'] != guard['mix_history']
