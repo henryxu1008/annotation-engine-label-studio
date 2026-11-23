@@ -3080,6 +3080,17 @@ class TestBlindQualityBoundary(APITestCase):
         assert source.status == TaskAssignment.Status.CANCELLED
         assert BlindMixCompletion.objects.filter(decision_id_frozen=decision.pk, submission_id_frozen=submission.pk).exists()
         assert not BlindCompletionReadState.objects.get(pk=submission.pk).revoked
+        signed_read_url = f'/api/tasks/blind/{handle.task_handle}/'
+        with self.settings(**config):
+            assert current_quality_assignment_ids(member.pk).filter(assignment_id=chosen.pk).exists()
+            assert self.client.get(signed_read_url).status_code == 200
+            # A completed read is only valid for the exact released source version.
+            with transaction.atomic():
+                TaskAssignment.objects.filter(pk=source.pk).update(version=source.version + 1)
+                assert not current_quality_assignment_ids(member.pk).filter(assignment_id=chosen.pk).exists()
+                assert self.client.get(signed_read_url).status_code == 404
+                transaction.set_rollback(True)
+            assert self.client.get(signed_read_url).status_code == 200
         if connection.vendor == 'sqlite':
             for model, key in ((BlindCompletionReadState, 'submission_id'), (Submission, 'id')):
                 table = connection.ops.quote_name(model._meta.db_table)
@@ -3552,6 +3563,7 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
         from classification_disagreements.models import BlindMixCompletion, BlindMixDecision
         from projects.models import ProjectMember
 
@@ -3576,7 +3588,13 @@ class TestBlindQualityBoundary(APITestCase):
                 principal=local_principal(self.manager), key=key)
         decision = BlindMixDecision.objects.get(project=self.project, key=key)
         assert Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
-        decision.source_assignment.cancel()
+        handle = issue_handle(principal=local_principal(member), assignment_id=chosen.pk)
+        self.client.force_authenticate(member)
+        read_url = f'/api/tasks/blind/{handle.task_handle}/'
+        with self.settings(**config):
+            assert self.client.get(read_url).status_code == 200
+            decision.source_assignment.cancel()
+            assert self.client.get(read_url).status_code == 404
         assert not Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         assert not Task.objects.for_user(member).filter(pk=ordinary.pk).exists()
         assert not BlindMixCompletion.objects.filter(decision_id_frozen=decision.pk).exists()

@@ -199,7 +199,11 @@ def lock_capture_epoch_for_read(using='default', *, with_fence=False):
 
 
 def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_id, using='default'):
-    """Build the same live-source and completion checks for lists and reads."""
+    """Build shared lifecycle predicates; these do not authorize access alone.
+
+    Signed object callers also constrain the valid decision to their frozen
+    binding. The collection prefilter cannot establish that binding.
+    """
     from tasks.models import Submission, TaskAssignment
 
     mixes = BlindMixDecision.objects.using(using).filter(chosen_id_frozen=assignment_id, selected=True)

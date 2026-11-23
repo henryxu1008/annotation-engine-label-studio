@@ -15,13 +15,13 @@ from .blind_read_attestation import read_attestation
 from .blind_read_binding import FIELDS
 from .blind_provenance import (
     _exact_reference_length_checks, _external_scope_checks, _local_upload_backend_supported,
-    _matching_text_exposures, require_capture_fence,
+    _matching_text_exposures, _mixed_evidence_queries, require_capture_fence,
 )
 from .models import (
     BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
-    BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
-    BlindCompletionReadState, BlindPrivilegeReadState, ClassificationGoldEvidence,
+    BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision,
+    BlindPrivilegeReadState, ClassificationGoldEvidence,
 )
 
 
@@ -62,8 +62,6 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
 
 def checked_attested_work(*, assignment, marker, binding, fence):
     """Check signed work and live fences while caller holds project/task/epoch locks."""
-    from tasks.models import Submission, TaskAssignment
-
     if not connection.in_atomic_block or connection.vendor not in ('postgresql', 'sqlite'):
         _deny()
     require_capture_fence(fence)
@@ -146,30 +144,17 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         _deny()
 
     all_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
-    mixes = all_decisions.filter(selected=True)
-    history = BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)
-    decision = mixes.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
-        chosen_assignment_id=assignment.pk, source_assignment_id=binding.source_id_frozen,
+    mixes, history, valid_mix = _mixed_evidence_queries(
+        account_id=assignment.assignee_id, assignment_id=assignment.pk,
+        project_id=assignment.project_id, reference_id=marker.reference_id,
+    )
+    # Reuse the lifecycle predicates, not a list's authorization result. A
+    # signed read still requires the exact decision and source it attested.
+    bound_mix = valid_mix.filter(
+        pk=binding.decision_id_frozen, source_assignment_id=binding.source_id_frozen,
         source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
-        source_assignee_id_frozen=assignment.assignee_id, request_hash=binding.decision_request_hash,
-        reference_id_frozen=marker.reference_id)
-    matching_history = history.filter(decision_id_frozen=binding.decision_id_frozen,
-        project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
-        source_task_id_frozen=binding.source_task_id_frozen, source_assignee_id_frozen=assignment.assignee_id)
-    source = TaskAssignment.objects.filter(pk=binding.source_id_frozen, project_id=assignment.project_id,
-        task_id=binding.source_task_id_frozen, task__project_id=assignment.project_id,
-        assignee_id=assignment.assignee_id, status__in=TaskAssignment.ACTIVE_STATUSES)
-    released = TaskAssignment.objects.filter(pk=binding.source_id_frozen, project_id=assignment.project_id,
-        task_id=binding.source_task_id_frozen, task__project_id=assignment.project_id,
-        assignee_id=assignment.assignee_id, status=TaskAssignment.Status.CANCELLED,
-        version=OuterRef('source_version_after'))
-    submitted = Submission.objects.filter(pk=OuterRef('submission_id_frozen'), assignment_id=assignment.pk,
-                                          submitted_by_id=assignment.assignee_id)
-    completion_state = BlindCompletionReadState.objects.filter(submission_id=OuterRef('submission_id_frozen'),
-                                                                 revoked=False)
-    completion = BlindMixCompletion.objects.filter(decision_id_frozen=binding.decision_id_frozen,
-        project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
-        chosen_id_frozen=assignment.pk).filter(Exists(released), Exists(submitted), Exists(completion_state))
+        request_hash=binding.decision_request_hash,
+    )
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
     exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
                                        lengths=lengths, assignment_id=assignment.pk)
@@ -191,9 +176,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                           reference_hash=marker.reference_hash)),
         'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
                                    task_id=value.get('source_task_id'), generation=generation)),
-        'any_decision': Exists(all_decisions), 'mix': Exists(mixes), 'mix_history': Exists(history), 'decision': Exists(decision),
-        'matching_history': Exists(matching_history), 'source_active': Exists(source),
-        'completion': Exists(completion),
+        'any_decision': Exists(all_decisions), 'mix': Exists(mixes), 'mix_history': Exists(history),
+        'bound_mix': Exists(bound_mix),
         'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
     }
     # Keep the existing SQLite source checks until its retained-evidence
@@ -231,6 +215,5 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or guard['mix'] != guard['mix_history']
             or (binding.decision_id_frozen is None and guard['any_decision'])
             or (binding.decision_id_frozen is not None and not guard['mix'])
-            or (guard['mix'] and (not guard['decision'] or not guard['matching_history']
-                                  or not (guard['source_active'] or guard['completion'])))):
+            or (guard['mix'] and not guard['bound_mix'])):
         _deny()
