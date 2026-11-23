@@ -694,6 +694,9 @@ reads and reports aggregate latency and query counts without returning handles.
 It requires `TEST_ENVIRONMENT`, the explicit synthetic fixture flag and the
 synthetic database name. It is not a production measurement or an acceptance
 threshold; the command cannot prove the absence of a timing side channel.
+The optional `--profile-samples` runs additional paired synthetic reads under
+Python profiling and reports aggregate function names and timings without task
+contents or handles. Profiling adds overhead and is not a latency measurement.
 The optional `--cold-processes` argument runs up to ten first reads of each
 purpose in fresh application processes, alternating their order. These reads
 include first-request application initialization, while the database and its
@@ -706,6 +709,23 @@ At commit `46c5875`, a fresh isolated PostgreSQL run measured 100 warm pairs:
 27.8 ms ordinary and 41.9 ms quality medians, with rank probability 0.9922.
 Ten fresh-process pairs measured 104.4 ms and 125.9 ms medians (rank 0.83);
 the database cache remained shared and the result is diagnostic only.
+The project-file and text-length exposure tables have indexes aligned with
+their account/generation read predicates; PostgreSQL creates them using Django's
+concurrent index operation. In isolated PostgreSQL experiments with 200,000
+synthetic rows and no matching exposure, the text predicate changed from a
+15.7 ms sequential scan to a 0.07 ms index-only scan, and the file predicate
+from 8.7 ms to 0.07 ms. These worst-case probes are not production estimates
+and do not remove the ordinary-versus-quality timing difference.
+An equivalent 200,000-row in-memory SQLite probe changed the text predicate
+from 12.8 ms to 0.05 ms and the file predicate from 7.8 ms to 0.02 ms; both
+plans used the new covering indexes. These are single diagnostic runs.
+After adding the indexes, a fresh small-fixture PostgreSQL diagnostic still
+measured 37.3 ms ordinary and 52.2 ms quality medians over 100 warm pairs
+(rank 0.9446). Four fresh-process pairs measured 114.3 ms and 136.1 ms
+(rank 0.875) with a shared database cache. In 20 separately profiled reads per
+kind, quality reads invoked Django expression resolution 10,820 times versus
+5,460 for ordinary reads. Profiling overhead prevents treating these numbers
+as production latency or a timing-privacy guarantee.
 The existing personal-work flow can consume that store and open the editor by
 handle when its caller explicitly supplies the disabled protocol mode. A
 synthetic browser harness has exercised ordinary work in English and Chinese,

@@ -106,6 +106,7 @@ class BlindProjectFileExposure(models.Model):
         constraints = [models.UniqueConstraint(
             fields=['account_id', 'project_id', 'generation'], name='blind_project_file_exposure_unique',
         )]
+        indexes = [models.Index(fields=['account_id', 'generation'], name='blind_file_read_scope_idx')]
 
 
 class BlindLabelExposure(models.Model):
@@ -132,6 +133,8 @@ class BlindTextLengthExposure(models.Model):
         constraints = [models.UniqueConstraint(
             fields=['account_id', 'assignment_id', 'generation', 'byte_length'], name='blind_text_length_unique',
         )]
+        indexes = [models.Index(fields=['account_id', 'generation', 'byte_length', 'assignment_id'],
+                                name='blind_text_read_scope_idx')]
 
 
 class BlindReferenceTextLength(models.Model):

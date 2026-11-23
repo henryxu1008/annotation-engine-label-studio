@@ -1,7 +1,9 @@
 """Measure paired blind reads against the explicitly isolated synthetic fixture."""
 
+import cProfile
 import json
 import os
+import pstats
 import statistics
 import subprocess
 import sys
@@ -23,6 +25,7 @@ class Command(BaseCommand):
         parser.add_argument('--fixture', required=True)
         parser.add_argument('--samples', type=int, default=14)
         parser.add_argument('--cold-processes', type=int, default=0)
+        parser.add_argument('--profile-samples', type=int, default=0)
         parser.add_argument('--_cold-kind', choices=('ordinary', 'quality'), help=SUPPRESS)
 
     def handle(self, *args, **options):
@@ -38,6 +41,8 @@ class Command(BaseCommand):
             raise CommandError('Sample count must be between 1 and 1000.')
         if not 0 <= options['cold_processes'] <= 10 or (options['_cold_kind'] and options['cold_processes']):
             raise CommandError('Cold process count must be between 0 and 10.')
+        if not 0 <= options['profile_samples'] <= 100 or (options['_cold_kind'] and options['profile_samples']):
+            raise CommandError('Profile count must be between 0 and 100.')
         try:
             source = json.loads(Path(options['source']).read_text(encoding='utf-8'))
             fixture = json.loads(Path(options['fixture']).read_text(encoding='utf-8'))
@@ -120,6 +125,26 @@ class Command(BaseCommand):
                        for value in quality) / (len(ordinary) * len(quality))
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
+            if options['profile_samples']:
+                profiles = {kind: cProfile.Profile() for kind in handles}
+                for iteration in range(options['profile_samples']):
+                    for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+                        profile = profiles[kind]
+                        profile.enable()
+                        try:
+                            response = client.get(f'/api/tasks/blind/{handles[kind]}/')
+                        finally:
+                            profile.disable()
+                        if response.status_code != 200:
+                            raise CommandError('Synthetic profiled read failed.')
+                for kind, profile in profiles.items():
+                    stats = pstats.Stats(profile)
+                    top = sorted(stats.stats.items(), key=lambda item: item[1][2], reverse=True)[:15]
+                    self.stdout.write(json.dumps({'kind': kind, 'mode': 'cpu-profile',
+                        'samples': options['profile_samples'], 'diagnostic_only': True,
+                        'functions': [{'file': Path(key[0]).name, 'function': key[2],
+                                       'calls': value[1], 'own_ms': round(value[2] * 1000, 1)}
+                                      for key, value in top]}))
             cold = {'ordinary': [], 'quality': []}
             manage = Path(__file__).resolve().parents[3] / 'manage.py'
             for iteration in range(options['cold_processes']):

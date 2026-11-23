@@ -1,9 +1,10 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
-import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Event
-from unittest import TestCase as PlainTestCase, skipUnless
+from unittest import TestCase as PlainTestCase
+from unittest import skipUnless
 from uuid import uuid4
 
 import pytest
@@ -13,13 +14,13 @@ from classification_disagreements.blind_provenance import (
     account_has_untainted_privilege_history,
 )
 from classification_disagreements.models import (
-    BlindPrivilegeHistory,
     BlindCaptureCertificate,
     BlindCaptureEpoch,
     BlindCaptureIdentity,
-    BlindRetiredEvidence,
+    BlindPrivilegeHistory,
     BlindProvenanceEvent,
     BlindProvenanceFence,
+    BlindRetiredEvidence,
     ClassificationGoldEvidence,
 )
 from django.core.management import call_command
@@ -683,6 +684,83 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL concurrent index recovery only')
+    def test_exposure_index_migration_recovers_invalid_concurrent_index(self):
+        from django.conf import settings
+
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT current_database(), rolsuper FROM pg_roles WHERE rolname = current_user')
+            database, superuser = cursor.fetchone()
+        if not settings.TEST_ENVIRONMENT or not database.startswith('test_') or not superuser:
+            self.skipTest('Requires an isolated PostgreSQL test database and test superuser.')
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0053_blind_completion_state_fence')])
+        name = 'blind_file_read_scope_idx'
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('CREATE INDEX blind_file_read_scope_idx ON '
+                               'classification_disagreements_blindprojectfileexposure (account_id, generation)')
+                # Emulate the catalog state left by an interrupted concurrent
+                # build, only in the disposable test database.
+                cursor.execute('UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)', [name])
+            MigrationExecutor(connection).migrate(after)
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = to_regclass(%s)', [name])
+                assert cursor.fetchone() == (True, True)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    @skipUnless(connection.vendor in ('postgresql', 'sqlite'), 'Supported blind read databases only')
+    def test_exposure_index_migration_resumes_after_existing_matching_index(self):
+        from classification_disagreements.models import BlindProjectFileExposure, BlindTextLengthExposure
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0053_blind_completion_state_fence')])
+        q = connection.ops.quote_name
+        table = q(BlindProjectFileExposure._meta.db_table)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f'CREATE INDEX {q("blind_file_read_scope_idx")} ON {table} (account_id, generation)')
+            MigrationExecutor(connection).migrate(after)
+            with connection.cursor() as cursor:
+                file_indexes = connection.introspection.get_constraints(cursor, BlindProjectFileExposure._meta.db_table)
+                text_indexes = connection.introspection.get_constraints(cursor, BlindTextLengthExposure._meta.db_table)
+            assert file_indexes['blind_file_read_scope_idx']['columns'] == ['account_id', 'generation']
+            assert text_indexes['blind_text_read_scope_idx']['columns'] == [
+                'account_id', 'generation', 'byte_length', 'assignment_id',
+            ]
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    @skipUnless(connection.vendor in ('postgresql', 'sqlite'), 'Supported blind read databases only')
+    def test_exposure_index_migration_refuses_a_conflicting_index(self):
+        from classification_disagreements.models import BlindProjectFileExposure
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0053_blind_completion_state_fence')])
+        q = connection.ops.quote_name
+        table = q(BlindProjectFileExposure._meta.db_table)
+        name = q('blind_file_read_scope_idx')
+        try:
+            for definition in ('(generation, account_id)', '(account_id, generation DESC)',
+                               '(account_id, generation)WHERE generation > 0'):
+                with self.subTest(definition=definition):
+                    with connection.cursor() as cursor:
+                        cursor.execute(f'CREATE INDEX {name} ON {table} {definition}')
+                    with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                        MigrationExecutor(connection).migrate(after)
+                    with connection.cursor() as cursor:
+                        existing = connection.introspection.get_constraints(cursor, BlindProjectFileExposure._meta.db_table)
+                        assert 'blind_file_read_scope_idx' in existing
+                        cursor.execute(f'DROP INDEX {name}')
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP INDEX IF EXISTS {name}')
+            MigrationExecutor(connection).migrate(after)
+
     def test_evidence_state_migration_backfills_and_preserves_revocation(self):
         BlindCaptureEpoch.objects.get_or_create(pk=1)
         executor = MigrationExecutor(connection)
