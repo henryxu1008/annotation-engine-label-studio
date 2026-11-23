@@ -2223,6 +2223,10 @@ Fenced signed reads use a byte-bounded binding loader followed by a live
 authorization check; unsigned work retains the original verifier. Upstream
 changes to task/assignment locks, attestation limits, mixed decisions or the
 capture fence must be reviewed against both paths and their negative tests.
+Manager-only mixed-command routes call the existing fenced services, but remain
+hard-disabled even if their separate default-off setting is enabled. Recheck
+identity, role, idempotency, assignment cancellation, and the timing/resource
+boundary before ever removing that release gate.
 
 Local bbox quality and arbitration evidence is separate from Host review and
 release authority and is gated by explicit `fork_review` configuration. Do not

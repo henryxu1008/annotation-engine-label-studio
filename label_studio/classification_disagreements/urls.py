@@ -6,8 +6,11 @@ from .partial_api import PartialAPI
 from .overview_api import OverviewAPI
 from .gold_api import GoldAPI, GoldSourcesAPI
 from .blind_legacy_api import BlindLegacyBindingsAPI
+from .blind_dispatch_api import BlindMixCommandAPI
 
 urlpatterns = [
+    path('gold/mix/', BlindMixCommandAPI.as_view()),
+    path('gold/mix/<int:predecessor_id>/reassign/', BlindMixCommandAPI.as_view()),
     path('gold/legacy-bindings/', BlindLegacyBindingsAPI.as_view()),
     path('gold/', GoldAPI.as_view()),
     path('gold/tasks/<int:task_id>/sources/', GoldSourcesAPI.as_view()),

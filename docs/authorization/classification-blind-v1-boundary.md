@@ -67,7 +67,13 @@ automatic substitute for that evidence.
    reference manifest, classification controls, project configuration and task
    data against the existing frozen evidence and scorer. It is not an admission
    or scoring endpoint; its caller must lock and recheck the mutable scope.
-   There is no production marker-creation or dispatch API. The marker
+   Manager command routes for mixed dispatch and reassignment are wired to the
+   internal services but remain hard-disabled pending the timing and resource
+   boundary acceptance described below. A default-off setting is an additional
+   gate, not an override of that release block. The replacement command currently
+   handles cancelled selected samples only; unselected ordinary work still needs
+   an explicit compatible reassignment contract before public rollout. Neither
+   the command routes nor their service tests constitute a browser workflow. The marker
    insert guard rejects prior annotations, drafts and submissions, but by itself
    cannot prove that an already-visible task was never read. Atomic creation
    before assignment exposure, every review and delivery route, in-flight
@@ -88,8 +94,9 @@ can be enabled; the legacy paths retain their existing behavior.
    Initial binding requires an otherwise untouched task with a single
    assignment. A later database-level reassignment preserves the quality purpose
    and records the new assignee. A default-off internal service now verifies a
-   pinned reference and the prospective local account before reassignment; there
-   is no HTTP route, and the normal assignment service still denies it. The
+   pinned reference and the prospective local account before reassignment; the
+   mixed HTTP command remains hard-disabled, and the normal assignment service
+   still denies direct quality-task reassignment. The
    service can admit a certified member with unrelated past assignments, but
    does not establish that quality and
    ordinary tasks are indistinguishable. The PostgreSQL guard also locks the task when any
@@ -783,7 +790,7 @@ the rejection itself is not a mixed-reassignment workflow. The internal
 `reassign_mixed_assignment` prototype now replaces a cancelled, unsubmitted
 sample with a fresh atomic mix slot for a separately eligible member, preserving
 the frozen reference. A unique, immutable predecessor link permits at most one
-successor and retries use the original command key. It has no public endpoint
+successor and retries use the original command key. Its manager endpoint is hard-disabled
 and does not by itself resolve identity, timing or statistics side channels.
 Different applications or independently mapped principals may not supply this
 proof; unsupported identity providers must fail closed until their contract is

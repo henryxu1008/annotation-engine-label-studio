@@ -3264,6 +3264,91 @@ class TestBlindQualityBoundary(APITestCase):
             assert after_quality['total_annotations_number'] == before_quality['total_annotations_number'] + 1
             assert summary_after == ordinary_summary_after == summary_before
 
+    def test_manager_mix_commands_are_gated_authorized_and_idempotent(self):
+        from access_control.identity import LocalIdentityProvider
+        from classification_disagreements.models import BlindMixDecision
+        from projects.models import ProjectMember
+
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(3)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        tasks = [TaskFactory(project=self.project, data={'text': text}) for text in
+                 ('ordinary slot', 'quality slot', 'replacement slot')]
+        foreign = TaskFactory(project=ProjectFactory(organization=self.organization, created_by=self.manager))
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/mix/'
+        scope = {f'{self.organization.pk}:{self.project.pk}': True}
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True, 'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': scope,
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True, 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': scope,
+                  'ANNOTATION_CLASSIFICATION_BLIND_DISPATCH_ENABLED': True}
+        body = {'task_id': tasks[1].pk, 'assignee_id': members[0].pk,
+                'references': [{'id': reference.pk, 'hash': reference.manifest_hash}], 'ratio_basis_points': 10000}
+        key = str(uuid4())
+        self.client.force_authenticate(self.manager)
+        with self.settings(**config), patch('classification_disagreements.blind_legacy_api.get_identity_provider',
+                                            return_value=LocalIdentityProvider()), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            # The release gate cannot be enabled by deployment settings.
+            assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key).status_code == 404
+            assert not BlindMixDecision.objects.filter(project=self.project).exists()
+            with patch('classification_disagreements.blind_dispatch_api._PUBLIC_MIX_READY', True), patch(
+                'classification_disagreements.blind_mix.randbelow', side_effect=[0, 0, 0, 0],
+            ):
+                with self.settings(ANNOTATION_CLASSIFICATION_BLIND_DISPATCH_ENABLED=False):
+                    assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key).status_code == 404
+                for unauthorized in (self.annotator, self.reviewer, self.other_user):
+                    self.client.force_authenticate(unauthorized)
+                    assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key).status_code in (403, 404)
+                self.client.force_authenticate(self.manager)
+                assert self.client.post(url, body, format='json').status_code == 400
+                assert self.client.post(url, {**body, 'actor_id': self.manager.pk}, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=key).status_code == 400
+                assert self.client.post(url, {**body, 'task_id': foreign.pk}, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=key).status_code == 404
+                assert self.client.post(url, {**body, 'ratio_basis_points': True}, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=key).status_code == 400
+                assert self.client.post(url, {**body, 'references': [{'id': reference.pk, 'hash': 'bad'}]},
+                                        format='json', HTTP_IDEMPOTENCY_KEY=key).status_code == 400
+                outsider = UserFactory(active_organization=self.organization)
+                self.organization.add_user(outsider)
+                assert self.client.post(url, {**body, 'assignee_id': outsider.pk}, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=key).status_code in (400, 404)
+                ProjectMember.objects.filter(project=self.project, user=members[0]).update(enabled=False)
+                assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key).status_code in (400, 404)
+                ProjectMember.objects.filter(project=self.project, user=members[0]).update(enabled=True)
+                result = self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key)
+                assert result.status_code == 200 and result['Cache-Control'] == 'private, no-store'
+                assert set(result.data) == {'decision_id', 'assignment_id'}
+                assert self.client.post(url, body, format='json', HTTP_IDEMPOTENCY_KEY=key).data == result.data
+                changed = {**body, 'assignee_id': members[1].pk}
+                assert self.client.post(url, changed, format='json', HTTP_IDEMPOTENCY_KEY=key).status_code in (400, 404, 409)
+                original = TaskAssignment.objects.get(pk=result.data['assignment_id'])
+                replacement_url = f"{url}{result.data['decision_id']}/reassign/"
+                replacement = {'task_id': tasks[2].pk, 'assignee_id': members[1].pk}
+                replacement_key = str(uuid4())
+                assert self.client.post(replacement_url, replacement, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=replacement_key).status_code == 400
+                original.cancel()
+                replaced = self.client.post(replacement_url, replacement, format='json',
+                                            HTTP_IDEMPOTENCY_KEY=replacement_key)
+                assert replaced.status_code == 200
+                assert self.client.post(replacement_url, replacement, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=replacement_key).data == replaced.data
+                ProjectMember.objects.filter(project=self.project, user=members[1]).update(enabled=False)
+                assert self.client.post(replacement_url, replacement, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=replacement_key).status_code in (400, 404)
+                ProjectMember.objects.filter(project=self.project, user=members[1]).update(enabled=True)
+                assert self.client.post(replacement_url, replacement, format='json',
+                                        HTTP_IDEMPOTENCY_KEY=str(uuid4())).status_code == 400
+                ordinary = {'task_id': tasks[0].pk, 'assignee_id': members[2].pk,
+                            'references': [], 'ratio_basis_points': 0}
+                normal = self.client.post(url, ordinary, format='json', HTTP_IDEMPOTENCY_KEY=str(uuid4()))
+                assert normal.status_code == 200 and set(normal.data) == set(result.data)
+                assert not BlindMixDecision.objects.get(pk=normal.data['decision_id']).selected
+
     def test_mixed_reassignment_preserves_reference_and_has_one_idempotent_successor(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
