@@ -3358,6 +3358,24 @@ class TestBlindQualityBoundary(APITestCase):
                                         HTTP_IDEMPOTENCY_KEY=normal_key).data == normal_retry.data
                 assert TaskAssignment.objects.get(pk=normal_retry.data['assignment_id']).task_id == tasks[0].pk
 
+    def assert_reassigned_editor_denied(self, url, editor, previous, replacement):
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from tasks.models import AnnotationDraft
+
+        assert self.client.get(url).status_code == 404
+        payload = {**editor, 'result': answer('Positive')}
+        # A browser may already hold these original handles and version when
+        # the reassignment happens. Neither of its normal save actions may
+        # mutate the original assignment or the successor.
+        draft = self.client.post(f'{url}drafts', payload, format='json')
+        assert draft.status_code == 404
+        submit = self.client.post(f'{url}annotations/', {**payload, 'submit_for_review': True}, format='json')
+        assert submit.status_code == 404
+        assignment_ids = [previous.pk, replacement.pk]
+        assert not AnnotationDraft.objects.filter(assignment_id__in=assignment_ids).exists()
+        assert not Submission.objects.filter(assignment_id__in=assignment_ids).exists()
+        assert not Annotation.objects.filter(task_id__in=[previous.task_id, replacement.task_id]).exists()
+
     def test_unselected_mixed_reassignment_preserves_work_and_rechecks_access(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
@@ -3388,7 +3406,9 @@ class TestBlindQualityBoundary(APITestCase):
             old_handle = issue_handle(principal=local_principal(members[0]), assignment_id=first.pk)
             old_url = f'/api/tasks/blind/{old_handle.task_handle}/'
             self.client.force_authenticate(members[0])
-            assert self.client.get(old_url).status_code == 200
+            opened = self.client.get(old_url)
+            assert opened.status_code == 200
+            stale_editor = {field: opened.data[field] for field in ('assignment_id', 'assignment_version')}
             args = {'previous_id': predecessor.pk, 'task': source, 'assignee': members[1],
                     'principal': principal, 'key': retry_key}
             with self.assertRaises(ValidationError):
@@ -3403,10 +3423,10 @@ class TestBlindQualityBoundary(APITestCase):
             assert replacement.pk != first.pk and replacement.task_id == source.pk
             assert reassign_mixed_assignment(**args).pk == replacement.pk
             assert random.call_count == 1  # Retrying or reassigning never resamples.
-            assert self.client.get(old_url).status_code == 404
+            self.assert_reassigned_editor_denied(old_url, stale_editor, first, replacement)
             new_handle = issue_handle(principal=local_principal(members[1]), assignment_id=replacement.pk)
             self.client.force_authenticate(members[1])
-            assert self.client.get(old_url).status_code == 404
+            self.assert_reassigned_editor_denied(old_url, stale_editor, first, replacement)
             assert self.client.get(f'/api/tasks/blind/{new_handle.task_handle}/').status_code == 200
             with self.assertRaises(ValidationError):
                 reassign_mixed_assignment(**{**args, 'key': uuid4()})
@@ -3459,14 +3479,16 @@ class TestBlindQualityBoundary(APITestCase):
             old_handle = issue_handle(principal=local_principal(members[0]), assignment_id=first.pk)
             old_url = f'/api/tasks/blind/{old_handle.task_handle}/'
             self.client.force_authenticate(members[0])
-            assert self.client.get(old_url).status_code == 200
+            opened = self.client.get(old_url)
+            assert opened.status_code == 200
+            stale_editor = {field: opened.data[field] for field in ('assignment_id', 'assignment_version')}
             first.cancel()
             replacement = reassign_mixed_assignment(**args)
             assert reassign_mixed_assignment(**args).pk == replacement.pk
-            assert self.client.get(old_url).status_code == 404
+            self.assert_reassigned_editor_denied(old_url, stale_editor, first, replacement)
             new_handle = issue_handle(principal=local_principal(members[1]), assignment_id=replacement.pk)
             self.client.force_authenticate(members[1])
-            assert self.client.get(old_url).status_code == 404
+            self.assert_reassigned_editor_denied(old_url, stale_editor, first, replacement)
             assert self.client.get(f'/api/tasks/blind/{new_handle.task_handle}/').status_code == 200
             assert random.call_count == 4
             with self.assertRaises(ValidationError):
