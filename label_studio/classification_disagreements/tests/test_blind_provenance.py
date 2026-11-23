@@ -526,6 +526,39 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
             transaction.set_rollback(True)
         assert not BlindPrivilegeReadState.objects.get(pk=other.pk).invalidated
 
+    def test_privilege_deletion_waits_for_epoch_and_account_read_fences(self):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import BlindPrivilegeReadState
+
+        member = UserFactory()
+        table = connection.ops.quote_name(BlindPrivilegeReadState._meta.db_table)
+        started = Event()
+
+        def delete():
+            close_old_connections()
+            try:
+                started.set()
+                BlindPrivilegeHistory.objects.filter(pk=member.pk).delete()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                lock_capture_epoch_for_read()
+                writer = pool.submit(delete)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+                # The delete must be waiting on the epoch before it takes the
+                # account row; otherwise this lock would form a deadlock.
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '2s'")
+                    cursor.execute(f'SELECT invalidated FROM {table} WHERE account_id = %s FOR SHARE', [member.pk])
+                    assert cursor.fetchone() == (False,)
+                assert not BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+            writer.result(timeout=20)
+        assert BlindPrivilegeReadState.objects.get(pk=member.pk).invalidated
+
     def test_direct_certificate_insert_fences_concurrent_file_exposure(self):
         from classification_disagreements.models import BlindAccountExposureState, BlindProjectFileExposure
 
