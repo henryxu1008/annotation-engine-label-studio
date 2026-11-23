@@ -219,6 +219,10 @@ class Command(BaseCommand):
                         if (len(samples) != 1 or type(samples[0].get('ms')) not in (int, float)
                                 or type(samples[0].get('queries')) is not int):
                             raise ValueError('Invalid child sample')
+                    except subprocess.TimeoutExpired as exc:
+                        raise CommandError('Synthetic cold-process measurement timed out after 60 seconds.') from exc
+                    except subprocess.CalledProcessError as exc:
+                        raise CommandError('Synthetic cold-process child exited unsuccessfully.') from exc
                     except (OSError, subprocess.SubprocessError, ValueError) as exc:
                         raise CommandError('Synthetic cold-process measurement failed.') from exc
                     cold[kind].append((samples[0]['ms'], samples[0]['queries']))

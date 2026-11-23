@@ -835,6 +835,14 @@ quality-versus-ordinary rank statistic. Four fresh application-process pairs
 measured medians of 109.0 ms and 124.9 ms respectively. These process starts
 shared the database cache and the samples are too small to establish cold
 cache behavior or timing privacy. The remaining difference is a blocker.
+After the evidence revocation migration, a separate isolated PostgreSQL run
+measured 100 warm pairs: ordinary median 31.0 ms and quality median 44.1 ms
+(rank 0.9931). Two fresh application-process pairs, with a shared database
+cache, measured medians 122.3 ms and 145.1 ms. For 100 paired rolled-back
+label-exposure inserts, ordinary and quality medians were 0.45 ms and 0.51 ms
+(rank 0.6621). The write probe measures a database insert, not the full HTTP
+path. These small synthetic samples are diagnostic, not a privacy guarantee;
+both read and write paths need further work before public mixed dispatch.
 
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same
