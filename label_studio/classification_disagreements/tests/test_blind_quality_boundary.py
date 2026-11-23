@@ -344,8 +344,13 @@ class TestBlindQualityBoundary(APITestCase):
                 assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
                 self.client.force_authenticate(member)
                 with patch('classification_disagreements.blind_read_binding.verify_mixed_read_binding',
-                           side_effect=AssertionError('signed read used legacy verification')):
+                           side_effect=AssertionError('signed read used legacy verification')), patch(
+                    'classification_disagreements.blind_read_attestation.read_attestation',
+                    side_effect=AssertionError('loader verified signed evidence'),
+                ), patch('classification_disagreements.blind_attested_live.read_attestation',
+                         wraps=read_attestation) as verify_attestation:
                     assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 200
+                    assert verify_attestation.call_count == 1
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
@@ -382,6 +387,11 @@ class TestBlindQualityBoundary(APITestCase):
             forged_binding.decision_id_frozen = None
             with patch('classification_disagreements.blind_read_binding.load_attested_read_binding',
                        return_value=(forged_binding, {'purpose': 'quality'})):
+                assert self.client.get(read_url).status_code == 404
+            forged_attestation = copy(quality_binding)
+            forged_attestation.bounded_attestation = 'forged'
+            with patch('classification_disagreements.blind_read_binding.load_attested_read_binding',
+                       return_value=(forged_attestation, True)):
                 assert self.client.get(read_url).status_code == 404
             mutations = (
                 (lambda: ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete(), True),

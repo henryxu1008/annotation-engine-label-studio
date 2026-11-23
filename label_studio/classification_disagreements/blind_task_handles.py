@@ -55,15 +55,17 @@ def _validate(principal, assignment, record=None, *, locked_task=False, epoch_fe
         _unavailable()
     from .blind_read_binding import load_attested_read_binding, verify_mixed_read_binding
 
-    verified = None
+    evidence = None
     if epoch_fence is not None:
         from .blind_provenance import require_capture_fence
 
         require_capture_fence(epoch_fence)
-        verified = load_attested_read_binding(assignment=assignment, fence=epoch_fence)
-    if verified is None:
-        verified = verify_mixed_read_binding(assignment)
-    binding = verified[0] if epoch_fence is not None and verified and verified[1] is not None else None
+        evidence = load_attested_read_binding(assignment=assignment, fence=epoch_fence)
+    if evidence is None:
+        evidence = verify_mixed_read_binding(assignment)
+    # A loaded signed row is only a candidate; active_task_assignment performs
+    # the authoritative signature and live checks under this same fence.
+    binding = evidence[0] if epoch_fence is not None and evidence and evidence[1] is not None else None
     if binding is None and not User.objects.filter(pk=actor_id, is_active=True,
             active_organization_id=assignment.project.organization_id).exists():
         _unavailable()

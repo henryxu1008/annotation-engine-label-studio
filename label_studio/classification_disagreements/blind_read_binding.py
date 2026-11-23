@@ -126,10 +126,10 @@ def seal_mixed_read_binding(*, assignment, decision):
 def load_attested_read_binding(*, assignment, fence):
     """Load bounded signed evidence; the caller must perform fenced live checks.
 
-    Absence falls back to the legacy verifier. Oversized or malformed evidence
-    fails closed and is never treated as an unsigned legacy assignment.
+    Absence falls back to the legacy verifier. Oversized evidence fails here;
+    the mandatory live check rejects malformed evidence. Neither is treated as
+    an unsigned legacy assignment.
     """
-    from .blind_read_attestation import read_attestation
     from .blind_provenance import require_capture_fence
     from .gold_api import MAX_BYTES
 
@@ -143,8 +143,12 @@ def load_attested_read_binding(*, assignment, fence):
     ).first()
     if row is None or not row.has_attestation:
         return None
-    signed = read_attestation(row, payload=row.bounded_attestation, has_row=row.has_attestation)
-    return row, signed
+    if row.bounded_attestation is None:
+        _unavailable()
+    # The caller must pass this row to checked_attested_work before granting
+    # access. Verify the signature there exactly once, together with live
+    # authorization under the same fence. This loader grants no authority.
+    return row, True
 
 
 def verify_mixed_read_binding(assignment):

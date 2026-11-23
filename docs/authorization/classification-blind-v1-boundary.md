@@ -910,7 +910,15 @@ marker, proof and mix decision under the transaction fences. An absent
 attestation falls back to the legacy verifier; malformed or oversized signed
 evidence fails closed. This avoids duplicate checks and does not authorize the
 loaded binding before the live check succeeds.
-An isolated PostgreSQL diagnostic after that change measured 100 warm pairs
+The bounded loader now leaves signature verification to that mandatory fenced
+live check, instead of verifying the same payload twice. Regression tests cover
+both purposes, unsigned legacy fallback, and forged and oversized evidence.
+In an isolated synthetic PostgreSQL fixture after this change, 100 warm read
+pairs measured ordinary/quality medians of 26.4/36.2 ms (rank 0.9724); two
+fresh-process pairs measured 121.8/128.1 ms with a shared database cache.
+These diagnostic samples do not show equivalent timing or establish cold-cache
+privacy, and the remaining quality-specific checks still block public dispatch.
+An earlier PostgreSQL diagnostic after the bounded-loader change measured 100 warm pairs
 at 24.1/33.2 ms ordinary/quality median (rank 0.9481), and two fresh-process
 pairs at 95.0/117.4 ms with a shared database cache. The paths remain
 distinguishable and the process samples do not establish cold-cache behavior.
