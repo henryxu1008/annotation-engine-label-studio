@@ -123,6 +123,30 @@ def seal_mixed_read_binding(*, assignment, decision):
     return binding
 
 
+def load_attested_read_binding(*, assignment, fence):
+    """Load bounded signed evidence; the caller must perform fenced live checks.
+
+    Absence falls back to the legacy verifier. Oversized or malformed evidence
+    fails closed and is never treated as an unsigned legacy assignment.
+    """
+    from .blind_read_attestation import read_attestation
+    from .blind_provenance import require_capture_fence
+    from .gold_api import MAX_BYTES
+
+    require_capture_fence(fence)
+    attestations = BlindReadAttestation.objects.filter(assignment_id_frozen=OuterRef('assignment_id_frozen'))
+    size = (Func(Cast('signed_payload', TextField()), function='OCTET_LENGTH', output_field=IntegerField())
+            if connection.vendor == 'postgresql' else Length(Cast('signed_payload', BinaryField())))
+    bounded = attestations.annotate(_bytes=size).filter(_bytes__gte=0, _bytes__lte=MAX_BYTES)
+    row = BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).annotate(
+        has_attestation=Exists(attestations), bounded_attestation=Subquery(bounded.values('signed_payload')[:1]),
+    ).first()
+    if row is None or not row.has_attestation:
+        return None
+    signed = read_attestation(row, payload=row.bounded_attestation, has_row=row.has_attestation)
+    return row, signed
+
+
 def verify_mixed_read_binding(assignment):
     """Check retained binding and current marker/proof identity in one query.
 

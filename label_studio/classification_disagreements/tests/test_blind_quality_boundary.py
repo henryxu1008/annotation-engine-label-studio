@@ -284,7 +284,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_provenance import record_label_metadata_access, record_project_file_access
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.blind_read_attestation import read_attestation
-        from classification_disagreements.blind_read_binding import verify_mixed_read_binding
+        from classification_disagreements.blind_read_binding import load_attested_read_binding, verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
@@ -342,9 +342,15 @@ class TestBlindQualityBoundary(APITestCase):
                        for member, assignment in zip(members, assignments)]
             for member, handle in zip(members, handles):
                 assert resolve_handle(principal=local_principal(member), task_handle=handle.task_handle)
+                self.client.force_authenticate(member)
+                with patch('classification_disagreements.blind_read_binding.verify_mixed_read_binding',
+                           side_effect=AssertionError('signed read used legacy verification')):
+                    assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 200
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
+            with self.assertRaises(RuntimeError):
+                load_attested_read_binding(assignment=assignments[0], fence=None)
             fence = lock_capture_epoch_for_read(with_fence=True)
             _ = assignments[0].project.organization_id, assignments[0].task.project_id
             with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
@@ -370,6 +376,13 @@ class TestBlindQualityBoundary(APITestCase):
             self.client.force_authenticate(members[1])
             read_url = f'/api/tasks/blind/{handles[1].task_handle}/'
             assert self.client.get(read_url).status_code == 200
+            from copy import copy
+
+            forged_binding = copy(quality_binding)
+            forged_binding.decision_id_frozen = None
+            with patch('classification_disagreements.blind_read_binding.load_attested_read_binding',
+                       return_value=(forged_binding, {'purpose': 'quality'})):
+                assert self.client.get(read_url).status_code == 404
             mutations = (
                 (lambda: ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete(), True),
                 (lambda: BlindCaptureCertificate.objects.filter(account_id=members[1].pk).delete(), True),

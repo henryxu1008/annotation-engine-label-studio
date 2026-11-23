@@ -903,6 +903,21 @@ rollback reconciles ledger entries into the old binding state before restoring
 them. The authenticated reference-length set is checked exactly, and the
 immutable proof and marker remain required. SQLite retains its existing write
 and live-read behavior. Timing privacy remains unproven.
+Fenced signed reads now load the immutable binding and byte-bounded signed
+attestation without first building the separate legacy verification query.
+The unified live check still verifies the signature, binding identity,
+marker, proof and mix decision under the transaction fences. An absent
+attestation falls back to the legacy verifier; malformed or oversized signed
+evidence fails closed. This avoids duplicate checks and does not authorize the
+loaded binding before the live check succeeds.
+An isolated PostgreSQL diagnostic after that change measured 100 warm pairs
+at 24.1/33.2 ms ordinary/quality median (rank 0.9481), and two fresh-process
+pairs at 95.0/117.4 ms with a shared database cache. The paths remain
+distinguishable and the process samples do not establish cold-cache behavior.
+After requiring the capture fence in the bounded loader, a second 100-pair
+warm run measured 24.1/34.0 ms (rank 0.9486). Two fresh-process pairs
+measured 106.2/114.3 ms and also shared the database cache. These synthetic
+results do not establish timing privacy.
 Migration recording disables the capture epoch as in the existing capture
 protocol. Operators must not reactivate capture until every serving process
 uses the ledger-checking code; an old process cannot safely use the removed

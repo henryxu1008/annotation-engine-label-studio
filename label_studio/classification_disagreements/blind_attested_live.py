@@ -4,6 +4,8 @@ The existing blind editor uses this for fenced reads; public dispatch remains
 disabled. Static facts require signature verification and immutable identities.
 """
 
+import re
+
 from django.db import connection
 from django.db.models import Exists, OuterRef
 from rest_framework.exceptions import ValidationError
@@ -50,14 +52,18 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     if (binding is None or binding.purpose not in ('ordinary', 'quality')
             or binding.assignment_id_frozen != assignment.pk or binding.task_id_frozen != assignment.task_id
             or binding.project_id_frozen != assignment.project_id or binding.actor_id_frozen != assignment.assignee_id
+            or (binding.decision_id_frozen is None and (binding.source_id_frozen is not None
+                or binding.source_task_id_frozen is not None or binding.decision_request_hash is not None))
+            or (binding.decision_id_frozen is not None
+                and not re.fullmatch(r'[0-9a-f]{64}', binding.decision_request_hash or ''))
             or (binding.purpose == 'ordinary' and (marker is not None or binding.reference_id_frozen is not None
-                or binding.reference_hash is not None or binding.proof_hash is not None
-                or (binding.decision_id_frozen is None and (binding.source_id_frozen is not None
-                    or binding.source_task_id_frozen is not None or binding.decision_request_hash is not None))))
+                or binding.reference_hash is not None or binding.proof_hash is not None))
             or (binding.purpose == 'quality' and (marker is None or marker.assignment_id != assignment.pk
                 or marker.task_id != assignment.task_id or marker.project_id != assignment.project_id
                 or marker.assignee_id != assignment.assignee_id or marker.reference_id != binding.reference_id_frozen
-                or marker.reference_hash != binding.reference_hash))):
+                or marker.reference_hash != binding.reference_hash or type(binding.reference_id_frozen) is not int
+                or binding.reference_id_frozen <= 0 or not re.fullmatch(r'[0-9a-f]{64}', binding.reference_hash or '')
+                or not re.fullmatch(r'[0-9a-f]{64}', binding.proof_hash or '')))):
         _deny()
     try:
         if binding.binding_hash != digest({'schema': 'blind-mixed-read-binding/v1',
@@ -123,7 +129,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     except (KeyError, TypeError, ValueError, OverflowError):
         _deny()
 
-    mixes = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk, selected=True)
+    all_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
+    mixes = all_decisions.filter(selected=True)
     history = BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)
     decision = mixes.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
         chosen_assignment_id=assignment.pk, source_assignment_id=binding.source_id_frozen,
@@ -168,7 +175,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                           reference_hash=marker.reference_hash)),
         'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
                                    task_id=value.get('source_task_id'), generation=generation)),
-        'mix': Exists(mixes), 'mix_history': Exists(history), 'decision': Exists(decision),
+        'any_decision': Exists(all_decisions), 'mix': Exists(mixes), 'mix_history': Exists(history), 'decision': Exists(decision),
         'matching_history': Exists(matching_history), 'source_active': Exists(source),
         'completion': Exists(completion),
         'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
@@ -208,7 +215,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['length_exposed'] or (rule == 'local-unseen-source/v2' and guard['source_exposure'])
             or guard['mix'] != guard['mix_history']
-            or (binding.decision_id_frozen is None and guard['mix'])
+            or (binding.decision_id_frozen is None and guard['any_decision'])
             or (binding.decision_id_frozen is not None and not guard['mix'])
             or (guard['mix'] and (not guard['decision'] or not guard['matching_history']
                                   or not (guard['source_active'] or guard['completion'])))):
