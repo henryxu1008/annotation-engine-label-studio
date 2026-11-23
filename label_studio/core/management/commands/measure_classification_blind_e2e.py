@@ -130,7 +130,8 @@ class Command(BaseCommand):
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['exposure_samples']:
                 from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate,
-                    BlindCaptureEpoch, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState)
+                    BlindCaptureEpoch, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState,
+                    BlindTextLengthExposure)
 
                 try:
                     epoch = BlindCaptureEpoch.objects.get(pk=1, enabled=True)
@@ -181,6 +182,42 @@ class Command(BaseCommand):
                 rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
                            for value in quality) / (len(ordinary) * len(quality))
                 self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'rolled-back-label-insert',
+                    'rank_probability': round(rank, 4), 'samples_per_kind': len(quality), 'diagnostic_only': True}))
+                # A sentinel length conservatively matches every reference. Use the
+                # other synthetic assignment solely to exercise cross-assignment
+                # revocation; the insert and its trigger effects are rolled back.
+                writes = {kind: [] for kind in targets}
+                for iteration in range(options['exposure_samples'] + 2):
+                    for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+                        account_id, assignment_id = targets[kind]
+                        other = 'quality' if kind == 'ordinary' else 'ordinary'
+                        other_assignment = targets[other][1]
+                        with transaction.atomic():
+                            start = time.perf_counter()
+                            BlindTextLengthExposure.objects.create(account_id=account_id,
+                                assignment_id=other_assignment, generation=epoch.generation, byte_length=-1)
+                            elapsed = (time.perf_counter() - start) * 1000
+                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != (kind == 'quality'):
+                                raise CommandError('Synthetic text exposure revocation is inconsistent.')
+                            transaction.set_rollback(True)
+                        writes[kind].append(elapsed)
+                for kind, values in writes.items():
+                    account_id, assignment_id = targets[kind]
+                    other = 'quality' if kind == 'ordinary' else 'ordinary'
+                    if (BlindTextLengthExposure.objects.filter(account_id=account_id,
+                            assignment_id=targets[other][1], generation=epoch.generation, byte_length=-1).exists()
+                            or BlindReadIdentityState.objects.get(pk=assignment_id).revoked):
+                        raise CommandError('Synthetic text exposure rollback failed.')
+                    samples = values[2:]
+                    self.stdout.write(json.dumps({'kind': kind, 'mode': 'rolled-back-text-insert',
+                        'samples': len(samples), 'median_ms': round(statistics.median(samples), 2),
+                        'min_ms': round(min(samples), 2), 'max_ms': round(max(samples), 2),
+                        'diagnostic_only': True}))
+                ordinary = sorted(writes['ordinary'][2:])
+                quality = writes['quality'][2:]
+                rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
+                           for value in quality) / (len(ordinary) * len(quality))
+                self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'rolled-back-text-insert',
                     'rank_probability': round(rank, 4), 'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['profile_samples']:
                 profiles = {kind: cProfile.Profile() for kind in handles}

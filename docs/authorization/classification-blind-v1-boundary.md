@@ -853,6 +853,17 @@ label-exposure inserts, ordinary and quality medians were 0.45 ms and 0.51 ms
 path. These small synthetic samples are diagnostic, not a privacy guarantee;
 both read and write paths need further work before public mixed dispatch.
 
+After the shared account-exposure state, another isolated PostgreSQL run
+measured 20 warm read pairs: ordinary median 31.0 ms and quality median
+44.5 ms (rank 1.0). For 100 paired, rolled-back label inserts both medians
+were 0.49 ms (rank 0.5073). A new cross-assignment sentinel text-exposure
+probe measured 0.50 ms and 0.52 ms respectively (rank 0.612); it also
+verified that the quality binding is revoked in the transaction and that the
+revocation and exposure disappear on rollback. The write probes time database
+inserts, not HTTP requests. They use a tiny synthetic fixture and do not prove
+timing privacy, especially at realistic data volumes. The text trigger still
+updates quality-specific binding state; its write side channel remains open.
+
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same
 submission number or actor is later restored; a rolled-back change does not
