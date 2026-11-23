@@ -129,8 +129,8 @@ class Command(BaseCommand):
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['exposure_samples']:
-                from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate,
-                    BlindCaptureEpoch, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState,
+                from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure,
+                    BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState,
                     BlindTextLengthExposure)
 
                 try:
@@ -197,8 +197,9 @@ class Command(BaseCommand):
                             BlindTextLengthExposure.objects.create(account_id=account_id,
                                 assignment_id=other_assignment, generation=epoch.generation, byte_length=-1)
                             elapsed = (time.perf_counter() - start) * 1000
-                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != (kind == 'quality'):
-                                raise CommandError('Synthetic text exposure revocation is inconsistent.')
+                            expected = connection.vendor == 'sqlite' and kind == 'quality'
+                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != expected:
+                                raise CommandError('Synthetic text exposure state is inconsistent.')
                             transaction.set_rollback(True)
                         writes[kind].append(elapsed)
                 for kind, values in writes.items():
@@ -218,6 +219,47 @@ class Command(BaseCommand):
                 rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
                            for value in quality) / (len(ordinary) * len(quality))
                 self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'rolled-back-text-insert',
+                    'rank_probability': round(rank, 4), 'samples_per_kind': len(quality), 'diagnostic_only': True}))
+                try:
+                    source_task_id = BlindEligibilityProof.objects.get(
+                        assignment_id=targets['quality'][1]).manifest['source_task_id']
+                    if type(source_task_id) is not int or source_task_id <= 0:
+                        raise ValueError('Unexpected synthetic source')
+                    if BlindAssignmentExposure.objects.filter(account_id__in=[v[0] for v in targets.values()],
+                            task_id=source_task_id, generation=epoch.generation).exists():
+                        raise ValueError('Synthetic source is already exposed')
+                except (BlindEligibilityProof.DoesNotExist, KeyError, TypeError, ValueError) as exc:
+                    raise CommandError('Synthetic source exposure fixture is unavailable.') from exc
+                writes = {kind: [] for kind in targets}
+                for iteration in range(options['exposure_samples'] + 2):
+                    for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+                        account_id, assignment_id = targets[kind]
+                        with transaction.atomic():
+                            start = time.perf_counter()
+                            BlindAssignmentExposure.objects.create(account_id=account_id, task_id=source_task_id,
+                                project_id=scope['id'], generation=epoch.generation)
+                            elapsed = (time.perf_counter() - start) * 1000
+                            expected = connection.vendor == 'sqlite' and kind == 'quality'
+                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != expected:
+                                raise CommandError('Synthetic source exposure state is inconsistent.')
+                            transaction.set_rollback(True)
+                        writes[kind].append(elapsed)
+                for kind, values in writes.items():
+                    account_id, assignment_id = targets[kind]
+                    if (BlindAssignmentExposure.objects.filter(account_id=account_id, task_id=source_task_id,
+                            generation=epoch.generation).exists()
+                            or BlindReadIdentityState.objects.get(pk=assignment_id).revoked):
+                        raise CommandError('Synthetic source exposure rollback failed.')
+                    samples = values[2:]
+                    self.stdout.write(json.dumps({'kind': kind, 'mode': 'rolled-back-source-insert',
+                        'samples': len(samples), 'median_ms': round(statistics.median(samples), 2),
+                        'min_ms': round(min(samples), 2), 'max_ms': round(max(samples), 2),
+                        'diagnostic_only': True}))
+                ordinary = sorted(writes['ordinary'][2:])
+                quality = writes['quality'][2:]
+                rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
+                           for value in quality) / (len(ordinary) * len(quality))
+                self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'mode': 'rolled-back-source-insert',
                     'rank_probability': round(rank, 4), 'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['profile_samples']:
                 profiles = {kind: cProfile.Profile() for kind in handles}

@@ -783,6 +783,72 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL exposure-ledger migration')
+    def test_exposure_ledger_downgrade_reconciles_events_before_restoring_triggers(self):
+        from classification_disagreements.models import (
+            BlindAssignmentExposure, BlindEligibilityProof, BlindReadBinding, BlindReadIdentityState,
+            BlindReferenceTextLength, BlindTextLengthExposure,
+        )
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0062_blind_privilege_read_state')])
+        try:
+            owner = UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            BlindReferenceTextLength.objects.create(reference_id=reference.pk, byte_length=1777)
+            enable_test_capture()
+            members = [UserFactory(), UserFactory()]
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            assignments = []
+            for index, member in enumerate(members):
+                assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                           assignee=member, assigned_by=owner)
+                assignments.append(assignment)
+                BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='2' * 64,
+                    manifest={'rule': 'local-unseen-source/v2', 'source_task_id': 987650 + index})
+                BlindReadBinding.objects.create(
+                    assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                    project_id_frozen=project.pk, actor_id_frozen=member.pk, purpose='quality',
+                    reference_id_frozen=reference.pk, reference_hash='1' * 64,
+                    proof_hash='2' * 64, binding_hash='3' * 64,
+                )
+            MigrationExecutor(connection).migrate(after)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            enable_test_capture()
+            # Migration activation advances the capture generation; the
+            # original certified generation remains the one being reconciled.
+            BlindTextLengthExposure.objects.create(account_id=members[1].pk, assignment_id=987654,
+                                                   generation=generation, byte_length=1777)
+            started = Event()
+
+            def downgrade():
+                close_old_connections()
+                try:
+                    started.set()
+                    MigrationExecutor(connection).migrate([('classification_disagreements', '0062_blind_privilege_read_state')])
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    BlindAssignmentExposure.objects.create(account_id=members[0].pk, task_id=987650,
+                                                           project_id=project.pk, generation=generation)
+                    assert all(not BlindReadIdentityState.objects.get(pk=a.pk).revoked for a in assignments)
+                    migration = pool.submit(downgrade)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        migration.result(timeout=0.3)
+                migration.result(timeout=30)
+            assert all(BlindReadIdentityState.objects.get(pk=a.pk).revoked for a in assignments)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
     def test_privilege_state_upgrade_waits_for_inflight_account_creation(self):
         from classification_disagreements.models import BlindPrivilegeReadState

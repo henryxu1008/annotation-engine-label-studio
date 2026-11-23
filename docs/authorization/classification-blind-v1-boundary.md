@@ -832,9 +832,10 @@ bindings; ordinary work remains accessible while quality work fails closed.
 Migration backfills the account state while certificates and exposure tables
 are locked. The state is retained after certificate deletion, only moves toward
 exposure, and cannot be discarded on rollback. Existing binding revocations
-from an earlier migration remain in force. Text, source and reference evidence
-mutations still update quality bindings specifically, and their write cost is
-a possible timing side channel. Neither projection establishes timing privacy
+from an earlier migration remain in force. PostgreSQL text and source exposure
+inserts no longer update quality bindings; fenced reads check the retained
+ledgers. Reference-length changes still update quality bindings specifically.
+Neither projection establishes timing privacy
 or enables public dispatch. Uncertified accounts and unsigned legacy reads
 still use different paths and require separate compatibility and timing work.
 After adding identity state and before the evidence-state migration, an isolated PostgreSQL fixture measured 100 warm
@@ -861,8 +862,8 @@ probe measured 0.50 ms and 0.52 ms respectively (rank 0.612); it also
 verified that the quality binding is revoked in the transaction and that the
 revocation and exposure disappear on rollback. The write probes time database
 inserts, not HTTP requests. They use a tiny synthetic fixture and do not prove
-timing privacy, especially at realistic data volumes. The text trigger still
-updates quality-specific binding state; its write side channel remains open.
+timing privacy, especially at realistic data volumes. This measurement predates
+removal of the purpose-specific PostgreSQL text-exposure trigger.
 The sequence reconciliation migration also compares existing quality proofs'
 account and reference provenance sequences with the current immutable events.
 It retains revocation for mismatches under the migration lock; it does not
@@ -895,15 +896,29 @@ read the retained privilege state instead of repeating the live privilege
 history predicate. Update triggers do not
 acquire the global capture epoch after locking the history row, avoiding an
 inverted epoch/history lock order. SQLite retains its existing live path.
-For PostgreSQL signed reads, source-task and text-length exposures use the
-retained binding state as well. Migration 0057 backfills matching exposures;
-fenced inserts revoke the binding in the same transaction. The authenticated
-reference-length set is still checked exactly against the retained reference
-length rows, and the immutable proof and marker are still required. Capture
-generation and first-assignment continuity are established by the retained
-states, immutable history, and validated signed issuance. SQLite retains the
-live predicates. Text and source exposure writes still have purpose-specific
-revocation work and remain a possible timing side channel.
+For signed reads, source-task and text-length exposures are checked directly
+from immutable generation-scoped ledgers while the capture fence is held.
+PostgreSQL migration 0063 removes the purpose-specific write triggers; its
+rollback reconciles ledger entries into the old binding state before restoring
+them. The authenticated reference-length set is checked exactly, and the
+immutable proof and marker remain required. SQLite retains its existing write
+and live-read behavior. Timing privacy remains unproven.
+Migration recording disables the capture epoch as in the existing capture
+protocol. Operators must not reactivate capture until every serving process
+uses the ledger-checking code; an old process cannot safely use the removed
+per-binding write triggers. This change does not activate or deploy capture.
+After migration 0063, a synthetic PostgreSQL run measured 100 paired,
+rolled-back text-exposure inserts at 0.44/0.44 ms median (rank 0.5016) and
+source-exposure inserts at 0.41/0.42 ms (rank 0.5017), ordinary/quality. These
+measure only SQL inserts on a small fixture, not full HTTP writes or a privacy
+guarantee. A separate 100-pair warm read run measured 29.4/38.7 ms median
+(rank 0.9124); two fresh-process pairs measured 106.0/121.8 ms with a shared
+database cache. Read timing and real cold-cache behavior remain unresolved.
+In 20 additional profiled reads per purpose, ORM expression resolution was
+called 5,960 times for ordinary work and 10,000 times for quality work; SQL
+compilation was also higher for quality work (12,240 versus 16,280 calls).
+Profiling adds overhead and the counts are diagnostic, but they locate part of
+the remaining cost in the distinct query construction and compilation paths.
 After this consolidation, 100 warm PostgreSQL pairs in an isolated synthetic
 fixture measured ordinary/quality medians of 29.6/37.7 ms (rank 0.9242).
 Two fresh-process pairs measured 110.6/116.8 ms with a shared database cache;

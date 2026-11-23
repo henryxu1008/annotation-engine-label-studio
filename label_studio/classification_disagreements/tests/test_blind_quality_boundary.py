@@ -439,7 +439,7 @@ class TestBlindQualityBoundary(APITestCase):
             ):
                 with transaction.atomic():
                     exposure()
-                    assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                    assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked is (connection.vendor == 'sqlite')
                     assert not BlindReadIdentityState.objects.get(pk=same_actor_ordinary.pk).revoked
                     with self.assertRaises(ValidationError):
                         checked_attested_work(assignment=assignments[1], marker=quality_marker,
@@ -3500,7 +3500,7 @@ class TestBlindQualityBoundary(APITestCase):
         source = TaskFactory(project=self.project, id=reference.manifest['contents']['source']['task_id'])
         TaskAssignment.objects.create(task=source, project=self.project, assignee=self.annotator,
                                       assigned_by=self.manager)
-        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked is (connection.vendor == 'sqlite')
         assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
         assert not submission.has_permission(self.annotator)
         with self.assertRaises(ValidationError):
@@ -3571,7 +3571,7 @@ class TestBlindQualityBoundary(APITestCase):
         ordinary = TaskAssignment.objects.get(assignee=self.annotator, project=self.project,
                                                status=TaskAssignment.Status.ASSIGNED)
         Task.objects.filter(pk=ordinary.task_id).update(data=reference.manifest['contents']['task_data'])
-        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+        assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked is (connection.vendor == 'sqlite')
         assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
         assert not submission.has_permission(self.annotator)
         with self.assertRaises(ValidationError):
