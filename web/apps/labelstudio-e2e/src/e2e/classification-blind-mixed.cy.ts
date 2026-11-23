@@ -105,3 +105,75 @@ describe('synthetic blind and ordinary work', () => {
     });
   }
 });
+
+// Reassignment is prepared by the guarded synthetic fixture, not the
+// disabled public manager command. All participant requests go to the real app.
+describe('participant handoff after synthetic mixed reassignment', () => {
+  let fixture: any;
+  before(() => cy.readFile('.classification82-blind-e2e.json', { log: false }).then((value) => { fixture = value; }));
+
+  for (const locale of ['en-US', 'zh-CN'] as const) {
+    for (const kind of ['ordinary', 'quality'] as const) {
+      it(`opens and saves only the successor for ${kind} work in ${locale}`, () => {
+        const scope = fixture.projects[locale];
+        const item = scope.reassignments[kind];
+        const listUrl = `/api/projects/${scope.id}/blind-work/`;
+        const oldUrl = `/api/tasks/blind/${item.previous_handle}/`;
+        let newHandle: number;
+
+        cy.loginAs(item.original_email, fixture.password, '/user/account/personal-info');
+        cy.request(listUrl).its('body.results').should('be.empty');
+        cy.request({ url: oldUrl, failOnStatusCode: false }).its('status').should('eq', 404);
+
+        cy.loginAs(item.replacement_email, fixture.password, '/user/account/personal-info');
+        cy.setUserLocale(locale);
+        cy.request({ url: oldUrl, failOnStatusCode: false }).its('status').should('eq', 404);
+        cy.request(listUrl).then(({ body }) => {
+          expect(body.results).to.have.length(1);
+          const work = body.results[0];
+          expect(work.data.text).to.eq(item.text);
+          expect(work.id).to.be.greaterThan(2 ** 51 - 1);
+          expect(work.id).not.to.eq(item.previous_handle);
+          expect(work.id).not.to.eq(item.task_id);
+          newHandle = work.id;
+        });
+        cy.then(() => cy.request(`/api/tasks/blind/${newHandle}/`)).its('body.annotations').should('be.empty');
+
+        cy.visit(`/projects/${scope.id}/data`);
+        cy.window({ timeout: 30000 }).its('DM.SDK.blindWorkspace').should('be.a', 'function');
+        cy.window().then((win: any) => {
+          const current = win.DM.SDK;
+          const workspace = current.blindWorkspace;
+          current.destroy();
+          const root = win.document.createElement('div');
+          root.id = 'synthetic-reassigned-root';
+          win.document.body.appendChild(root);
+          win.syntheticBlindManager = new win.DataManager({
+            root, projectId: scope.id, apiGateway: `${win.APP_SETTINGS.hostname}/api/dm`, apiVersion: 2,
+            project: { id: scope.id }, settings: { blindProtocol: true }, blindWorkspace: workspace,
+            interfaces: { labelingHeader: true, backButton: true }, labelStudio: {}, polling: false, locale,
+          });
+        });
+        cy.get('#synthetic-reassigned-root', { timeout: 30000 }).contains(item.text).parent()
+          .contains('button', locale === 'zh-CN' ? '打开标注' : 'Open annotation').click();
+        cy.window({ timeout: 30000 }).should((win: any) => {
+          expect(win.syntheticBlindManager.store.taskStore.selected?.id).to.eq(newHandle);
+        });
+
+        cy.get('#label-studio-dm input[type="checkbox"][name="Positive"]', { timeout: 30000 })
+          .should('not.be.disabled').check({ force: true });
+        cy.intercept('POST', '**/api/tasks/blind/*/annotations*').as('successorSubmit');
+        cy.get('[data-testid="bottombar-submit-button"]').should('not.be.disabled').click();
+        cy.wait('@successorSubmit').then(({ request, response }) => {
+          expect(response?.statusCode).to.eq(201);
+          expect(Number(request.url.match(/blind\/(\d+)\//)?.[1])).to.eq(newHandle);
+        });
+        cy.then(() => cy.request(`/api/tasks/blind/${newHandle}/`)).then(({ body }) => {
+          expect(body.annotations).to.have.length(1);
+          expect(JSON.stringify(body.annotations[0].result)).to.contain('Positive');
+        });
+        cy.window().then((win: any) => win.syntheticBlindManager.destroy());
+      });
+    }
+  }
+});

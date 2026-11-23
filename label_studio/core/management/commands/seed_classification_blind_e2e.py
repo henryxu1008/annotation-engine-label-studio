@@ -32,7 +32,8 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         from access_control.project_operations import local_principal
-        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_mix import create_mixed_assignment, reassign_mixed_assignment
+        from classification_disagreements.blind_task_handles import issue_handle
         from classification_disagreements.gold_api import GoldAPI
         from classification_disagreements.models import BlindCaptureEpoch, BlindMixDecision
         from projects.models import Project, ProjectMember
@@ -87,6 +88,45 @@ class Command(BaseCommand):
             BlindCaptureEpoch.objects.get_or_create(pk=1)
             BlindCaptureEpoch.objects.filter(pk=1).update(generation=F('generation') + 1, enabled=True)
             projects = {}
+            principal = local_principal(manager)
+
+            def seed_reassignment(project, locale, kind):
+                members = []
+                for suffix in ('original', 'next'):
+                    email = f'blind-e2e-reassign-{kind}-{suffix}-{locale.lower()}@classification81.example.test'
+                    user = User.objects.create_user(email, source['password'], username=email,
+                                                    active_organization=project.organization)
+                    project.organization.add_user(user)
+                    ProjectMember.objects.create(project=project, user=user, role='annotator')
+                    members.append(user)
+                original_owner, new_owner = members
+                selected = kind == 'quality'
+                text = f'Synthetic reassignment {kind} for {locale}'
+                original_task = Task.objects.create(project=project, data={'text': text})
+                original_key = uuid4()
+                original = create_mixed_assignment(task=original_task, assignee=original_owner,
+                    references=[references[locale]], ratio_basis_points=10000 if selected else 0,
+                    principal=principal, key=original_key)
+                previous = BlindMixDecision.objects.get(project=project, key=original_key)
+                if previous.selected != selected:
+                    raise CommandError('The synthetic reassignment has the wrong purpose.')
+                old_handle = issue_handle(principal=local_principal(original_owner), assignment_id=original.pk)
+                original.cancel()
+                task = original_task
+                if selected:
+                    task = Task.objects.create(project=project, data={'text': f'{text} replacement carrier'})
+                replacement_key = uuid4()
+                replacement = reassign_mixed_assignment(previous_id=previous.pk, task=task,
+                    assignee=new_owner, principal=principal, key=replacement_key)
+                successor = BlindMixDecision.objects.get(project=project, key=replacement_key)
+                if (replacement.pk == original.pk or successor.predecessor_id_frozen != previous.pk
+                        or successor.selected != selected or successor.reference_id_frozen != previous.reference_id_frozen
+                        or (not selected and replacement.task_id != original_task.pk)):
+                    raise CommandError('The synthetic reassignment did not preserve the intended work.')
+                return {'original_email': original_owner.email, 'replacement_email': new_owner.email,
+                        'previous_handle': old_handle.task_handle, 'task_id': replacement.task_id,
+                        'text': replacement.task.data['text']}
+
             for locale, scope in source['projects'].items():
                 project = Project.objects.get(pk=scope['id'], created_by=manager)
                 email = f'blind-e2e-{locale.lower()}@classification81.example.test'
@@ -137,7 +177,9 @@ class Command(BaseCommand):
                 projects[locale] = {'id': project.pk, 'email': email, 'quality_task': quality.task_id,
                                     'ordinary_task': ordinary.pk, 'reference': references[locale]['id'],
                                     'draft_email': draft_email, 'draft_quality_task': draft_quality.task_id,
-                                    'revocations': revocations}
+                                    'revocations': revocations,
+                                    'reassignments': {kind: seed_reassignment(project, locale, kind)
+                                                      for kind in ('ordinary', 'quality')}}
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open('x', encoding='utf-8') as stream:
             json.dump({'synthetic': 'classification-blind-e2e/v1', 'password': source['password'],
