@@ -287,9 +287,9 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
-        from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
+        from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
-            BlindReadBinding, BlindReadIdentityState)
+            BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure)
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
         from users.models import User
@@ -428,12 +428,40 @@ class TestBlindQualityBoundary(APITestCase):
             if connection.vendor == 'postgresql':
                 assert not BlindPrivilegeReadState.objects.get(pk=members[1].pk).invalidated
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+            signed_proof = read_attestation(quality_binding)['quality']['proof']
+            assert signed_proof['rule'] == 'local-unseen-source/v2'
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            for exposure in (
+                lambda: BlindAssignmentExposure.objects.create(account_id=members[1].pk,
+                    task_id=signed_proof['source_task_id'], project_id=self.project.pk, generation=generation),
+                lambda: BlindTextLengthExposure.objects.create(account_id=members[1].pk,
+                    assignment_id=same_actor_ordinary.pk, generation=generation, byte_length=-1),
+            ):
+                with transaction.atomic():
+                    exposure()
+                    assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                    assert not BlindReadIdentityState.objects.get(pk=same_actor_ordinary.pk).revoked
+                    with self.assertRaises(ValidationError):
+                        checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                              binding=quality_binding, fence=fence)
+                    checked_attested_work(assignment=same_actor_ordinary, marker=None,
+                                          binding=same_actor_binding, fence=fence)
+                    transaction.set_rollback(True)
+                assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                      binding=quality_binding, fence=fence)
             previous_generation = BlindCaptureEpoch.objects.get(pk=1).generation - 1
             BlindProjectFileExposure.objects.create(account_id=members[1].pk, project_id=self.project.pk,
                                                     generation=previous_generation)
             BlindLabelExposure.objects.create(account_id=members[1].pk, generation=previous_generation)
+            BlindAssignmentExposure.objects.create(account_id=members[1].pk, task_id=signed_proof['source_task_id'],
+                                                   project_id=self.project.pk, generation=previous_generation)
+            BlindTextLengthExposure.objects.create(account_id=members[1].pk, assignment_id=same_actor_ordinary.pk,
+                                                   generation=previous_generation, byte_length=-1)
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             assert verify_mixed_read_binding(assignments[1])
+            checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                  fence=fence)
             with transaction.atomic():
                 record_project_file_access(account_id=members[1].pk, project_id=self.project.pk)
                 assert BlindAccountExposureState.objects.get(pk=members[1].pk).file_exposed

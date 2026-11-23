@@ -148,35 +148,32 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
         chosen_id_frozen=assignment.pk).filter(Exists(released), Exists(submitted), Exists(completion_state))
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
-    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
-                                       lengths=lengths, assignment_id=assignment.pk)
     # Signed proof issuance validates the immutable reference and provenance;
     # migrations 0057/0061 backfill invalid history and deletion triggers
     # revoke read_identity under the caller's capture fence. Keep the live
     # proof/marker checks and all conditions not represented by that state.
     # For PostgreSQL, exposure_clean uses the generation-bound flags that are
     # set by file/label exposure triggers in the same fenced transaction.
+    # Signed issuance validates first assignment; history cannot be reset.
+    # Migration 0057 and fenced insertion triggers retain revocation for source
+    # and text exposures. Exact signed reference lengths remain checked below.
     checks = {
-        'certificate': Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
-                                                                      generation=generation)),
         'proof': Exists(BlindEligibilityProof.objects.filter(assignment_id=assignment.pk,
                                                              manifest_hash=binding.proof_hash)),
         'marker': Exists(BlindQualityAssignment.objects.filter(pk=marker.pk, assignment_id=assignment.pk,
                           task_id=assignment.task_id, project_id=assignment.project_id,
                           assignee_id=assignment.assignee_id, reference_id=marker.reference_id,
                           reference_hash=marker.reference_hash)),
-        'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
-                                   task_id=value.get('source_task_id'), generation=generation)),
-        'first_assignment': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
-                                                                         first_assignment_id=assignment.pk)),
         'mix': Exists(mixes), 'mix_history': Exists(history), 'decision': Exists(decision),
         'matching_history': Exists(matching_history), 'source_active': Exists(source),
         'completion': Exists(completion),
-        'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
+        'length_count': count, 'length_extra': extra,
     }
     # Keep the existing SQLite source checks until its retained-evidence
     # replacement semantics have been addressed separately.
     if connection.vendor == 'sqlite':
+        exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
+                                           lengths=lengths, assignment_id=assignment.pk)
         checks.update(
             account_event=Exists(BlindProvenanceEvent.objects.filter(kind='account', subject_id=assignment.assignee_id,
                                   sequence=value['account_birth_sequence'])),
@@ -186,6 +183,13 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                              project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
             history=Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
                                                                 elevated=False, had_assignment=True)),
+            certificate=Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
+                                                                       generation=generation)),
+            source_exposure=Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
+                                    task_id=value.get('source_task_id'), generation=generation)),
+            first_assignment=Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
+                                                                           first_assignment_id=assignment.pk)),
+            length_exposed=Exists(exposed),
             file_exposure=Exists(BlindProjectFileExposure.objects.filter(account_id=assignment.assignee_id,
                                                                          generation=generation)),
             label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
@@ -197,17 +201,16 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
              .annotate(**checks).values(*checks).first())
     if (guard is None or (connection.vendor == 'sqlite' and (not all(
-            guard[name] for name in ('account_event', 'reference_event', 'reference', 'history'))
-            or guard['file_exposure'] or guard['label_exposure']))
+            guard[name] for name in ('account_event', 'reference_event', 'reference', 'history', 'certificate'))
+            or guard['file_exposure'] or guard['label_exposure'] or guard['length_exposed']
+            or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])
+            or (rule == 'local-unseen-source/v2' and guard['source_exposure'])))
             or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
-            'certificate', 'proof', 'marker')) or any(guard[name] for name in scopes)
-            or guard['length_exposed']
+            'proof', 'marker')) or any(guard[name] for name in scopes)
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['mix'] != guard['mix_history']
             or (binding.decision_id_frozen is None and guard['mix'])
             or (binding.decision_id_frozen is not None and not guard['mix'])
             or (guard['mix'] and (not guard['decision'] or not guard['matching_history']
-                                  or not (guard['source_active'] or guard['completion'])))
-            or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])
-            or (rule == 'local-unseen-source/v2' and guard['source_exposure'])):
+                                  or not (guard['source_active'] or guard['completion'])))):
         _deny()

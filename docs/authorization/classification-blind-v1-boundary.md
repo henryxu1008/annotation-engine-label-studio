@@ -895,6 +895,21 @@ read the retained privilege state instead of repeating the live privilege
 history predicate. Update triggers do not
 acquire the global capture epoch after locking the history row, avoiding an
 inverted epoch/history lock order. SQLite retains its existing live path.
+For PostgreSQL signed reads, source-task and text-length exposures use the
+retained binding state as well. Migration 0057 backfills matching exposures;
+fenced inserts revoke the binding in the same transaction. The authenticated
+reference-length set is still checked exactly against the retained reference
+length rows, and the immutable proof and marker are still required. Capture
+generation and first-assignment continuity are established by the retained
+states, immutable history, and validated signed issuance. SQLite retains the
+live predicates. Text and source exposure writes still have purpose-specific
+revocation work and remain a possible timing side channel.
+After this consolidation, 100 warm PostgreSQL pairs in an isolated synthetic
+fixture measured ordinary/quality medians of 29.6/37.7 ms (rank 0.9242).
+Two fresh-process pairs measured 110.6/116.8 ms with a shared database cache;
+the sample is too small to establish cold-cache behavior. The direct text
+exposure insert probe measured 0.49/0.53 ms median (rank 0.6656). These
+diagnostics do not establish timing privacy or authorize public dispatch.
 After adding the privilege state, 100 warm PostgreSQL pairs in a synthetic
 fixture measured ordinary/quality medians of 32.7/43.4 ms (rank 0.958), with
 20 SQL statements per read. Two fresh-process pairs measured 99.3/120.1 ms,
