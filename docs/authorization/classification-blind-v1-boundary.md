@@ -918,6 +918,14 @@ After requiring the capture fence in the bounded loader, a second 100-pair
 warm run measured 24.1/34.0 ms (rank 0.9486). Two fresh-process pairs
 measured 106.2/114.3 ms and also shared the database cache. These synthetic
 results do not establish timing privacy.
+An additional isolated PostgreSQL 17 diagnostic evicted eligible buffers for
+the synthetic database using the developer-testing `pg_buffercache_evict`
+function before each read. Ten alternating pairs measured ordinary/quality
+medians of 25.0/33.2 ms (rank 0.96), with at least 41 buffers evicted per
+sample and no reported eviction failures. This exercises a colder PostgreSQL
+buffer pool only: operating-system caches remain shared, the sample is small,
+and neither full cold-cache behavior nor timing privacy is established. See
+the [PostgreSQL 17 pg_buffercache documentation](https://www.postgresql.org/docs/17/pgbuffercache.html).
 Migration recording disables the capture epoch as in the existing capture
 protocol. Operators must not reactivate capture until every serving process
 uses the ledger-checking code; an old process cannot safely use the removed
