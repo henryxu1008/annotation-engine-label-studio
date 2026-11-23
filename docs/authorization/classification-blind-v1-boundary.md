@@ -926,6 +926,11 @@ sample and no reported eviction failures. This exercises a colder PostgreSQL
 buffer pool only: operating-system caches remain shared, the sample is small,
 and neither full cold-cache behavior nor timing privacy is established. See
 the [PostgreSQL 17 pg_buffercache documentation](https://www.postgresql.org/docs/17/pgbuffercache.html).
+PostgreSQL editor concurrency tests also cover source and text exposure while
+a real handle read is in progress. The exposure writer waits for the fenced
+read; after it commits, both a subsequent read and a stale annotation submission
+are denied. These checks establish the tested revocation ordering, not equivalent
+read timing or end-to-end protection of every exposure route.
 Migration recording disables the capture epoch as in the existing capture
 protocol. Operators must not reactivate capture until every serving process
 uses the ledger-checking code; an old process cannot safely use the removed

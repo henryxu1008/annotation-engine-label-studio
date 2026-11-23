@@ -5323,6 +5323,12 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_editor_read_completes_before_certificate_revocation(self):
         self._assert_editor_read_fenced_from_revocation(certificate=True)
 
+    def test_editor_read_completes_before_source_exposure(self):
+        self._assert_editor_read_fenced_from_revocation(certificate=False, exposure_kind='source')
+
+    def test_editor_read_completes_before_text_exposure(self):
+        self._assert_editor_read_fenced_from_revocation(certificate=False, exposure_kind='text')
+
     def test_completed_mix_read_fences_submission_deletion(self):
         self._assert_completed_mix_read_fences_submission_change(update=False)
 
@@ -5518,14 +5524,17 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                     writer.result(timeout=20)
             assert read(handle) == 404
 
-    def _assert_editor_read_fenced_from_revocation(self, *, certificate):
+    def _assert_editor_read_fenced_from_revocation(self, *, certificate, exposure_kind='label'):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements import blind_editor_api
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_provenance import record_label_metadata_access
         from classification_disagreements.blind_task_handles import issue_handle
-        from classification_disagreements.models import BlindAccountExposureState, BlindReadIdentityState
+        from classification_disagreements.models import (
+            BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureEpoch, BlindMixDecision,
+            BlindReadIdentityState, BlindTextLengthExposure,
+        )
         from projects.models import ProjectMember
         from rest_framework.test import APIClient
         from users.models import User
@@ -5569,6 +5578,15 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                 if certificate:
                     from classification_disagreements.models import BlindCaptureCertificate
                     BlindCaptureCertificate.objects.filter(account_id=member.pk).delete()
+                elif exposure_kind == 'source':
+                    BlindAssignmentExposure.objects.create(account_id=member.pk,
+                        task_id=reference.manifest['contents']['source']['task_id'], project_id=self.project.pk,
+                        generation=BlindCaptureEpoch.objects.get(pk=1).generation)
+                elif exposure_kind == 'text':
+                    decision = BlindMixDecision.objects.get(chosen_id_frozen=chosen.pk)
+                    BlindTextLengthExposure.objects.create(account_id=member.pk,
+                        assignment_id=decision.source_id_frozen, byte_length=-1,
+                        generation=BlindCaptureEpoch.objects.get(pk=1).generation)
                 else:
                     record_label_metadata_access(account_id=member.pk)
             finally:
@@ -5580,7 +5598,8 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
             chosen = create_mixed_assignment(task=ordinary, assignee=member,
                 references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
                 principal=local_principal(self.manager), key=uuid4())
-            handle = issue_handle(principal=local_principal(member), assignment_id=chosen.pk).task_handle
+            record = issue_handle(principal=local_principal(member), assignment_id=chosen.pk)
+            handle = record.task_handle
             with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     reading = pool.submit(read, handle)
@@ -5595,9 +5614,17 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                     assert reading.result(timeout=20) == 200
                     exposure.result(timeout=20)
             assert BlindReadIdentityState.objects.get(pk=chosen.pk).revoked is certificate
-            if not certificate:
+            if not certificate and exposure_kind == 'label':
                 assert BlindAccountExposureState.objects.get(pk=member.pk).label_exposed
             assert read(handle) == 404
+            client = APIClient()
+            client.force_authenticate(member)
+            response = client.post(f'/api/tasks/blind/{handle}/annotations/', {
+                'result': [], 'assignment_id': record.assignment_handle,
+                'assignment_version': chosen.version,
+            }, format='json')
+            assert response.status_code == 404
+            assert not Annotation.objects.filter(task_id=chosen.task_id).exists()
 
     def test_annotator_directory_rechecks_membership_after_waiting_for_project_lock(self):
         from projects.models import ProjectMember
