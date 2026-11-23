@@ -110,11 +110,17 @@ describe('synthetic blind and ordinary work', () => {
 // disabled public manager command. All participant requests go to the real app.
 describe('participant handoff after synthetic mixed reassignment', () => {
   let fixture: any;
-  before(() => cy.readFile('.classification82-blind-e2e.json', { log: false }).then((value) => { fixture = value; }));
+  let reviewerEmail: string;
+  before(() => {
+    cy.readFile('.classification82-blind-e2e.json', { log: false }).then((value) => { fixture = value; });
+    cy.readFile('.classification81-e2e.json', { log: false }).then((value) => {
+      reviewerEmail = value.users.reviewer.email;
+    });
+  });
 
   for (const locale of ['en-US', 'zh-CN'] as const) {
     for (const kind of ['ordinary', 'quality'] as const) {
-      it(`opens and saves only the successor for ${kind} work in ${locale}`, () => {
+      it(`submits the successor and verifies review routing for ${kind} work in ${locale}`, () => {
         const scope = fixture.projects[locale];
         const item = scope.reassignments[kind];
         const listUrl = `/api/projects/${scope.id}/blind-work/`;
@@ -167,12 +173,41 @@ describe('participant handoff after synthetic mixed reassignment', () => {
         cy.wait('@successorSubmit').then(({ request, response }) => {
           expect(response?.statusCode).to.eq(201);
           expect(Number(request.url.match(/blind\/(\d+)\//)?.[1])).to.eq(newHandle);
+          expect(request.body.submit_for_review).to.eq(true);
         });
         cy.then(() => cy.request(`/api/tasks/blind/${newHandle}/`)).then(({ body }) => {
           expect(body.annotations).to.have.length(1);
           expect(JSON.stringify(body.annotations[0].result)).to.contain('Positive');
         });
         cy.window().then((win: any) => win.syntheticBlindManager.destroy());
+        // The synthetic manager can confirm the stored revision, but only
+        // the separate reviewer session can inspect the existing review queue.
+        const managerRequest = {
+          headers: { Authorization: `Token ${fixture.manager_token}` },
+          failOnStatusCode: false,
+          log: false,
+        };
+        const submissionsUrl = `/api/submissions/?project=${scope.id}`;
+        cy.request<{
+          id: number;
+          status: string;
+          revision: number;
+          result_snapshot: { task: { id: number } };
+        }[]>({ ...managerRequest, url: submissionsUrl }).then(({ body, status }) => {
+          expect(status).to.eq(200);
+          const stored = body.filter((row) => row.result_snapshot?.task?.id === item.task_id);
+          expect(stored.length).to.eq(1);
+          expect(stored[0].revision).to.eq(1);
+          expect(stored[0].status).to.eq('pending');
+          cy.loginAs(reviewerEmail, fixture.password, '/user/account/personal-info');
+          return cy.request<{ next: string | null; results: { id: number }[] }>({
+            failOnStatusCode: false, log: false, url: `${submissionsUrl}&reviewable=true`,
+          }).then(({ body: queue, status }) => {
+            expect(status).to.eq(200);
+            expect(queue.next).to.eq(null);
+            expect(queue.results.some((row) => row.id === stored[0].id)).to.eq(kind === 'ordinary');
+          });
+        });
       });
     }
   }
