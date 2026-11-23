@@ -487,7 +487,56 @@ describe("AppStore", () => {
     it("resolves immediately when selected is not draft saving", async () => {
       const store = createStore();
       store.initializeStore({ annotations: [{ result: [] }] });
-      await expect(store.waitForDraftSubmission()).resolves.toBeUndefined();
+      const interval = jest.spyOn(global, "setInterval");
+      try {
+        await expect(store.waitForDraftSubmission()).resolves.toBeUndefined();
+        expect(interval).not.toHaveBeenCalled();
+      } finally {
+        interval.mockRestore();
+      }
+    });
+
+    it("cancels the wait when the selected annotation is removed", async () => {
+      jest.useFakeTimers();
+      try {
+        const store = createStore();
+        store.initializeStore({ annotations: [{ result: [] }] });
+        store.annotationStore.selected.setDraftSaving(true);
+        const start = jest.spyOn(global, "setInterval");
+        const clear = jest.spyOn(global, "clearInterval");
+        const pending = store.waitForDraftSubmission();
+        const timer = start.mock.results[0].value;
+        store.annotationStore.resetAnnotations();
+        jest.advanceTimersByTime(100);
+        await expect(pending).resolves.toBe(false);
+        expect(clear).toHaveBeenCalledWith(timer);
+        start.mockRestore();
+        clear.mockRestore();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("continues after the same selected annotation finishes saving", async () => {
+      jest.useFakeTimers();
+      try {
+        const store = createStore();
+        store.initializeStore({ annotations: [{ result: [] }] });
+        const selected = store.annotationStore.selected;
+        selected.setDraftSaving(true);
+        const start = jest.spyOn(global, "setInterval");
+        const clear = jest.spyOn(global, "clearInterval");
+        const pending = store.waitForDraftSubmission();
+        const timer = start.mock.results[0].value;
+        selected.setDraftSaving(false);
+        jest.advanceTimersByTime(100);
+        await expect(pending).resolves.toBeUndefined();
+        expect(clear).toHaveBeenCalledWith(timer);
+        start.mockRestore();
+        clear.mockRestore();
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

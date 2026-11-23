@@ -589,10 +589,15 @@ export default types
 
     function waitForDraftSubmission() {
       return new Promise((resolve) => {
-        if (!self.annotationStore.selected.isDraftSaving) resolve();
+        const selected = self.annotationStore.selected;
+        if (!selected) return resolve(false);
+        if (!selected.isDraftSaving) return resolve();
 
         const checkInterval = setInterval(() => {
-          if (!self.annotationStore.selected.isDraftSaving) {
+          if (!isAlive(self) || !isAlive(selected) || self.annotationStore.selected !== selected) {
+            clearInterval(checkInterval);
+            resolve(false);
+          } else if (!selected.isDraftSaving) {
             clearInterval(checkInterval);
             resolve();
           }
@@ -666,9 +671,11 @@ export default types
 
       handleSubmittingFlag(async () => {
         if (isFF(FF_CUSTOM_SCRIPT)) {
-          await self.waitForDraftSubmission();
+          if ((await self.waitForDraftSubmission()) === false) return;
+          if (!isAlive(self) || !isAlive(entity) || self.annotationStore.selected !== entity) return;
           const allowedToSave = await getEnv(self).events.invoke("beforeSaveAnnotation", self, entity, { event });
           if (allowedToSave && allowedToSave.some((x) => x === false)) return;
+          if (!isAlive(self) || !isAlive(entity) || self.annotationStore.selected !== entity) return;
         }
         const result = await getEnv(self).events.invoke(event, self, entity);
         if (!annotationSaved(result)) return;
