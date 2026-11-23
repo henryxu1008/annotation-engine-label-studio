@@ -4866,6 +4866,94 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                         with transaction.atomic():
                             assert lock_handle_for_write(**args).pk == assignment.pk
 
+    def test_ordinary_and_quality_editor_reads_fence_account_deactivation(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_editor_api
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.blind_task_handles import issue_handle
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+        from users.models import User
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        ordinary_task = TaskFactory(project=self.project, data={'text': 'ordinary independent read'})
+        ordinary = TaskAssignment.objects.create(task=ordinary_task, project=self.project, assignee=members[0],
+                                                 assigned_by=self.manager)
+        with transaction.atomic():
+            seal_ordinary_read_binding(assignment=ordinary)
+        carrier = TaskFactory(project=self.project, data={'text': 'independent quality read carrier'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            quality = create_mixed_assignment(task=carrier, assignee=members[1],
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(self.manager), key=uuid4())
+            for member, assignment in zip(members, (ordinary, quality)):
+                with self.subTest(work_type='quality' if assignment.pk == quality.pk else 'ordinary'):
+                    handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+                    entered, release, deactivation_started = Event(), Event(), Event()
+                    original = blind_editor_api.participant_text_data
+
+                    def pause(*args):
+                        entered.set()
+                        if not release.wait(15):
+                            raise AssertionError('editor read was not released')
+                        return original(*args)
+
+                    def read():
+                        close_old_connections()
+                        try:
+                            client = APIClient()
+                            # Keep the pre-revocation actor object to model a
+                            # request made with stale authenticated state.
+                            client.force_authenticate(member)
+                            return client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code
+                        finally:
+                            close_old_connections()
+
+                    def deactivate():
+                        close_old_connections()
+                        try:
+                            deactivation_started.set()
+                            # Exercise the database fence independently of the
+                            # account service's session-revocation policy.
+                            table = connection.ops.quote_name(User._meta.db_table)
+                            with connection.cursor() as cursor:
+                                cursor.execute(f'UPDATE {table} SET is_active = %s WHERE id = %s', [False, member.pk])
+                        finally:
+                            close_old_connections()
+
+                    assert read() == 200
+                    with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            reading = pool.submit(read)
+                            try:
+                                assert entered.wait(10)
+                                deactivating = pool.submit(deactivate)
+                                assert deactivation_started.wait(10)
+                                with self.assertRaises(TimeoutError):
+                                    deactivating.result(timeout=0.3)
+                            finally:
+                                release.set()
+                            assert reading.result(timeout=20) == 200
+                            deactivating.result(timeout=20)
+                    assert read() in (401, 403, 404)
+
     def test_mixed_replay_fences_concurrent_reference_exposure(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
