@@ -431,6 +431,11 @@ class TestBlindQualityBoundary(APITestCase):
             signed_proof = read_attestation(quality_binding)['quality']['proof']
             assert signed_proof['rule'] == 'local-unseen-source/v2'
             generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            self.client.force_authenticate(members[1])
+            ordinary_handle = issue_handle(principal=local_principal(members[1]), assignment_id=same_actor_ordinary.pk)
+            same_actor_url = f'/api/tasks/blind/{ordinary_handle.task_handle}/'
+            assert self.client.get(read_url).status_code == 200
+            assert self.client.get(same_actor_url).status_code == 200
             for exposure in (
                 lambda: BlindAssignmentExposure.objects.create(account_id=members[1].pk,
                     task_id=signed_proof['source_task_id'], project_id=self.project.pk, generation=generation),
@@ -444,10 +449,19 @@ class TestBlindQualityBoundary(APITestCase):
                     with self.assertRaises(ValidationError):
                         checked_attested_work(assignment=assignments[1], marker=quality_marker,
                                               binding=quality_binding, fence=fence)
+                    assert self.client.get(read_url).status_code == 404
+                    denied_write = self.client.post(f'/api/tasks/blind/{handles[1].task_handle}/annotations/', {
+                        'result': [], 'assignment_id': handles[1].assignment_handle,
+                        'assignment_version': assignments[1].version,
+                    }, format='json')
+                    assert denied_write.status_code == 404
+                    assert not Annotation.objects.filter(task_id=assignments[1].task_id).exists()
+                    assert self.client.get(same_actor_url).status_code == 200
                     checked_attested_work(assignment=same_actor_ordinary, marker=None,
                                           binding=same_actor_binding, fence=fence)
                     transaction.set_rollback(True)
                 assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                assert self.client.get(read_url).status_code == 200
                 checked_attested_work(assignment=assignments[1], marker=quality_marker,
                                       binding=quality_binding, fence=fence)
             previous_generation = BlindCaptureEpoch.objects.get(pk=1).generation - 1
