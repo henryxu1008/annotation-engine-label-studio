@@ -318,6 +318,13 @@ class BlindReadAttestation(models.Model):
     signed_payload = models.TextField()
 
 
+class BlindReadIdentityState(models.Model):
+    """Retained identity and cancellation revocation for bound work."""
+
+    assignment_id = models.PositiveBigIntegerField(primary_key=True)
+    revoked = models.BooleanField(default=False)
+
+
 class BlindTaskHandle(models.Model):
     """Retained opaque participant identifiers for one assignment, not a public API."""
 

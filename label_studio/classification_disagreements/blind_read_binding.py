@@ -8,7 +8,8 @@ from django.db.models.functions import Cast, Length
 from rest_framework.exceptions import NotFound, ValidationError
 from review_batches.service import digest
 
-from .models import BlindEligibilityProof, BlindMixDecision, BlindQualityAssignment, BlindReadAttestation, BlindReadBinding
+from .models import (BlindEligibilityProof, BlindMixDecision, BlindQualityAssignment, BlindReadAttestation,
+                     BlindReadBinding, BlindReadIdentityState)
 
 
 FIELDS = ('assignment_id_frozen', 'task_id_frozen', 'project_id_frozen', 'actor_id_frozen', 'decision_id_frozen',
@@ -149,6 +150,7 @@ def verify_mixed_read_binding(assignment):
         source_assignee_id_frozen=OuterRef('actor_id_frozen'), request_hash=OuterRef('decision_request_hash'),
     )
     any_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=OuterRef('assignment_id_frozen'))
+    live_identity = BlindReadIdentityState.objects.filter(assignment_id=OuterRef('assignment_id_frozen'), revoked=False)
     row = BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).annotate(
         has_marker=Exists(markers), matching_marker=Exists(matching_marker),
         has_proof=Exists(proofs), matching_proof=Exists(proofs.filter(manifest_hash=OuterRef('proof_hash'))),
@@ -156,6 +158,7 @@ def verify_mixed_read_binding(assignment):
         quality_decision=Exists(decisions.filter(selected=True, reference_id_frozen=OuterRef('reference_id_frozen'))),
         has_decision=Exists(any_decisions),
         has_attestation=Exists(attestations),
+        live_identity=Exists(live_identity),
         bounded_attestation=Subquery(bounded_attestations.values('signed_payload')[:1]),
     ).first()
     if row is None:
@@ -163,7 +166,7 @@ def verify_mixed_read_binding(assignment):
             _unavailable()
         return
     values = {field: getattr(row, field) for field in FIELDS}
-    if (values['assignment_id_frozen'] != assignment.pk or values['task_id_frozen'] != assignment.task_id
+    if (not row.live_identity or values['assignment_id_frozen'] != assignment.pk or values['task_id_frozen'] != assignment.task_id
             or values['project_id_frozen'] != assignment.project_id or values['actor_id_frozen'] != assignment.assignee_id
             or row.binding_hash != digest({'schema': 'blind-mixed-read-binding/v1', **values})):
         _unavailable()

@@ -802,6 +802,20 @@ of scoring must not roll back ordinary annotation writes. Queue failures leave
 outbox rows pending, but operator scheduling, end-to-end queue recovery and
 explicit degraded behavior still require validation.
 
+Bound ordinary and quality assignments also have a retained read-identity
+state. Assignment cancellation, deletion or a change to its task, project, assignee or ID
+revokes that state in the same transaction; restoring the old values does not
+restore the binding, while rolling back the change rolls back revocation.
+Both bound read paths require the retained state in addition to all existing
+live checks. At upgrade, bindings with a currently active matching assignment retain
+their previous access and missing or mismatched assignments are revoked.
+Identity changes before this migration cannot be reconstructed, so the state
+proves continuity only from the upgrade onward. Once state exists, rolling
+back this migration is blocked. This identity state covers only assignment
+identity and is not a replacement for live eligibility, reference, exposure,
+membership or decision checks. It does not establish timing privacy or enable
+public dispatch.
+
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same
 submission number or actor is later restored; a rolled-back change does not

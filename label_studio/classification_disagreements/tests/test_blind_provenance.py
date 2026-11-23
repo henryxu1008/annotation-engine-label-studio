@@ -684,6 +684,31 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_read_identity_upgrade_backfills_current_and_missing_assignments(self):
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.models import BlindReadIdentityState
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0055_blind_text_read_index')])
+        try:
+            owner, member = UserFactory(), UserFactory()
+            project = ProjectFactory(created_by=owner)
+            assignments = [TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                assignee=member, assigned_by=owner) for _ in range(3)]
+            with transaction.atomic():
+                for assignment in assignments:
+                    seal_ordinary_read_binding(assignment=assignment)
+            TaskAssignment.objects.filter(pk=assignments[1].pk).delete()
+            TaskAssignment.objects.filter(pk=assignments[2].pk).update(status=TaskAssignment.Status.CANCELLED)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert not BlindReadIdentityState.objects.get(pk=assignments[0].pk).revoked
+        assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+        assert BlindReadIdentityState.objects.get(pk=assignments[2].pk).revoked
+        with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+            MigrationExecutor(connection).migrate([('classification_disagreements', '0055_blind_text_read_index')])
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL concurrent index recovery only')
     def test_exposure_index_migration_recovers_invalid_concurrent_index(self):
         from django.conf import settings

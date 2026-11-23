@@ -238,6 +238,45 @@ class TestBlindQualityBoundary(APITestCase):
             TaskAssignment.objects.create(id=old_id, task=self.task, project=self.project,
                                           assignee=self.annotator, assigned_by=self.manager)
 
+    def test_ordinary_read_identity_revokes_on_change_and_rollback_restores_it(self):
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding, verify_mixed_read_binding
+        from classification_disagreements.models import BlindReadIdentityState
+        from rest_framework.exceptions import NotFound
+
+        with transaction.atomic():
+            seal_ordinary_read_binding(assignment=self.assignment)
+        state = BlindReadIdentityState.objects.get(pk=self.assignment.pk)
+        assert not state.revoked
+        assert verify_mixed_read_binding(self.assignment)
+        with transaction.atomic():
+            TaskAssignment.objects.filter(pk=self.assignment.pk).update(assignee_id=self.manager.pk)
+            assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                BlindReadIdentityState.objects.filter(pk=self.assignment.pk).update(revoked=False)
+            TaskAssignment.objects.filter(pk=self.assignment.pk).update(assignee_id=self.annotator.pk)
+            assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+            with self.assertRaises(NotFound):
+                verify_mixed_read_binding(self.assignment)
+            transaction.set_rollback(True)
+        assert not BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+        assert verify_mixed_read_binding(self.assignment)
+        with transaction.atomic():
+            TaskAssignment.objects.filter(pk=self.assignment.pk).update(status=TaskAssignment.Status.CANCELLED)
+            assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+            TaskAssignment.objects.filter(pk=self.assignment.pk).update(status=TaskAssignment.Status.ASSIGNED)
+            with self.assertRaises(NotFound):
+                verify_mixed_read_binding(self.assignment)
+            transaction.set_rollback(True)
+        assert not BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadIdentityState.objects.filter(pk=state.pk).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadIdentityState.objects.create(assignment_id=state.pk, revoked=False)
+        TaskAssignment.objects.filter(pk=self.assignment.pk).delete()
+        assert BlindReadIdentityState.objects.get(pk=state.pk).revoked
+        with self.assertRaises(NotFound):
+            verify_mixed_read_binding(self.assignment)
+
     def test_mixed_ordinary_and_quality_share_durable_binding_and_live_revocation(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
@@ -248,7 +287,8 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
-        from classification_disagreements.models import BlindCaptureCertificate, BlindReadAttestation, BlindReadBinding
+        from classification_disagreements.models import (BlindCaptureCertificate, BlindReadAttestation, BlindReadBinding,
+                                                          BlindReadIdentityState)
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
         from users.models import User
@@ -273,6 +313,7 @@ class TestBlindQualityBoundary(APITestCase):
                 ratio_basis_points=ratio, principal=local_principal(self.manager), key=uuid4(),
             ) for task, member, ratio in zip(tasks, members, (0, 10000))]
             rows = [BlindReadBinding.objects.get(assignment_id_frozen=assignment.pk) for assignment in assignments]
+            assert all(not BlindReadIdentityState.objects.get(pk=assignment.pk).revoked for assignment in assignments)
             assert [row.purpose for row in rows] == ['ordinary', 'quality']
             assert rows[0].reference_id_frozen is None
             assert rows[1].reference_id_frozen == reference.pk and rows[1].proof_hash
@@ -312,6 +353,16 @@ class TestBlindQualityBoundary(APITestCase):
             with self.assertNumQueries(1):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=fence)
+            with transaction.atomic():
+                TaskAssignment.objects.filter(pk=assignments[1].pk).delete()
+                assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+                with self.assertRaises(NotFound):
+                    verify_mixed_read_binding(assignments[1])
+                with self.assertRaises(ValidationError):
+                    checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                          fence=fence)
+                transaction.set_rollback(True)
+            assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             with self.assertRaises(RuntimeError):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=None)
@@ -4865,6 +4916,75 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                     else:
                         with transaction.atomic():
                             assert lock_handle_for_write(**args).pk == assignment.pk
+
+    def test_bound_read_finishes_before_identity_change_and_next_read_is_revoked(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_editor_api
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindReadIdentityState
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+
+        organization = fixtures.OrganizationFactory()
+        manager = organization.created_by
+        project = ProjectFactory(organization=organization, created_by=manager, label_config=CONFIG)
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=organization)
+        organization.add_user(member)
+        ProjectMember.objects.create(project=project, user=member, role='annotator')
+        task = TaskFactory(project=project, data={'text': 'independent ordinary bound work'})
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=manager)
+        with transaction.atomic():
+            seal_ordinary_read_binding(assignment=assignment)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{organization.pk}:{project.pk}': True}}
+        entered, release, started = Event(), Event(), Event()
+        original = blind_editor_api.participant_text_data
+
+        def pause(*args):
+            entered.set()
+            if not release.wait(15):
+                raise AssertionError('editor read was not released')
+            return original(*args)
+
+        def read(handle):
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(member)
+                return client.get(f'/api/tasks/blind/{handle}/').status_code
+            finally:
+                close_old_connections()
+
+        def change_owner():
+            close_old_connections()
+            try:
+                started.set()
+                TaskAssignment.objects.filter(pk=assignment.pk).update(assignee_id=manager.pk)
+            finally:
+                close_old_connections()
+
+        with self.settings(**config):
+            handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            assert read(handle.task_handle) == 200
+            with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    reading = pool.submit(read, handle.task_handle)
+                    try:
+                        assert entered.wait(10)
+                        changing = pool.submit(change_owner)
+                        assert started.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            changing.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    assert reading.result(timeout=20) == 200
+                    changing.result(timeout=20)
+            assert BlindReadIdentityState.objects.get(pk=assignment.pk).revoked
+            TaskAssignment.objects.filter(pk=assignment.pk).update(assignee_id=member.pk)
+            assert read(handle.task_handle) == 404
 
     def test_ordinary_and_quality_editor_reads_fence_account_deactivation(self):
         from access_control.identity import LocalIdentityProvider
