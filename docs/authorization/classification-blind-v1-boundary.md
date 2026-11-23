@@ -869,6 +869,19 @@ It retains revocation for mismatches under the migration lock; it does not
 promote missing proofs to valid evidence. Unsigned and missing-proof work keeps
 the live compatibility checks. This backfill covers only these sequences and
 does not make the projected state a complete authorization decision.
+For signed PostgreSQL reads, the immutable provenance events and reference identity now
+use the retained read-identity state instead of three additional live subqueries:
+binding issuance checks the full proof before signing, the upgrade backfills
+invalid identities and sequences, and transaction-fenced deletion revokes the
+state. The signature, proof, marker and remaining live checks are still
+required. This consolidation does not by itself establish timing privacy.
+SQLite retains the three live checks pending separate resolution of its
+retained-evidence replacement semantics.
+In a separate isolated PostgreSQL fixture after consolidation, 100 warm
+paired reads measured ordinary and quality medians of 29.6 ms and 41.2 ms.
+Two fresh-process pairs measured 109.7 ms and 127.0 ms with a shared database
+cache. These synthetic samples show that a timing gap remains; they are not
+production estimates or proof of cold-cache behavior.
 
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same

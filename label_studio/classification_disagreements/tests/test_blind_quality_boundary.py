@@ -4221,6 +4221,71 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
 
+    def test_reference_and_provenance_deletion_wait_for_capture_reader_and_revoke(self):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import (
+            BlindProvenanceEvent, BlindReadBinding, BlindReadIdentityState, ClassificationGoldEvidence,
+        )
+
+        for kind in ('account', 'reference_event', 'reference'):
+            owner = UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            provenance_fixtures.enable_test_capture()
+            member = UserFactory()
+            assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                       assignee=member, assigned_by=owner)
+            BlindReadBinding.objects.create(
+                assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                project_id_frozen=project.pk, actor_id_frozen=member.pk, purpose='quality',
+                reference_id_frozen=reference.pk, reference_hash='1' * 64,
+                proof_hash='2' * 64, binding_hash='3' * 64,
+            )
+            entered, release, started = Event(), Event(), Event()
+
+            def read():
+                close_old_connections()
+                try:
+                    with transaction.atomic():
+                        lock_capture_epoch_for_read()
+                        entered.set()
+                        if not release.wait(10):
+                            raise AssertionError('capture reader was not released')
+                        assert not BlindReadIdentityState.objects.get(pk=assignment.pk).revoked
+                finally:
+                    close_old_connections()
+
+            def delete():
+                close_old_connections()
+                try:
+                    started.set()
+                    if kind == 'reference':
+                        ClassificationGoldEvidence.objects.filter(pk=reference.pk).delete()
+                    else:
+                        event_kind = 'account' if kind == 'account' else 'reference'
+                        subject_id = member.pk if kind == 'account' else reference.pk
+                        BlindProvenanceEvent.objects.filter(kind=event_kind, subject_id=subject_id).delete()
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reader = pool.submit(read)
+                try:
+                    assert entered.wait(10)
+                    writer = pool.submit(delete)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        writer.result(timeout=0.3)
+                finally:
+                    release.set()
+                reader.result(timeout=20)
+                writer.result(timeout=20)
+            assert BlindReadIdentityState.objects.get(pk=assignment.pk).revoked
+
     def test_legacy_repair_fences_assignee_membership_revocation(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal

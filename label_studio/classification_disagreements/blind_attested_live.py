@@ -19,8 +19,7 @@ from .models import (
     BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
     BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
-    BlindCompletionReadState,
-    ClassificationGoldEvidence,
+    BlindCompletionReadState, ClassificationGoldEvidence,
 )
 
 
@@ -137,17 +136,15 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
     exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
                                        lengths=lengths, assignment_id=assignment.pk)
+    # Signed proof issuance validates the immutable reference and provenance;
+    # migrations 0057/0061 backfill invalid history and deletion triggers
+    # revoke read_identity under the caller's capture fence. Keep the live
+    # proof/marker checks and all conditions not represented by that state.
     checks = {
         'certificate': Exists(BlindCaptureCertificate.objects.filter(account_id=assignment.assignee_id,
                                                                       generation=generation)),
         'history': Exists(BlindPrivilegeHistory.objects.filter(account_id=assignment.assignee_id,
                                                                 elevated=False, had_assignment=True)),
-        'account_event': Exists(BlindProvenanceEvent.objects.filter(kind='account', subject_id=assignment.assignee_id,
-                                        sequence=value['account_birth_sequence'])),
-        'reference_event': Exists(BlindProvenanceEvent.objects.filter(kind='reference', subject_id=marker.reference_id,
-                                        sequence=value['reference_sequence'])),
-        'reference': Exists(ClassificationGoldEvidence.objects.filter(pk=marker.reference_id,
-                             project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
         'proof': Exists(BlindEligibilityProof.objects.filter(assignment_id=assignment.pk,
                                                              manifest_hash=binding.proof_hash)),
         'marker': Exists(BlindQualityAssignment.objects.filter(pk=marker.pk, assignment_id=assignment.pk,
@@ -167,14 +164,26 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         'completion': Exists(completion),
         'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
     }
+    # Keep the existing SQLite source checks until its retained-evidence
+    # replacement semantics have been addressed separately.
+    if connection.vendor == 'sqlite':
+        checks.update(
+            account_event=Exists(BlindProvenanceEvent.objects.filter(kind='account', subject_id=assignment.assignee_id,
+                                  sequence=value['account_birth_sequence'])),
+            reference_event=Exists(BlindProvenanceEvent.objects.filter(kind='reference', subject_id=marker.reference_id,
+                                    sequence=value['reference_sequence'])),
+            reference=Exists(ClassificationGoldEvidence.objects.filter(pk=marker.reference_id,
+                             project_id=assignment.project_id, kind='reference', manifest_hash=marker.reference_hash)),
+        )
     checks.update(common)
     scopes = _external_scope_checks()
     checks.update(scopes)
     guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
              .annotate(**checks).values(*checks).first())
-    if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
-            'certificate', 'history', 'account_event',
-            'reference_event', 'reference', 'proof', 'marker')) or any(guard[name] for name in scopes)
+    if (guard is None or (connection.vendor == 'sqlite' and not all(
+            guard[name] for name in ('account_event', 'reference_event', 'reference')))
+            or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
+            'certificate', 'history', 'proof', 'marker')) or any(guard[name] for name in scopes)
             or guard['file_exposure'] or guard['label_exposure'] or guard['length_exposed']
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['mix'] != guard['mix_history']
