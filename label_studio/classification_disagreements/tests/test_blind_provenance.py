@@ -710,6 +710,99 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
+    def test_sequence_upgrade_waits_for_inflight_proof_before_reconciliation(self):
+        from classification_disagreements.models import BlindEligibilityProof, BlindReadBinding, BlindReadIdentityState
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0060_blind_account_exposure_state')])
+        try:
+            owner = UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            enable_test_capture()
+            member = UserFactory()
+            assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                       assignee=member, assigned_by=owner)
+            BlindReadBinding.objects.create(
+                assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                project_id_frozen=project.pk, actor_id_frozen=member.pk, purpose='quality',
+                reference_id_frozen=reference.pk, reference_hash='1' * 64,
+                proof_hash='2' * 64, binding_hash='3' * 64,
+            )
+            started = Event()
+
+            def migrate():
+                close_old_connections()
+                try:
+                    started.set()
+                    MigrationExecutor(connection).migrate(after)
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='2' * 64,
+                        manifest={'account_birth_sequence': -1, 'reference_sequence': -1})
+                    migration = pool.submit(migrate)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        migration.result(timeout=0.3)
+                migration.result(timeout=30)
+            assert BlindReadIdentityState.objects.get(pk=assignment.pk).revoked
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    def test_sequence_upgrade_retains_mismatches_and_preserves_legacy(self):
+        from classification_disagreements.models import (
+            BlindEligibilityProof, BlindProvenanceEvent, BlindReadBinding, BlindReadIdentityState,
+        )
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0060_blind_account_exposure_state')])
+        try:
+            owner = UserFactory()
+            project = ProjectFactory(created_by=owner)
+            reference = ClassificationGoldEvidence.objects.create(
+                project=project, created_by=owner, actor_id_frozen=owner.pk, principal='local:test',
+                principal_source='local', kind='reference', idempotency_key=uuid4(), request_hash='0' * 64,
+                manifest={}, manifest_hash='1' * 64,
+            )
+            enable_test_capture()
+            member = UserFactory()
+            account_sequence = BlindProvenanceEvent.objects.get(kind='account', subject_id=member.pk).sequence
+            reference_sequence = BlindProvenanceEvent.objects.get(kind='reference', subject_id=reference.pk).sequence
+            assignments = []
+            for index in range(5):
+                assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                           assignee=member, assigned_by=owner)
+                assignments.append(assignment)
+                quality = index != 4
+                BlindReadBinding.objects.create(
+                    assignment_id_frozen=assignment.pk, task_id_frozen=assignment.task_id,
+                    project_id_frozen=project.pk, actor_id_frozen=member.pk,
+                    purpose='quality' if quality else 'ordinary',
+                    reference_id_frozen=reference.pk if quality else None,
+                    reference_hash='1' * 64 if quality else None,
+                    proof_hash='2' * 64 if quality else None, binding_hash='3' * 64,
+                )
+                if index < 3:
+                    BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='2' * 64,
+                        manifest={'account_birth_sequence': account_sequence if index != 1 else account_sequence + 1,
+                                  'reference_sequence': reference_sequence if index != 2 else str(reference_sequence)})
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert list(BlindReadIdentityState.objects.filter(pk__in=[a.pk for a in assignments])
+                    .order_by('pk').values_list('revoked', flat=True)) == [False, True, True, False, False]
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindReadIdentityState.objects.filter(pk=assignments[1].pk).update(revoked=False)
+
     def test_account_exposure_upgrade_backfills_generation_and_rolls_back_events(self):
         from classification_disagreements.models import (BlindAccountExposureState, BlindLabelExposure,
                                                           BlindProjectFileExposure)
@@ -829,7 +922,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
 
     def test_read_evidence_upgrade_backfills_revoked_quality_without_touching_ordinary(self):
         from classification_disagreements.models import (BlindAssignmentExposure, BlindEligibilityProof,
-            BlindLabelExposure, BlindProjectFileExposure, BlindReadBinding, BlindReadIdentityState,
+            BlindLabelExposure, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadBinding, BlindReadIdentityState,
             BlindReferenceTextLength, BlindTextLengthExposure)
 
         executor = MigrationExecutor(connection)
@@ -877,7 +970,11 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
             for assignment, source_id, observed_id in ((assignments[7], 9876543, 9876543),
                                                         (assignments[8], 9876543, 9876544)):
                 BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='2' * 64,
-                    manifest={'rule': 'local-unseen-source/v2', 'source_task_id': source_id})
+                    manifest={'rule': 'local-unseen-source/v2', 'source_task_id': source_id,
+                              'account_birth_sequence': BlindProvenanceEvent.objects.get(
+                                  kind='account', subject_id=assignment.assignee_id).sequence,
+                              'reference_sequence': BlindProvenanceEvent.objects.get(
+                                  kind='reference', subject_id=reference.pk).sequence})
                 BlindAssignmentExposure.objects.create(account_id=assignment.assignee_id, task_id=observed_id,
                                                        project_id=project.pk, generation=generation)
         finally:

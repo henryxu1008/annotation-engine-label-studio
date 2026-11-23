@@ -863,6 +863,12 @@ revocation and exposure disappear on rollback. The write probes time database
 inserts, not HTTP requests. They use a tiny synthetic fixture and do not prove
 timing privacy, especially at realistic data volumes. The text trigger still
 updates quality-specific binding state; its write side channel remains open.
+The sequence reconciliation migration also compares existing quality proofs'
+account and reference provenance sequences with the current immutable events.
+It retains revocation for mismatches under the migration lock; it does not
+promote missing proofs to valid evidence. Unsigned and missing-proof work keeps
+the live compatibility checks. This backfill covers only these sequences and
+does not make the projected state a complete authorization decision.
 
 Completion read state is retained after submission deletion, or a change to
 its identity, assignment or submitter. Revocation is irreversible even if the same
