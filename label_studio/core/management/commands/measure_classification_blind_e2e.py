@@ -129,8 +129,8 @@ class Command(BaseCommand):
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
                                           'samples_per_kind': len(quality), 'diagnostic_only': True}))
             if options['exposure_samples']:
-                from classification_disagreements.models import (BlindCaptureCertificate, BlindCaptureEpoch,
-                    BlindLabelExposure, BlindReadBinding, BlindReadIdentityState)
+                from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate,
+                    BlindCaptureEpoch, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState)
 
                 try:
                     epoch = BlindCaptureEpoch.objects.get(pk=1, enabled=True)
@@ -144,6 +144,8 @@ class Command(BaseCommand):
                                     generation=epoch.generation).exists()
                                 or BlindLabelExposure.objects.filter(account_id=account.pk,
                                     generation=epoch.generation).exists()
+                                or not BlindAccountExposureState.objects.filter(pk=account.pk,
+                                    generation=epoch.generation, file_exposed=False, label_exposed=False).exists()
                                 or not BlindReadIdentityState.objects.filter(pk=rows[0]['assignment_id_frozen'],
                                     revoked=False).exists()):
                             raise ValueError('Unexpected synthetic exposure fixture')
@@ -158,7 +160,8 @@ class Command(BaseCommand):
                             start = time.perf_counter()
                             BlindLabelExposure.objects.create(account_id=account_id, generation=epoch.generation)
                             elapsed = (time.perf_counter() - start) * 1000
-                            if BlindReadIdentityState.objects.get(pk=assignment_id).revoked != (kind == 'quality'):
+                            if (BlindReadIdentityState.objects.get(pk=assignment_id).revoked
+                                    or not BlindAccountExposureState.objects.get(pk=account_id).label_exposed):
                                 raise CommandError('Synthetic exposure revocation is inconsistent.')
                             transaction.set_rollback(True)
                         writes[kind].append(elapsed)
@@ -166,7 +169,8 @@ class Command(BaseCommand):
                     samples = values[2:]
                     account_id, assignment_id = targets[kind]
                     if (BlindLabelExposure.objects.filter(account_id=account_id, generation=epoch.generation).exists()
-                            or BlindReadIdentityState.objects.get(pk=assignment_id).revoked):
+                            or BlindReadIdentityState.objects.get(pk=assignment_id).revoked
+                            or BlindAccountExposureState.objects.get(pk=account_id).label_exposed):
                         raise CommandError('Synthetic exposure rollback failed.')
                     self.stdout.write(json.dumps({'kind': kind, 'mode': 'rolled-back-label-insert',
                         'samples': len(samples), 'median_ms': round(statistics.median(samples), 2),

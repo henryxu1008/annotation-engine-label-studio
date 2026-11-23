@@ -16,7 +16,7 @@ from .blind_provenance import (
     _matching_text_exposures, require_capture_fence,
 )
 from .models import (
-    BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
+    BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
     BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence, BlindMixCompletion,
     BlindCompletionReadState,
@@ -64,6 +64,9 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             'binding': Exists(BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash,
                                 assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
             'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
+            'exposure_clean': Exists(BlindAccountExposureState.objects.filter(
+                account_id=assignment.assignee_id, generation=OuterRef('generation'),
+                file_exposed=False, label_exposed=False)),
         }
         if binding.purpose == 'ordinary':
             markers = BlindQualityAssignment.objects.filter(task_id=assignment.task_id)
@@ -169,7 +172,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     checks.update(scopes)
     guard = (BlindCaptureEpoch.objects.filter(pk=1, enabled=True, generation=generation)
              .annotate(**checks).values(*checks).first())
-    if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity',
+    if (guard is None or not all(guard[name] for name in ('active_user', 'active_assignment', 'binding', 'read_identity', 'exposure_clean',
             'certificate', 'history', 'account_event',
             'reference_event', 'reference', 'proof', 'marker')) or any(guard[name] for name in scopes)
             or guard['file_exposure'] or guard['label_exposure'] or guard['length_exposed']

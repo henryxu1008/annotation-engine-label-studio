@@ -486,6 +486,32 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
     def setUp(self):
         enable_test_capture()
 
+    def test_direct_certificate_insert_fences_concurrent_file_exposure(self):
+        from classification_disagreements.models import BlindAccountExposureState, BlindProjectFileExposure
+
+        account_id = 987654321
+        generation = BlindCaptureEpoch.objects.get(pk=1).generation
+        started = Event()
+
+        def expose():
+            close_old_connections()
+            try:
+                started.set()
+                BlindProjectFileExposure.objects.create(account_id=account_id, project_id=1, generation=generation)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with transaction.atomic():
+                BlindCaptureCertificate.objects.create(account_id=account_id, generation=generation)
+                assert not BlindAccountExposureState.objects.get(pk=account_id).file_exposed
+                writer = pool.submit(expose)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+            writer.result(timeout=20)
+        assert BlindAccountExposureState.objects.get(pk=account_id).file_exposed
+
     def test_retirement_fences_concurrent_replay_with_old_snapshot(self):
         for kind in ('account', 'reference', 'privilege'):
             with self.subTest(kind=kind):
@@ -684,6 +710,74 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_account_exposure_upgrade_backfills_generation_and_rolls_back_events(self):
+        from classification_disagreements.models import (BlindAccountExposureState, BlindLabelExposure,
+                                                          BlindProjectFileExposure)
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0059_blind_read_reference_index')])
+        try:
+            project = ProjectFactory()
+            enable_test_capture()
+            file_member, label_member, clean_member = UserFactory(), UserFactory(), UserFactory()
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            BlindProjectFileExposure.objects.create(account_id=file_member.pk, project_id=project.pk,
+                                                    generation=generation)
+            BlindLabelExposure.objects.create(account_id=label_member.pk, generation=generation)
+            BlindLabelExposure.objects.create(account_id=clean_member.pk, generation=generation - 1)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert BlindAccountExposureState.objects.get(pk=file_member.pk).file_exposed
+        assert BlindAccountExposureState.objects.get(pk=label_member.pk).label_exposed
+        assert not BlindAccountExposureState.objects.get(pk=clean_member.pk).label_exposed
+        with transaction.atomic():
+            BlindLabelExposure.objects.create(account_id=clean_member.pk, generation=generation)
+            assert BlindAccountExposureState.objects.get(pk=clean_member.pk).label_exposed
+            transaction.set_rollback(True)
+        assert not BlindAccountExposureState.objects.get(pk=clean_member.pk).label_exposed
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindAccountExposureState.objects.filter(pk=file_member.pk).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindAccountExposureState.objects.filter(pk=file_member.pk).update(file_exposed=False)
+        with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+            MigrationExecutor(connection).migrate([('classification_disagreements', '0059_blind_read_reference_index')])
+
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
+    def test_account_exposure_upgrade_fences_inflight_record(self):
+        from classification_disagreements.models import BlindAccountExposureState, BlindProjectFileExposure
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        executor.migrate([('classification_disagreements', '0059_blind_read_reference_index')])
+        try:
+            project = ProjectFactory()
+            enable_test_capture()
+            member = UserFactory()
+            generation = BlindCaptureEpoch.objects.get(pk=1).generation
+            started = Event()
+
+            def migrate():
+                close_old_connections()
+                try:
+                    started.set()
+                    MigrationExecutor(connection).migrate(after)
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with transaction.atomic():
+                    BlindProjectFileExposure.objects.create(account_id=member.pk, project_id=project.pk,
+                                                            generation=generation)
+                    migration = pool.submit(migrate)
+                    assert started.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        migration.result(timeout=0.3)
+                migration.result(timeout=30)
+            assert BlindAccountExposureState.objects.get(pk=member.pk).file_exposed
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration concurrency test')
     def test_read_evidence_upgrade_fences_inflight_exposure_before_backfill(self):
         from classification_disagreements.models import BlindProjectFileExposure, BlindReadBinding, BlindReadIdentityState

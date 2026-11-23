@@ -287,7 +287,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
-        from classification_disagreements.models import (BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
+        from classification_disagreements.models import (BlindAccountExposureState, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState)
         from projects.models import ProjectMember
@@ -422,7 +422,8 @@ class TestBlindQualityBoundary(APITestCase):
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             assert verify_mixed_read_binding(assignments[1])
             record_label_metadata_access(account_id=members[1].pk)
-            assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
+            assert BlindAccountExposureState.objects.get(pk=members[1].pk).label_exposed
+            assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             assert not BlindReadIdentityState.objects.get(pk=assignments[0].pk).revoked
             assert not BlindReadIdentityState.objects.get(pk=same_actor_ordinary.pk).revoked
             assert issue_handle(principal=local_principal(members[1]), assignment_id=same_actor_ordinary.pk)
@@ -3525,7 +3526,7 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_project_upload_read_revokes_quality_without_blocking_file(self):
         from classification_disagreements.blind_scoring import score_quality_revision
-        from classification_disagreements.models import BlindCaptureEpoch, BlindProjectFileExposure, BlindReadIdentityState
+        from classification_disagreements.models import BlindAccountExposureState, BlindCaptureEpoch, BlindProjectFileExposure, BlindReadIdentityState
         from classification_disagreements.tests.test_gold_scoring import answer
         from data_import.models import FileUpload
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -3542,7 +3543,8 @@ class TestBlindQualityBoundary(APITestCase):
             generation = BlindCaptureEpoch.objects.get(pk=1).generation
             exposure = BlindProjectFileExposure.objects.get(account_id=self.annotator.pk,
                                                             project_id=self.project.pk, generation=generation)
-            assert BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
+            assert BlindAccountExposureState.objects.get(pk=self.annotator.pk).file_exposed
+            assert not BlindReadIdentityState.objects.get(pk=self.assignment.pk).revoked
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
             assert not submission.has_permission(self.annotator)
             with self.assertRaises(ValidationError):
@@ -5378,7 +5380,7 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_provenance import record_label_metadata_access
         from classification_disagreements.blind_task_handles import issue_handle
-        from classification_disagreements.models import BlindReadIdentityState
+        from classification_disagreements.models import BlindAccountExposureState, BlindReadIdentityState
         from projects.models import ProjectMember
         from rest_framework.test import APIClient
         from users.models import User
@@ -5447,7 +5449,9 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                         release.set()
                     assert reading.result(timeout=20) == 200
                     exposure.result(timeout=20)
-            assert BlindReadIdentityState.objects.get(pk=chosen.pk).revoked
+            assert BlindReadIdentityState.objects.get(pk=chosen.pk).revoked is certificate
+            if not certificate:
+                assert BlindAccountExposureState.objects.get(pk=member.pk).label_exposed
             assert read(handle) == 404
 
     def test_annotator_directory_rechecks_membership_after_waiting_for_project_lock(self):

@@ -327,6 +327,15 @@ class BlindReadIdentityState(models.Model):
     revoked = models.BooleanField(default=False)
 
 
+class BlindAccountExposureState(models.Model):
+    """Retained file and label exposure for one certified account generation."""
+
+    account_id = models.PositiveBigIntegerField(primary_key=True)
+    generation = models.PositiveBigIntegerField()
+    file_exposed = models.BooleanField(default=False)
+    label_exposed = models.BooleanField(default=False)
+
+
 class BlindTaskHandle(models.Model):
     """Retained opaque participant identifiers for one assignment, not a public API."""
 

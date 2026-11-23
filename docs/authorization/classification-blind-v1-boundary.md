@@ -808,13 +808,12 @@ revokes that state in the same transaction; restoring the old values does not
 restore the binding, while rolling back the change rolls back revocation.
 Deletion of a quality binding's capture certificate, privilege history,
 account/reference provenance event or pinned reference also revokes it
-transactionally, as does a file or label exposure recorded for its
-certified account and generation. Matching text-length exposure, exposure to
-the frozen source task and an additional reference text length revoke the
-quality binding under the same transaction. Ordinary bindings are unaffected by these
-quality-specific events. The migration backfills currently missing or invalid
-history, missing provenance, references or certificates and matching recorded exposures
-while source tables are locked;
+transactionally. Matching text-length exposure, exposure to the frozen source
+task and an additional reference text length also revoke the quality binding
+under the same transaction. Ordinary bindings are unaffected by these
+quality-specific events. The evidence migration backfills currently missing or
+invalid history, provenance, references or certificates and matching recorded
+exposures while source tables are locked;
 rollback of an event also rolls back the revocation. The state is retained
 even if evidence is later restored. Historical events that are no longer
 present cannot be reconstructed by this backfill.
@@ -825,17 +824,27 @@ Identity changes before this migration cannot be reconstructed, so the state
 proves continuity only from the upgrade onward. Once state exists, rolling
 back this migration is blocked. This identity state covers only assignment
 identity and these selected evidence events; it is not a replacement for live
-eligibility, reference, exposure, membership or decision checks. Evidence
-mutations currently update quality bindings only, so their write cost is also
-a possible timing side channel. Neither this state nor these checks establish
-timing privacy or enable public dispatch.
+eligibility, reference, exposure, membership or decision checks. File and label
+exposure are also retained once per certified account and generation, and both
+signed bound ordinary and quality reads evaluate that same account state. New file and label
+events update this account state without inspecting whether it has quality
+bindings; ordinary work remains accessible while quality work fails closed.
+Migration backfills the account state while certificates and exposure tables
+are locked. The state is retained after certificate deletion, only moves toward
+exposure, and cannot be discarded on rollback. Existing binding revocations
+from an earlier migration remain in force. Text, source and reference evidence
+mutations still update quality bindings specifically, and their write cost is
+a possible timing side channel. Neither projection establishes timing privacy
+or enables public dispatch. Uncertified accounts and unsigned legacy reads
+still use different paths and require separate compatibility and timing work.
 After adding identity state and before the evidence-state migration, an isolated PostgreSQL fixture measured 100 warm
 pairs: ordinary median 32.7 ms and quality median 47.7 ms, with a 0.9928
 quality-versus-ordinary rank statistic. Four fresh application-process pairs
 measured medians of 109.0 ms and 124.9 ms respectively. These process starts
 shared the database cache and the samples are too small to establish cold
 cache behavior or timing privacy. The remaining difference is a blocker.
-After the evidence revocation migration, a separate isolated PostgreSQL run
+After the evidence revocation migration and before the account-state migration,
+a separate isolated PostgreSQL run
 measured 100 warm pairs: ordinary median 31.0 ms and quality median 44.1 ms
 (rank 0.9931). Two fresh application-process pairs, with a shared database
 cache, measured medians 122.3 ms and 145.1 ms. For 100 paired rolled-back
