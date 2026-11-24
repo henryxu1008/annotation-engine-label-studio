@@ -89,6 +89,7 @@ def _projected_storage_flag(model):
 
 def _external_scope_checks(using='default', *, storage_classes=None, omit_projected=False):
     """Build the same global storage, model and credential fences for each caller."""
+    from django.apps import apps
     from io_storages.models import get_storage_classes
     from ml.models import MLBackend
 
@@ -97,14 +98,18 @@ def _external_scope_checks(using='default', *, storage_classes=None, omit_projec
         'external_credentials': Exists(_projects_with_external_credentials(using)),
         'external_ml': Exists(MLBackend.objects.using(using).all()),
     }
+    if not omit_projected:
+        # Built-in storage routes remain mounted even if a configurable
+        # registry omits a type. Inspect every fenced built-in table.
+        for label, flag in PROJECTED_STORAGE_FLAGS.items():
+            model = apps.get_model(label)
+            checks[f'external_storage_{flag}'] = Exists(model.objects.using(using).all())
     for index, model in enumerate(classes):
         flag = _projected_storage_flag(model)
         if flag is None:
             # An empty unrecognized table says nothing about an external
             # provider's access history or independently served data.
             checks[f'external_storage_{index}'] = Value(True, output_field=BooleanField())
-        elif not omit_projected:
-            checks[f'external_storage_{index}'] = Exists(model.objects.using(using).all())
     return checks
 
 

@@ -12,10 +12,10 @@ from rest_framework.exceptions import ValidationError
 from review_batches.service import digest
 
 from .blind_provenance import (
+    PROJECTED_STORAGE_FLAGS,
     _exact_reference_length_checks,
     _external_scope_checks,
     _local_upload_backend_supported,
-    _projected_storage_flag,
     require_capture_fence,
 )
 from .blind_read_attestation import read_attestation
@@ -221,7 +221,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     checks.update(scopes)
     guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks, quality_generation=generation)
     global_scope = guard['global_scope']
-    projected_flags = [flag for model in registered if (flag := _projected_storage_flag(model)) is not None]
+    projected_flags = PROJECTED_STORAGE_FLAGS.values()
     if ((connection.vendor == 'sqlite' and (not all(
             guard[name] for name in ('account_event', 'reference_event', 'reference', 'history', 'certificate'))
             or guard['file_exposure'] or guard['label_exposure']

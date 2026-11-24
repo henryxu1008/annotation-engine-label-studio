@@ -1189,9 +1189,10 @@ external-scope projection must account for registry and deployment changes
 transactionally before those live checks can be replaced.
 
 Migration 0070 supplies a live built-in external-scope view to both ordinary
-and quality handle reads. The quality guard applies the global credential and
-model flags, and applies each built-in storage flag only when that storage
-class is currently registered with its expected model identity and table.
+and quality handle reads. The quality guard applies the global credential,
+model and all built-in import-storage flags regardless of registry membership:
+the built-in storage API routes remain mounted even if a type is omitted from
+the configurable registry. Admission and collection checks use the same scope.
 Other registered models fail closed, even when their database tables are empty,
 including entries that merely claim a built-in model label. Their independent
 data sources and serving routes cannot be certified by an empty table.

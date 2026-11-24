@@ -514,10 +514,12 @@ class TestBlindQualityBoundary(APITestCase):
             with patch('io_storages.models.get_storage_classes', return_value=[S3ImportStorage]), patch.object(
                 blind_attested_live, '_read_live_guard', side_effect=guarded_with_scope('gcs'),
             ):
-                # A known storage type not registered in this process must
-                # not become a new restriction for existing quality work.
-                checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
-                                      fence=fence)
+                # Built-in routes remain mounted even if registry enumeration
+                # omits a type. Ordinary access remains independent.
+                checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding, fence=fence)
+                with self.assertRaises(ValidationError):
+                    checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                          fence=fence)
             from types import SimpleNamespace
             from users.models import User
 
@@ -2006,7 +2008,7 @@ class TestBlindQualityBoundary(APITestCase):
             assert bool(facts['model']) == legacy['external_ml']
             for index, model in enumerate(classes):
                 flag = PROJECTED_STORAGE_FLAGS[model._meta.label_lower]
-                assert bool(facts[flag]) == legacy[f'external_storage_{index}']
+                assert bool(facts[flag]) == legacy[f'external_storage_{flag}']
 
         assert_equivalent()
         mutations = (
@@ -2051,6 +2053,15 @@ class TestBlindQualityBoundary(APITestCase):
             with self.assertRaises(NotFound):
                 resolve_handle(principal=principal, task_handle=handle.task_handle)
             assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
+
+    def test_unregistered_builtin_storage_still_denies_admission(self):
+        from classification_disagreements.blind_provenance import project_file_scope_supported
+        from io_storages.s3.models import S3ImportStorage
+
+        with patch('io_storages.models.get_storage_classes', return_value=[]):
+            assert project_file_scope_supported(self.project.pk)
+            S3ImportStorage.objects.create(project=self.project, bucket='synthetic')
+            assert not project_file_scope_supported(self.project.pk)
 
     def test_unprojected_registered_storage_still_denies_quality_access(self):
         from access_control.project_operations import local_principal
