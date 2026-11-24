@@ -84,6 +84,10 @@ class TestBlindQualityBoundary(APITestCase):
             response = self.client.get(url)
             assert response.status_code == 200 and response.data['restricted'] is False
             assert response.data['session_user_id'] == self.manager.pk
+            self.client.force_authenticate(self.reviewer)
+            response = self.client.get(url)
+            assert response.status_code == 200 and response.data['restricted'] is True
+            assert response.data['session_user_id'] == self.reviewer.pk
             self.client.force_authenticate(self.other_user)
             assert self.client.get(url).status_code in (403, 404)
             self.client.force_authenticate(self.annotator)

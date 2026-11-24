@@ -6,7 +6,7 @@ export async function loadWorkspaceBootstrap({ callApi, projectId, sessionUserId
   if (!Number.isSafeInteger(project) || project <= 0 || !Number.isSafeInteger(sessionUser) || sessionUser <= 0) {
     throw new Error("Work mode is unavailable");
   }
-  const mode = await callApi("projectWorkMode", { params: { pk: project }, errorFilter: () => true });
+  const mode = await callApi("projectWorkMode", { params: { pk: project }, suppressError: true });
   if (isCancelled()) return null;
   if (!mode || mode.error || mode.$meta?.ok === false || mode.project_id !== project
       || mode.session_user_id !== sessionUser || typeof mode.restricted !== "boolean") {

@@ -8,6 +8,7 @@ it("selects restricted work before any model or legacy workspace request", async
   await expect(loadWorkspaceBootstrap(options(callApi))).resolves.toEqual({ restricted: true, interactiveBackend: null });
   expect(callApi).toHaveBeenCalledTimes(1);
   expect(callApi.mock.calls[0][0]).toBe("projectWorkMode");
+  expect(callApi.mock.calls[0][1]).toEqual({ params: { pk: 7 }, suppressError: true });
 });
 
 it("retains model discovery for ordinary work", async () => {
