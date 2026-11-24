@@ -4,6 +4,7 @@ import cProfile
 import json
 import os
 import pstats
+import random
 import statistics
 import subprocess
 import sys
@@ -72,6 +73,7 @@ class Command(BaseCommand):
                 if (len(candidates) != 1 or BlindQualityAssignment.objects.filter(
                         assignment_id=candidates[0].assignment_id_frozen).exists() != (kind == 'quality')):
                     raise CommandError('Synthetic paired work is unavailable.')
+                connection.queries_log.clear()
                 start = time.perf_counter()
                 with CaptureQueriesContext(connection) as queries:
                     response = client.get(f'/api/tasks/blind/{candidates[0].task_handle}/')
@@ -103,8 +105,17 @@ class Command(BaseCommand):
             if set(handles) != {'quality', 'ordinary'}:
                 raise CommandError('Synthetic paired work is unavailable.')
             measurements = {kind: [] for kind in handles}
-            for iteration in range(options['samples'] + 2):
-                for kind in (('quality', 'ordinary') if iteration % 2 else ('ordinary', 'quality')):
+            # Balance both orders and shuffle them reproducibly to avoid
+            # confounding purpose with a fixed first/second position.
+            order_seed = 82
+            orders = [iteration % 2 for iteration in range(options['samples'])]
+            random.Random(order_seed).shuffle(orders)
+            for reverse in [0, 1, *orders]:
+                for kind in (('quality', 'ordinary') if reverse else ('ordinary', 'quality')):
+                    # Django retains at most 9000 queries. CaptureQueriesContext
+                    # indexes that buffer, so clear it before each sample; once
+                    # full, its length otherwise stops tracking new queries.
+                    connection.queries_log.clear()
                     start = time.perf_counter()
                     with CaptureQueriesContext(connection) as queries:
                         response = client.get(f'/api/tasks/blind/{handles[kind]}/')
@@ -127,7 +138,8 @@ class Command(BaseCommand):
             rank = sum((bisect_left(ordinary, value) + bisect_right(ordinary, value)) / 2
                        for value in quality) / (len(ordinary) * len(quality))
             self.stdout.write(json.dumps({'comparison': 'quality_vs_ordinary', 'rank_probability': round(rank, 4),
-                                          'samples_per_kind': len(quality), 'diagnostic_only': True}))
+                                          'samples_per_kind': len(quality), 'order_seed': order_seed,
+                                          'pair_order': 'balanced-shuffled', 'diagnostic_only': True}))
             if options['exposure_samples']:
                 from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure,
                     BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof, BlindLabelExposure, BlindReadBinding, BlindReadIdentityState,

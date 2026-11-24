@@ -1234,6 +1234,11 @@ in which a direct insert could invalidate the shared lifecycle while a response
 is being assembled. Applying or reversing the migration disables capture through
 the existing migration fence; stop dependent readers and writers before rollback.
 This does not establish external provider history or prove timing privacy.
+A PostgreSQL 17 synthetic run on code at `d85dbef8`, using 500 balanced,
+seeded-shuffled warm pairs with the measurement query buffer cleared before
+each request, observed ordinary/quality medians of 26.7/26.8 ms and a rank
+probability of 0.5123; each request captured 20 queries. This is one diagnostic
+fixture, not a cold-cache result, acceptance threshold, or privacy proof.
 A randomized, same-process PostgreSQL 16 comparison on one synthetic fixture
 used 500 warm samples for each purpose and version. Before/after ordinary
 medians were 26.09/26.12 ms and quality medians were 26.39/26.16 ms; the
