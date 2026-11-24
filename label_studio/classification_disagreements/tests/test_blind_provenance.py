@@ -1041,8 +1041,11 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
         assert not any(BlindGlobalScopeState.objects.get(pk=1).facts.values())
 
     def test_live_mix_view_can_be_recreated_without_discarding_history(self):
-        from classification_disagreements.models import BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence
+        from classification_disagreements.models import (
+            BlindCaptureEpoch, BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence,
+        )
 
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
         executor = MigrationExecutor(connection)
         after = executor.loader.graph.leaf_nodes()
         before = [('classification_disagreements', '0064_shared_mix_evidence')]
@@ -1083,8 +1086,9 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
 
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration lock test')
     def test_shared_mix_rollback_waits_for_inflight_writer_and_retains_evidence(self):
-        from classification_disagreements.models import BlindMixDecision, BlindMixSharedEvidence
+        from classification_disagreements.models import BlindCaptureEpoch, BlindMixDecision, BlindMixSharedEvidence
 
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
         executor = MigrationExecutor(connection)
         after = executor.loader.graph.leaf_nodes()
         before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
