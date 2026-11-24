@@ -4176,6 +4176,62 @@ class TestBlindQualityBoundary(APITestCase):
         with self.assertRaises(DatabaseError), transaction.atomic():
             BlindGoldScore.objects.filter(pk=score.pk).update(manifest_hash='0' * 64)
 
+    def test_blind_score_api_requires_current_manager_and_checks_frozen_evidence(self):
+        from classification_disagreements.blind_scoring import score_quality_revision
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from projects.models import ProjectMember
+
+        reference, submission = self.qualified_submission(answer('Negative'))
+        score = score_quality_revision(submission.pk)
+        url = f'/api/projects/{self.project.pk}/classification-disagreements/gold/blind-scores/'
+        detail = f'{url}{score.pk}/'
+        config = {'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config):
+            self.client.force_authenticate(user=None)
+            assert self.client.get(url).status_code in (401, 403, 404)
+            for user in (self.annotator, self.reviewer, self.other_user):
+                self.client.force_authenticate(user)
+                assert self.client.get(url).status_code in (403, 404)
+                assert self.client.get(detail).status_code in (403, 404)
+            self.client.force_authenticate(self.manager)
+            listing = self.client.get(url)
+            assert listing.status_code == 200 and listing['Cache-Control'] == 'private, no-store'
+            assert listing['Referrer-Policy'] == 'no-referrer'
+            assert listing.data['items'][0]['id'] == score.pk
+            assert 'manifest' not in listing.data['items'][0]
+            result = self.client.get(detail)
+            assert result.status_code == 200 and result.data['manifest'] == score.manifest
+            assert result.data['manifest']['reference_hash'] == reference.manifest_hash
+            assert self.client.get(detail + '?extra=1').status_code == 400
+            for suffix in ('?before=0', '?before=-1', '?before=1&before=2', '?before=9223372036854775808'):
+                assert self.client.get(url + suffix).status_code == 400
+            assert self.client.get(url + f'?before={score.pk}').data['items'] == []
+            assert self.client.get(f'{url}{score.pk + 100000}/').status_code == 404
+            foreign = ProjectFactory(organization=self.organization, created_by=self.manager)
+            ProjectMember.objects.get_or_create(project=foreign, user=self.manager, defaults={'role': 'manager'})
+            with self.settings(ANNOTATION_CLASSIFICATION_GOLD_PROJECTS={
+                **config['ANNOTATION_CLASSIFICATION_GOLD_PROJECTS'], f'{self.organization.pk}:{foreign.pk}': True,
+            }):
+                foreign_url = f'/api/projects/{foreign.pk}/classification-disagreements/gold/blind-scores/'
+                assert self.client.get(foreign_url).status_code == 200
+                assert self.client.get(f'{foreign_url}{score.pk}/').status_code == 404
+            with patch('classification_disagreements.blind_score_api.digest', return_value='0' * 64):
+                assert self.client.get(detail).status_code == 409
+            with patch('classification_disagreements.blind_score_api.MAX_BYTES', 1):
+                assert self.client.get(detail).status_code == 409
+            with self.settings(ANNOTATION_CLASSIFICATION_GOLD_ENABLED=False):
+                assert self.client.get(detail).status_code == 404
+            delegated = UserFactory(active_organization=self.organization)
+            self.organization.add_user(delegated)
+            membership = ProjectMember.objects.create(project=self.project, user=delegated, role='manager')
+            self.client.force_authenticate(delegated)
+            assert self.client.get(detail).status_code == 200
+            membership.enabled = False
+            membership.save(update_fields=['enabled'])
+            assert self.client.get(url).status_code in (403, 404)
+            assert self.client.get(detail).status_code in (403, 404)
+
     def test_internal_score_rejects_unbound_or_invalid_revision(self):
         from classification_disagreements.blind_scoring import score_quality_revision
 

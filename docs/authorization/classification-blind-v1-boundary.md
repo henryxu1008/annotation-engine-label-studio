@@ -940,6 +940,42 @@ this change measured 28.2/41.4 ms ordinary/quality (rank 0.8741); two fresh
 process pairs measured 87.5/118.1 ms with a shared database cache. Different
 fixture runs and a two-pair process sample do not establish an improvement or
 cold-cache privacy. The timing gap and public-dispatch release block remain.
+An experimental PostgreSQL checkpoint for global storage, model and credential
+scope was evaluated and discarded: it required shared table and function locks,
+additional database round trips, trigger integrity checks and privilege-dependent
+fallback, while the remaining quality-specific read checks still differed. On an
+isolated PostgreSQL 17 fixture, 100 warm pairs measured ordinary/quality medians
+of 35.0/47.8 ms (rank 0.9435; 27 statements each). Ten pairs after eviction of
+the synthetic database's eligible PostgreSQL shared buffers measured 30.6/41.1 ms
+(rank 0.99; at least 64 buffers evicted per sample, zero reported failures).
+The latter retains operating-system caches and is not a fully cold measurement.
+Different runs cannot prove a regression or improvement; neither establishes
+timing privacy. The checkpoint and its experimental migration were not retained.
+
+The next shared-read design needs one transactionally maintained authorization
+projection for both purposes, rather than an additional quality-only checkpoint.
+Its validity must cover account and project membership, assignment and binding
+identity, capture generation, privilege and exposure changes, reference and
+source evidence, mixed-decision history, and external storage/model/credential
+scope. A change to any applicable source must invalidate the projection in the
+same transaction, including deletion, replacement, backfill and migration
+paths. Ordinary work must remain usable where its own authorization is valid;
+it must not inherit a quality-only admission requirement merely to equalize work.
+Before replacing the current live checks, compare both implementations on the
+same synthetic fixtures and negative mutations, test concurrent revocation at
+the response fence on both databases, and measure alternating warm and genuinely
+characterized cold reads. Unknown coverage or unavailable invalidation must
+fail closed for quality work. Keep public mixed dispatch disabled until these
+checks and the remaining browser and release boundaries are met.
+
+Managers can inspect frozen blind scores through the project-scoped
+`gold/blind-scores/` collection and its detail endpoint when classification
+gold is enabled. The collection returns at most 100 metadata rows per page;
+`next_before` is the exclusive cursor for the next page. The detail checks the
+bounded manifest, its hash and its submission, assignment, marker and reference
+identities. Both endpoints recheck manager authority while holding the project
+operation fence and use private, no-store responses. They do not enable blind
+dispatch, provide an annotator score endpoint, or implement alert events.
 After the earlier single-verification change, an isolated PostgreSQL fixture's 100 warm read
 pairs measured ordinary/quality medians of 26.4/36.2 ms (rank 0.9724); two
 fresh-process pairs measured 121.8/128.1 ms with a shared database cache.
