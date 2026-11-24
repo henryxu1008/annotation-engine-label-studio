@@ -8,6 +8,28 @@ describe('synthetic blind and ordinary work', () => {
   before(() => cy.readFile('.classification82-blind-e2e.json', { log: false }).then((value) => { fixture = value; }));
 
   for (const locale of ['en-US', 'zh-CN'] as const) {
+    it(`fails closed and retries the real workspace in ${locale}`, () => {
+      const scope = fixture.projects[locale];
+      let denyMode = true;
+      cy.loginAs(scope.email, fixture.password, '/user/account/personal-info');
+      cy.setUserLocale(locale);
+      cy.intercept('GET', `**/api/projects/${scope.id}/work-mode/`, (req) => {
+        if (denyMode) req.reply({ statusCode: 404, body: {} });
+        else req.continue();
+      }).as('workMode');
+      cy.intercept('GET', '**/api/ml?*').as('legacyModels');
+      cy.intercept('GET', '**/api/dm/project/**').as('legacyDataManager');
+      cy.visit(`/projects/${scope.id}/data`);
+      cy.wait('@workMode').its('response.statusCode').should('eq', 404);
+      cy.contains(locale === 'zh-CN' ? '无法加载任务工作区' : 'Could not load the task workspace').should('be.visible');
+      cy.get('@legacyModels.all').should('have.length', 0);
+      cy.get('@legacyDataManager.all').should('have.length', 0);
+      cy.then(() => { denyMode = false; });
+      cy.contains('button', locale === 'zh-CN' ? '重试' : 'Retry').click();
+      cy.wait('@workMode').its('response.statusCode').should('eq', 200);
+      cy.window({ timeout: 30000 }).its('DM.SDK.settings.blindProtocol').should('eq', true);
+    });
+
     it(`submits both work types through the same opaque editor in ${locale}`, () => {
       const scope = fixture.projects[locale];
       const openText = locale === 'zh-CN' ? '打开标注' : 'Open annotation';

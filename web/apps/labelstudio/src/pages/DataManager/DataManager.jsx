@@ -307,8 +307,12 @@ export const DataManagerPage = ({ ...props }) => {
   }, []);
 
   useEffect(() => {
+    setCrashed(false);
+  }, [projectId, sessionUserId]);
+
+  useEffect(() => {
     let cancelled = false;
-    if (!projectId || !sessionUserId) return () => { cancelled = true; destroyDM(); };
+    if (crashed || !projectId || !sessionUserId) return () => { cancelled = true; destroyDM(); };
     setLoading(true);
     Promise.all(dependencies)
       .then(() => {
@@ -318,7 +322,7 @@ export const DataManagerPage = ({ ...props }) => {
       .then(() => { if (!cancelled) setLoading(false); })
       .catch(() => { if (!cancelled) { setLoading(false); setCrashed(true); } });
     return () => { cancelled = true; destroyDM(); };
-  }, [init, retryGeneration]);
+  }, [init, retryGeneration, crashed]);
 
   useEffect(() => {
     dataManagerRef.current?.setLocale(locale);
