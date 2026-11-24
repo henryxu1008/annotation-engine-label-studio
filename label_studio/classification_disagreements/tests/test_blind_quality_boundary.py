@@ -359,6 +359,19 @@ class TestBlindQualityBoundary(APITestCase):
                     assert len(packed) == 1
                     marker_table = connection.ops.quote_name(BlindQualityAssignment._meta.db_table)
                     assert packed[0].count(f'FROM {marker_table}') == 2
+            # Backends lacking a JSON object projection use the scalar marker
+            # fallback. It must preserve live membership checks for both kinds.
+            with patch.object(type(connection.features), 'has_json_object_function', False), transaction.atomic():
+                for member, handle in zip(members, handles):
+                    self.client.force_authenticate(member)
+                    assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 200
+                ProjectMember.objects.filter(project=self.project, user=members[1]).update(enabled=False)
+                assert self.client.get(f'/api/tasks/blind/{handles[1].task_handle}/').status_code == 404
+                self.client.force_authenticate(members[0])
+                assert self.client.get(f'/api/tasks/blind/{handles[0].task_handle}/').status_code == 200
+                ProjectMember.objects.filter(project=self.project, user=members[0]).update(enabled=False)
+                assert self.client.get(f'/api/tasks/blind/{handles[0].task_handle}/').status_code == 404
+                transaction.set_rollback(True)
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])

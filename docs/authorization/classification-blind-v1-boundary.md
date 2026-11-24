@@ -925,7 +925,14 @@ loaded binding before the live check succeeds.
 The bounded loader now leaves signature verification to that mandatory fenced
 live check, instead of verifying the same payload twice. Regression tests cover
 both purposes, unsigned legacy fallback, and forged and oversized evidence.
-In an isolated synthetic PostgreSQL fixture after this change, 100 warm read
+After the shared mixed-lifecycle predicates and packed marker projection at
+`5e1ae06d4`, an isolated synthetic PostgreSQL run measured 100 warm read pairs
+at 25.2/39.0 ms ordinary/quality median (rank 0.9847). Ten profiled pairs
+showed 4,590/6,960 SQL compiler calls and 3,610/8,500 object-copy calls;
+profiling itself adds overhead. Two fresh-process pairs measured 105.4/117.0 ms,
+with a shared database cache. These are diagnostics, not cold-cache or privacy
+acceptance; the two purposes still use materially different live checks.
+After the earlier single-verification change, an isolated PostgreSQL fixture's 100 warm read
 pairs measured ordinary/quality medians of 26.4/36.2 ms (rank 0.9724); two
 fresh-process pairs measured 121.8/128.1 ms with a shared database cache.
 These diagnostic samples do not show equivalent timing or establish cold-cache
