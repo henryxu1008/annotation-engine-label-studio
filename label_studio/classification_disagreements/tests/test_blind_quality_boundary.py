@@ -2056,12 +2056,22 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_unregistered_builtin_storage_still_denies_admission(self):
         from classification_disagreements.blind_provenance import project_file_scope_supported
+        from io_storages.azure_blob.models import AzureBlobImportStorage
+        from io_storages.gcs.models import GCSImportStorage
+        from io_storages.redis.models import RedisImportStorage
         from io_storages.s3.models import S3ImportStorage
 
         with patch('io_storages.models.get_storage_classes', return_value=[]):
             assert project_file_scope_supported(self.project.pk)
-            S3ImportStorage.objects.create(project=self.project, bucket='synthetic')
-            assert not project_file_scope_supported(self.project.pk)
+            for model, values in ((S3ImportStorage, {'bucket': 'synthetic'}),
+                                  (GCSImportStorage, {'bucket': 'synthetic'}),
+                                  (AzureBlobImportStorage, {'container': 'synthetic'}),
+                                  (RedisImportStorage, {'host': '127.0.0.1'})):
+                with transaction.atomic():
+                    model.objects.create(project=self.project, **values)
+                    assert not project_file_scope_supported(self.project.pk)
+                    transaction.set_rollback(True)
+                assert project_file_scope_supported(self.project.pk)
 
     def test_unprojected_registered_storage_still_denies_quality_access(self):
         from access_control.project_operations import local_principal
