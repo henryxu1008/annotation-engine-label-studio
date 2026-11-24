@@ -33,7 +33,9 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment, reassign_mixed_assignment
+        from classification_disagreements.blind_scoring import score_quality_revision
         from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.blind_editor_writes import BlindAnnotationCreateAPI
         from classification_disagreements.gold_api import GoldAPI
         from classification_disagreements.models import BlindCaptureEpoch, BlindMixDecision
         from projects.models import Project, ProjectMember
@@ -129,6 +131,28 @@ class Command(BaseCommand):
 
             for locale, scope in source['projects'].items():
                 project = Project.objects.get(pk=scope['id'], created_by=manager)
+                # A separate participant and assignment supply an actual frozen
+                # score for the manager's bilingual browser journey. They never
+                # share the work or account used by the participant scenarios.
+                score_email = f'blind-e2e-score-{locale.lower()}@classification81.example.test'
+                score_member = User.objects.create_user(score_email, source['password'], username=score_email,
+                                                        active_organization=project.organization)
+                project.organization.add_user(score_member)
+                ProjectMember.objects.create(project=project, user=score_member, role='annotator')
+                score_carrier = Task.objects.create(project=project, data={'text': f'Synthetic score carrier {locale}'})
+                score_assignment = create_mixed_assignment(task=score_carrier, assignee=score_member,
+                    references=[references[locale]], ratio_basis_points=10000, principal=principal, key=uuid4())
+                score_handle = issue_handle(principal=local_principal(score_member), assignment_id=score_assignment.pk)
+                request = factory.post('/', {'result': [{'from_name': 'sentiment', 'to_name': 'text',
+                    'type': 'choices', 'value': {'choices': ['Negative']}}],
+                    'assignment_id': score_handle.assignment_handle, 'assignment_version': score_assignment.version,
+                    'submit_for_review': True}, format='json')
+                force_authenticate(request, score_member)
+                response = BlindAnnotationCreateAPI.as_view()(request, task_handle=score_handle.task_handle)
+                if response.status_code != 201:
+                    raise CommandError('Could not submit the synthetic blind score revision.')
+                score_submission = Submission.objects.get(assignment_id=score_assignment.pk, revision=1)
+                score = score_quality_revision(score_submission.pk)
                 email = f'blind-e2e-{locale.lower()}@classification81.example.test'
                 member = User.objects.create_user(email, source['password'], username=email,
                                                   active_organization=project.organization)
@@ -176,6 +200,7 @@ class Command(BaseCommand):
                                          'text': 'Synthetic 分类 split' if kind == 'quality' else text}
                 projects[locale] = {'id': project.pk, 'email': email, 'quality_task': quality.task_id,
                                     'ordinary_task': ordinary.pk, 'reference': references[locale]['id'],
+                                    'score_id': score.pk,
                                     'draft_email': draft_email, 'draft_quality_task': draft_quality.task_id,
                                     'revocations': revocations,
                                     'reassignments': {kind: seed_reassignment(project, locale, kind)
