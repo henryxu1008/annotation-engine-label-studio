@@ -1216,6 +1216,12 @@ each of 50 alternating paired reads: medians were 28.3/28.7 ms (rank 0.5228),
 at least 58 pages were evicted each time, and no eviction failures were
 reported. The sequential runs are not controlled comparisons, and operating
 system caches remained shared; these diagnostics do not prove timing privacy.
+After removing the purpose-specific epoch predicate, another isolated
+PostgreSQL 16 run measured 150 warm pairs: ordinary/quality medians were
+27.7/26.7 ms with rank probability 0.4099 and 20 queries for each purpose.
+Two fresh-process samples per purpose measured medians of 108.6/124.2 ms,
+with the database cache shared. These sequential, synthetic observations are
+not controlled comparisons or a cold-cache privacy guarantee.
 
 The project workbench selects its participant protocol through the authenticated
 `work-mode` endpoint before initializing the data manager. The response binds
