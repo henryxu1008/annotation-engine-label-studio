@@ -97,6 +97,69 @@ class TestBlindCaptureSqliteWal(PlainTestCase):
                 database.close()
                 del connections.databases[alias]
 
+    def test_shared_mix_rollback_waits_for_writer_in_wal_mode(self):
+        from importlib import import_module
+
+        from django.apps import apps
+
+        migration = import_module('classification_disagreements.migrations.0064_shared_mix_evidence')
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'shared-mix.sqlite3'
+            alias = f'blind_mix_wal_{uuid4().hex}'
+            connections.databases[alias] = {**connections.databases['default'], 'NAME': str(path)}
+            database = connections[alias]
+            shared = connection.ops.quote_name(
+                apps.get_model('classification_disagreements', 'BlindMixSharedEvidence')._meta.db_table)
+            decision = connection.ops.quote_name(
+                apps.get_model('classification_disagreements', 'BlindMixDecision')._meta.db_table)
+            try:
+                with database.cursor() as cursor:
+                    cursor.execute('PRAGMA journal_mode=WAL')
+                    assert cursor.fetchone()[0].lower() == 'wal'
+                    cursor.execute(f'CREATE TABLE {shared} (id INTEGER PRIMARY KEY, selected boolean NOT NULL)')
+                    cursor.execute(f'CREATE TABLE {decision} (id INTEGER PRIMARY KEY)')
+                    cursor.execute(f'''CREATE TRIGGER blind_shared_mix_capture AFTER INSERT ON {decision}
+                      BEGIN INSERT INTO {shared} (id, selected) VALUES (NEW.id, FALSE); END''')
+                entered, release, downgrading = Event(), Event(), Event()
+
+                def writer():
+                    with sqlite3.connect(path, timeout=10, isolation_level=None) as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        db.execute(f'INSERT INTO {decision} (id) VALUES (1)')
+                        entered.set()
+                        if not release.wait(15):
+                            raise AssertionError('writer was not released')
+                        db.execute('COMMIT')
+
+                def rollback():
+                    db = connections[alias]
+                    try:
+                        with db.schema_editor() as editor:
+                            downgrading.set()
+                            migration.uninstall(apps, editor)
+                    finally:
+                        db.close()
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    writing = pool.submit(writer)
+                    try:
+                        assert entered.wait(15)
+                        removing = pool.submit(rollback)
+                        assert downgrading.wait(15)
+                        with self.assertRaises(TimeoutError):
+                            removing.result(timeout=0.3)
+                    finally:
+                        release.set()
+                    writing.result(timeout=20)
+                    with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+                        removing.result(timeout=20)
+                with database.cursor() as cursor:
+                    cursor.execute(f'SELECT COUNT(*) FROM {shared}')
+                    assert cursor.fetchone()[0] == 1
+            finally:
+                database.close()
+                del connections.databases[alias]
+
 
 class TestBlindProvenance(TestCase):
     def reference(self, *, kind='reference'):
@@ -783,6 +846,80 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL isolation test')
+    def test_shared_mix_migration_rejects_stale_transaction_snapshot(self):
+        before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+            with self.assertRaisesRegex(RuntimeError, 'requires READ COMMITTED'):
+                MigrationExecutor(connection).migrate(before)
+        MigrationExecutor(connection).migrate(before)
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                with self.assertRaisesRegex(RuntimeError, 'requires READ COMMITTED'):
+                    MigrationExecutor(connection).migrate(after)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration lock test')
+    def test_shared_mix_rollback_waits_for_inflight_writer_and_retains_evidence(self):
+        from classification_disagreements.models import BlindMixDecision, BlindMixSharedEvidence
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        task = TaskFactory(project=project)
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=owner)
+        entered, release, downgrading = Event(), Event(), Event()
+
+        def writer():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    decision = BlindMixDecision.objects.create(project=project, source_assignment=assignment,
+                        chosen_assignment=assignment, source_id_frozen=assignment.pk, source_task_id_frozen=task.pk,
+                        source_assignee_id_frozen=member.pk, chosen_id_frozen=assignment.pk,
+                        reference_id_frozen=None, key=uuid4(), request_hash='a' * 64,
+                        actor_id=owner.pk, ratio_basis_points=0, selected=False)
+                    entered.set()
+                    if not release.wait(15):
+                        raise AssertionError('writer was not released')
+                    return decision.pk
+            finally:
+                close_old_connections()
+
+        def downgrade():
+            close_old_connections()
+            try:
+                downgrading.set()
+                MigrationExecutor(connection).migrate(before)
+            finally:
+                close_old_connections()
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                writing = pool.submit(writer)
+                try:
+                    assert entered.wait(15)
+                    rollback = pool.submit(downgrade)
+                    assert downgrading.wait(15)
+                    with self.assertRaises(TimeoutError):
+                        rollback.result(timeout=0.3)
+                finally:
+                    release.set()
+                decision_id = writing.result(timeout=30)
+                with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+                    rollback.result(timeout=60)
+            assert BlindMixSharedEvidence.objects.filter(decision_id_frozen=decision_id, selected=False).exists()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     def test_shared_mix_upgrade_rejects_invalid_ordinary_history(self):
         from classification_disagreements.models import BlindMixDecision
 

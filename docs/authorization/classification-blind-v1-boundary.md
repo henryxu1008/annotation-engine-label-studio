@@ -968,6 +968,10 @@ rolling upgrade. PostgreSQL and SQLite capture future decisions transactionally;
 the new retained rows are immutable, and rollback refuses to discard them.
 Apply the additive migration before starting code that reads the new table;
 older code can continue using its unchanged legacy table during the rollout.
+The PostgreSQL upgrade and downgrade require READ COMMITTED isolation so their
+post-lock checks cannot use a snapshot taken before an in-flight write commits.
+Rollback takes the same ordered write fences before checking retained evidence;
+SQLite takes a write reservation before the corresponding check.
 This is an expand phase: selected decisions still also write the legacy table,
 and quality reads still evaluate additional lifecycle and exposure evidence.
 It is not timing parity and does not enable public dispatch.

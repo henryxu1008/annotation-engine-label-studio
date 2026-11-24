@@ -3576,7 +3576,7 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment
-        from classification_disagreements.models import BlindMixDecision, BlindMixEvidence
+        from classification_disagreements.models import BlindMixDecision, BlindMixEvidence, BlindMixSharedEvidence
         from projects.models import ProjectMember
 
         reference = self.valid_reference()
@@ -3600,6 +3600,7 @@ class TestBlindQualityBoundary(APITestCase):
                 principal=local_principal(self.manager), key=key)
         decision = BlindMixDecision.objects.get(project=self.project, key=key)
         evidence_id = BlindMixEvidence.objects.get(decision_id_frozen=decision.pk).pk
+        shared_id = BlindMixSharedEvidence.objects.get(decision_id_frozen=decision.pk, selected=True).pk
         assert Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         decision.delete()
         assert not Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
@@ -3608,8 +3609,59 @@ class TestBlindQualityBoundary(APITestCase):
             TaskAssignment.objects.create(project=self.project, task=ordinary, assignee=member, assigned_by=self.manager)
         with self.assertRaises(DatabaseError), transaction.atomic():
             BlindMixEvidence.objects.filter(pk=evidence_id).delete()
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            BlindMixSharedEvidence.objects.filter(pk=shared_id).delete()
         self.project.delete()
         assert BlindMixEvidence.objects.filter(pk=evidence_id).exists()
+        assert BlindMixSharedEvidence.objects.filter(pk=shared_id, selected=True).exists()
+
+    def test_deleted_ordinary_mix_decision_retains_history_and_revokes_handle(self):
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_mix import create_mixed_assignment, deferred_source_ids
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindMixDecision, BlindMixEvidence, BlindMixSharedEvidence
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+        from projects.models import ProjectMember
+        from rest_framework.exceptions import NotFound
+
+        Project.objects.filter(pk=self.project.pk).update(label_config=CONFIG)
+        self.project.refresh_from_db()
+        provenance_fixtures.enable_test_capture()
+        member = UserFactory(active_organization=self.organization)
+        self.organization.add_user(member)
+        ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        task = TaskFactory(project=self.project, data={'text': 'ordinary synthetic task'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        key = uuid4()
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            assignment = create_mixed_assignment(task=task, assignee=member, references=[], ratio_basis_points=0,
+                principal=local_principal(self.manager), key=key)
+            decision = BlindMixDecision.objects.get(project=self.project, key=key)
+            history = BlindMixSharedEvidence.objects.get(decision_id_frozen=decision.pk, selected=False)
+            assert not BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk).exists()
+            assert assignment.pk not in deferred_source_ids(member.pk).values_list('source_id_frozen', flat=True)
+            handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+            self.client.force_authenticate(member)
+            url = f'/api/tasks/blind/{handle.task_handle}/'
+            assert self.client.get(url).status_code == 200
+            decision.delete()
+            assert BlindMixSharedEvidence.objects.filter(pk=history.pk).exists()
+            assert self.client.get(url).status_code == 404
+            assert self.client.post(f'{url}annotations/', {'result': [], 'assignment_id': handle.assignment_handle,
+                'assignment_version': assignment.version}, format='json').status_code == 404
+            with self.assertRaises(NotFound), transaction.atomic():
+                seal_ordinary_read_binding(assignment=assignment)
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                BlindMixSharedEvidence.objects.filter(pk=history.pk).delete()
+            self.project.delete()
+            assert BlindMixSharedEvidence.objects.filter(pk=history.pk, selected=False).exists()
 
     def test_manual_source_cancellation_revokes_unsubmitted_sample(self):
         from access_control.identity import LocalIdentityProvider
@@ -4615,6 +4667,60 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL transaction-lock test')
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
+
+    def test_decision_deletion_waits_for_fenced_reader_for_both_purposes(self):
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import BlindMixDecision, BlindMixSharedEvidence
+
+        provenance_fixtures.enable_test_capture()
+        for selected in (False, True):
+            owner, member = UserFactory(), UserFactory()
+            project = ProjectFactory(created_by=owner)
+            source = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                   assignee=member, assigned_by=owner)
+            chosen = (TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                       assignee=member, assigned_by=owner) if selected else source)
+            decision = BlindMixDecision.objects.create(project=project, source_assignment=source,
+                chosen_assignment=chosen, source_id_frozen=source.pk, source_task_id_frozen=source.task_id,
+                source_assignee_id_frozen=member.pk, chosen_id_frozen=chosen.pk,
+                reference_id_frozen=123 if selected else None, key=uuid4(), request_hash='a' * 64,
+                actor_id=owner.pk, ratio_basis_points=10000 if selected else 0, selected=selected)
+            entered, release, deleting = Event(), Event(), Event()
+
+            def read():
+                close_old_connections()
+                try:
+                    with transaction.atomic():
+                        lock_capture_epoch_for_read()
+                        entered.set()
+                        if not release.wait(15):
+                            raise AssertionError('reader was not released')
+                        assert BlindMixDecision.objects.filter(pk=decision.pk).exists()
+                finally:
+                    close_old_connections()
+
+            def delete():
+                close_old_connections()
+                try:
+                    deleting.set()
+                    BlindMixDecision.objects.filter(pk=decision.pk).delete()
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reading = pool.submit(read)
+                try:
+                    assert entered.wait(15)
+                    removing = pool.submit(delete)
+                    assert deleting.wait(15)
+                    with self.assertRaises(TimeoutError):
+                        removing.result(timeout=0.3)
+                finally:
+                    release.set()
+                reading.result(timeout=30)
+                removing.result(timeout=30)
+            assert not BlindMixDecision.objects.filter(pk=decision.pk).exists()
+            assert BlindMixSharedEvidence.objects.filter(decision_id_frozen=decision.pk, selected=selected).exists()
 
     def test_blind_score_read_fences_manager_revocation(self):
         from classification_disagreements import blind_score_api

@@ -3,6 +3,17 @@
 from django.db import migrations, models
 
 
+def _require_read_committed(schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+    # A snapshot taken before the table lock could miss an in-flight writer
+    # even after that writer commits. The post-lock query must see its commit.
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute('SHOW transaction_isolation')
+        if cursor.fetchone()[0] != 'read committed':
+            raise RuntimeError('Shared mix evidence migration requires READ COMMITTED isolation.')
+
+
 def install(apps, schema_editor):
     vendor = schema_editor.connection.vendor
     if vendor not in ('postgresql', 'sqlite'):
@@ -13,6 +24,7 @@ def install(apps, schema_editor):
     assignment = q(apps.get_model('tasks', 'TaskAssignment')._meta.db_table)
     project = q(apps.get_model('projects', 'Project')._meta.db_table)
     if vendor == 'postgresql':
+        _require_read_committed(schema_editor)
         # Admission takes project and assignment locks before a decision write.
         schema_editor.execute(f'LOCK TABLE {project}, {assignment}, {decision} IN SHARE ROW EXCLUSIVE MODE')
     with schema_editor.connection.cursor() as cursor:
@@ -57,12 +69,23 @@ def uninstall(apps, schema_editor):
         return
     q = schema_editor.quote_name
     shared = q(apps.get_model('classification_disagreements', 'BlindMixSharedEvidence')._meta.db_table)
+    decision = q(apps.get_model('classification_disagreements', 'BlindMixDecision')._meta.db_table)
+    assignment = q(apps.get_model('tasks', 'TaskAssignment')._meta.db_table)
+    project = q(apps.get_model('projects', 'Project')._meta.db_table)
+    if vendor == 'postgresql':
+        _require_read_committed(schema_editor)
+        # Fence in-flight decision inserts before testing whether it is safe
+        # to discard this table. Follow the same order as the forward upgrade.
+        schema_editor.execute(f'LOCK TABLE {project}, {assignment}, {decision}, {shared} IN SHARE ROW EXCLUSIVE MODE')
+    else:
+        # A no-row write obtains SQLite's write reservation without mutating
+        # evidence, preventing a writer from racing the emptiness check.
+        schema_editor.execute(f'UPDATE {shared} SET selected = selected WHERE 1 = 0')
     with schema_editor.connection.cursor() as cursor:
         cursor.execute(f'SELECT 1 FROM {shared} LIMIT 1')
         if cursor.fetchone():
             raise RuntimeError('Retained shared mix evidence cannot be discarded by rollback.')
     if vendor == 'postgresql':
-        decision = q(apps.get_model('classification_disagreements', 'BlindMixDecision')._meta.db_table)
         schema_editor.execute(f'DROP TRIGGER blind_shared_mix_capture ON {decision}')
         schema_editor.execute('DROP FUNCTION blind_shared_mix_capture()')
         schema_editor.execute(f'DROP TRIGGER blind_shared_mix_evidence_guard ON {shared}')
