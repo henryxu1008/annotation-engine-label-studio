@@ -479,6 +479,38 @@ class TestBlindQualityBoundary(APITestCase):
             self.client.force_authenticate(members[0])
             ordinary_url = f'/api/tasks/blind/{handles[0].task_handle}/'
             assert self.client.get(ordinary_url).status_code == 200
+            from io_storages.azure_blob.models import AzureBlobImportStorage
+            from io_storages.gcs.models import GCSImportStorage
+            from io_storages.localfiles.models import LocalFilesImportStorage
+            from io_storages.redis.models import RedisImportStorage
+            from io_storages.s3.models import S3ImportStorage
+            from ml.models import MLBackend
+
+            scope_mutations = (
+                lambda: Project.objects.filter(pk=self.project.pk).update(task_data_login='synthetic-login'),
+                lambda: S3ImportStorage.objects.bulk_create([
+                    S3ImportStorage(project_id=self.project.pk, bucket='synthetic-bucket')]),
+                lambda: GCSImportStorage.objects.create(project_id=self.project.pk, bucket='synthetic-bucket'),
+                lambda: AzureBlobImportStorage.objects.create(project_id=self.project.pk,
+                                                              container='synthetic-container'),
+                lambda: RedisImportStorage.objects.create(project_id=self.project.pk, host='127.0.0.1'),
+                lambda: LocalFilesImportStorage.objects.create(project_id=self.project.pk,
+                                                               path='/synthetic-not-read'),
+                lambda: MLBackend.objects.bulk_create([
+                    MLBackend(project_id=self.project.pk, url='http://127.0.0.1:1')]),
+            )
+            for mutate in scope_mutations:
+                with transaction.atomic():
+                    mutate()
+                    assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+                    self.client.force_authenticate(members[0])
+                    assert self.client.get(ordinary_url).status_code == 200
+                    self.client.force_authenticate(members[1])
+                    assert self.client.get(read_url).status_code == 404
+                    transaction.set_rollback(True)
+                self.client.force_authenticate(members[1])
+                assert self.client.get(read_url).status_code == 200
+            self.client.force_authenticate(members[0])
             with transaction.atomic():
                 User.objects.filter(pk=members[0].pk).update(active_organization=None)
                 assert self.client.get(ordinary_url).status_code in (403, 404)
@@ -2156,6 +2188,45 @@ class TestBlindQualityBoundary(APITestCase):
             assert response.status_code == 200, response.json()
             assert response.json()['task_data_login'] == 'synthetic-user'
             assert response.json()['task_data_password'] == 'synthetic-password'
+
+    def test_export_only_storage_parent_updates_do_not_invalidate_capture(self):
+        from classification_disagreements.models import BlindCaptureEpoch
+        from io_storages.azure_blob.models import AzureBlobExportStorage
+        from io_storages.gcs.models import GCSExportStorage
+        from io_storages.redis.models import RedisExportStorage
+
+        for model, initial, changed in (
+            (GCSExportStorage, {'bucket': 'synthetic-bucket'}, {'bucket': 'synthetic-new-bucket'}),
+            (AzureBlobExportStorage, {'container': 'synthetic-container'}, {'container': 'synthetic-new-container'}),
+            (RedisExportStorage, {'host': '127.0.0.1'}, {'host': 'synthetic-new-host'}),
+            (LocalFilesExportStorage, {'path': '/synthetic-not-read'}, {'path': '/synthetic-new-path'}),
+        ):
+            with self.subTest(storage=model.__name__):
+                storage = model.objects.create(project=self.project, **initial)
+                provenance_fixtures.enable_test_capture()
+                parent = next(iter(model._meta.parents))
+                parent.objects.filter(pk=storage.pk).update(**changed)
+                assert BlindCaptureEpoch.objects.get(pk=1).enabled
+
+    def test_import_storage_parent_updates_invalidate_capture(self):
+        from classification_disagreements.models import BlindCaptureEpoch
+        from io_storages.azure_blob.models import AzureBlobImportStorage
+        from io_storages.gcs.models import GCSImportStorage
+        from io_storages.localfiles.models import LocalFilesImportStorage
+        from io_storages.redis.models import RedisImportStorage
+
+        for model, initial, changed in (
+            (GCSImportStorage, {'bucket': 'synthetic-bucket'}, {'bucket': 'synthetic-new-bucket'}),
+            (AzureBlobImportStorage, {'container': 'synthetic-container'}, {'container': 'synthetic-new-container'}),
+            (RedisImportStorage, {'host': '127.0.0.1'}, {'host': 'synthetic-new-host'}),
+            (LocalFilesImportStorage, {'path': '/synthetic-not-read'}, {'path': '/synthetic-new-path'}),
+        ):
+            with self.subTest(storage=model.__name__):
+                storage = model.objects.create(project=self.project, **initial)
+                provenance_fixtures.enable_test_capture()
+                parent = next(iter(model._meta.parents))
+                parent.objects.filter(pk=storage.pk).update(**changed)
+                assert not BlindCaptureEpoch.objects.get(pk=1).enabled
 
     def test_external_project_credentials_invalidate_capture_and_quality_access(self):
         from classification_disagreements.blind_provenance import project_file_scope_supported
@@ -5345,6 +5416,133 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
 
     def test_direct_reference_length_waits_for_capture_reader(self):
         self._assert_direct_exposure_waits_for_capture_reader('reference')
+
+    def test_storage_creation_waits_for_capture_reader(self):
+        for kind in ('s3', 'gcs', 'azure', 'redis', 'local'):
+            with self.subTest(storage=kind):
+                self._assert_external_scope_change_waits_for_capture_reader(kind)
+
+    def test_storage_update_waits_for_capture_reader(self):
+        for kind in ('s3', 'gcs', 'azure', 'redis', 'local'):
+            with self.subTest(storage=kind):
+                self._assert_external_scope_change_waits_for_capture_reader(kind, operation='update')
+
+    def test_storage_deletion_waits_for_capture_reader(self):
+        for kind in ('s3', 'gcs', 'azure', 'redis', 'local'):
+            with self.subTest(storage=kind):
+                self._assert_external_scope_change_waits_for_capture_reader(kind, operation='delete')
+
+    def test_model_backend_creation_waits_for_capture_reader(self):
+        self._assert_external_scope_change_waits_for_capture_reader('model')
+
+    def test_model_backend_update_waits_for_capture_reader(self):
+        self._assert_external_scope_change_waits_for_capture_reader('model', operation='update')
+
+    def test_model_backend_deletion_waits_for_capture_reader(self):
+        self._assert_external_scope_change_waits_for_capture_reader('model', operation='delete')
+
+    def test_project_credential_change_waits_for_capture_reader(self):
+        self._assert_external_scope_change_waits_for_capture_reader('credentials')
+
+    def _assert_external_scope_change_waits_for_capture_reader(self, kind, *, operation='create'):
+        import time
+
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.models import BlindCaptureEpoch
+        from io_storages.azure_blob.models import AzureBlobImportStorage
+        from io_storages.gcs.models import GCSImportStorage
+        from io_storages.localfiles.models import LocalFilesImportStorage
+        from io_storages.redis.models import RedisImportStorage
+        from io_storages.s3.models import S3ImportStorage
+        from ml.models import MLBackend
+
+        project = ProjectFactory()
+        sources = {
+            's3': (S3ImportStorage, {'bucket': 'synthetic-bucket'}),
+            'gcs': (GCSImportStorage, {'bucket': 'synthetic-bucket'}),
+            'azure': (AzureBlobImportStorage, {'container': 'synthetic-container'}),
+            'redis': (RedisImportStorage, {'host': '127.0.0.1'}),
+            'local': (LocalFilesImportStorage, {'path': '/synthetic-not-read'}),
+            'model': (MLBackend, {'url': 'http://127.0.0.1:1'}),
+        }
+        model, values = sources.get(kind, (None, {}))
+        existing_id = None
+        if model is not None and operation != 'create':
+            if model._meta.parents:
+                existing_id = model.objects.create(project_id=project.pk, **values).pk
+            else:
+                existing_id = model.objects.bulk_create([model(project_id=project.pk, **values)])[0].pk
+        provenance_fixtures.enable_test_capture()
+        entered, release, started = Event(), Event(), Event()
+        writer_pid = []
+
+        def read():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    lock_capture_epoch_for_read()
+                    assert BlindCaptureEpoch.objects.get(pk=1).enabled
+                    entered.set()
+                    if not release.wait(15):
+                        raise AssertionError('capture reader was not released')
+            finally:
+                close_old_connections()
+
+        def change():
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_backend_pid()')
+                    writer_pid.append(cursor.fetchone()[0])
+                started.set()
+                if kind == 'credentials':
+                    Project.objects.filter(pk=project.pk).update(task_data_login='synthetic-login')
+                elif operation == 'create':
+                    if model._meta.parents:
+                        model.objects.create(project_id=project.pk, **values)
+                    else:
+                        model.objects.bulk_create([model(project_id=project.pk, **values)])
+                elif operation == 'update':
+                    field = {
+                        's3': {'bucket': 'synthetic-new-bucket'},
+                        'gcs': {'bucket': 'synthetic-new-bucket'},
+                        'azure': {'container': 'synthetic-new-container'},
+                        'redis': {'host': 'synthetic-new-host'},
+                        'local': {'path': '/synthetic-new-path'},
+                        'model': {'title': 'synthetic-change'},
+                    }[kind]
+                    parent = next(iter(model._meta.parents), model)
+                    parent.objects.filter(pk=existing_id).update(**field)
+                else:
+                    # Exercise the database boundary without ORM deletion side effects.
+                    model.objects.filter(pk=existing_id)._raw_delete(using='default')
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(read)
+            try:
+                assert entered.wait(10)
+                writer = pool.submit(change)
+                assert started.wait(10)
+                with self.assertRaises(TimeoutError):
+                    writer.result(timeout=0.3)
+                deadline = time.monotonic() + 5
+                waiting = False
+                while time.monotonic() < deadline:
+                    with connection.cursor() as cursor:
+                        cursor.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s', [writer_pid[0]])
+                        waiting = cursor.fetchone() == ('Lock',)
+                    if waiting or writer.done():
+                        break
+                    time.sleep(0.02)
+                assert waiting, 'scope writer did not reach a database lock'
+                assert BlindCaptureEpoch.objects.get(pk=1).enabled
+            finally:
+                release.set()
+            reader.result(timeout=20)
+            writer.result(timeout=20)
+        assert not BlindCaptureEpoch.objects.get(pk=1).enabled
 
     def _assert_direct_exposure_waits_for_capture_reader(self, kind):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read

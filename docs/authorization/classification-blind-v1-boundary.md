@@ -1168,6 +1168,26 @@ were 29.7/30.7 ms (rank 0.5976), with at least 47 pages evicted per read and
 no reported eviction failures. The operating-system cache remained shared, so
 this is not a fully cold test or evidence of timing privacy.
 
+The built-in storage fence covers the five import-storage tables named in
+migration 0030. Four of those models also use concrete parent tables for
+configuration. Migration 0069 fences parent updates and deletes when an import
+child exists; export-only parent rows do not invalidate capture. Upgrade and
+rollback disable the current capture epoch because prior parent writes were
+not fenced. Quiesce storage configuration writes during migration, and establish
+a fresh generation with independently verified provenance before enabling capture.
+PostgreSQL concurrency tests exercise insertion, update and deletion of each
+built-in import storage and an ML backend, plus credential changes: a writer
+waits for an in-flight capture reader and disables capture after it commits.
+Handle tests also check that those changes revoke quality reads while ordinary
+work remains readable.
+
+The runtime storage list can also be supplied by a configured function. A
+dynamically registered storage table is not covered by these static triggers.
+Checking whether it currently contains rows does not prove that its writes
+were fenced or that a later removal preserves exposure history. A shared
+external-scope projection must account for registry and deployment changes
+transactionally before those live checks can be replaced.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.

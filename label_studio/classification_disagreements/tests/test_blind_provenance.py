@@ -846,6 +846,23 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_storage_parent_fence_upgrade_and_rollback_disable_capture(self):
+        from classification_disagreements.models import BlindCaptureEpoch
+
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0068_blind_work_reference_lengths')]
+        try:
+            MigrationExecutor(connection).migrate(before)
+            enable_test_capture()
+            assert BlindCaptureEpoch.objects.get(pk=1).enabled
+            MigrationExecutor(connection).migrate(after)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            enable_test_capture()
+            MigrationExecutor(connection).migrate(before)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     def test_shared_reference_lengths_are_sorted_and_bounded(self):
         from classification_disagreements.blind_provenance import _exact_reference_length_checks
         from classification_disagreements.blind_read_binding import _seal
