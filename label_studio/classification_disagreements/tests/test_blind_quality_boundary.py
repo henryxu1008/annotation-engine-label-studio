@@ -4601,6 +4601,64 @@ class TestBlindScoreWorkerProcess(provenance_fixtures.SyntheticTransactionTestCa
 class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransactionTestCase):
     valid_reference = TestBlindQualityBoundary.valid_reference
 
+    def test_blind_score_read_fences_manager_revocation(self):
+        from classification_disagreements import blind_score_api
+        from django.test import override_settings
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+
+        organization = fixtures.OrganizationFactory()
+        project = ProjectFactory(organization=organization, created_by=organization.created_by)
+        manager = UserFactory(active_organization=organization)
+        organization.add_user(manager)
+        membership = ProjectMember.objects.create(project=project, user=manager, role='manager')
+        url = f'/api/projects/{project.pk}/classification-disagreements/gold/blind-scores/'
+        entered, release, revoking = Event(), Event(), Event()
+        original = blind_score_api.lock_project_operation
+
+        def pause_after_lock(*args, **kwargs):
+            result = original(*args, **kwargs)
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError('score reader was not released')
+            return result
+
+        def read():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(manager)
+                return client.get(url).status_code
+            finally:
+                close_old_connections()
+
+        def revoke():
+            close_old_connections()
+            try:
+                revoking.set()
+                ProjectMember.objects.filter(pk=membership.pk).update(enabled=False)
+            finally:
+                close_old_connections()
+
+        flags = {'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                 'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{organization.pk}:{project.pk}': True}}
+        with override_settings(**flags), patch.object(blind_score_api, 'lock_project_operation', side_effect=pause_after_lock):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reading = pool.submit(read)
+                try:
+                    assert entered.wait(10)
+                    revoking_future = pool.submit(revoke)
+                    assert revoking.wait(10)
+                    with self.assertRaises(TimeoutError):
+                        revoking_future.result(timeout=0.3)
+                finally:
+                    release.set()
+                assert reading.result(timeout=20) == 200
+                revoking_future.result(timeout=20)
+            client = APIClient()
+            client.force_authenticate(manager)
+            assert client.get(url).status_code in (403, 404)
+
     def test_reference_and_provenance_deletion_wait_for_capture_reader_and_revoke(self):
         from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
         from classification_disagreements.models import (
