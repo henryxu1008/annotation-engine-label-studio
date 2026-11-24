@@ -1192,8 +1192,9 @@ Migration 0070 supplies a live built-in external-scope view to both ordinary
 and quality handle reads. The quality guard applies the global credential and
 model flags, and applies each built-in storage flag only when that storage
 class is currently registered with its expected model identity and table.
-Other registered models retain their existing live ORM checks in the same
-fenced read, including entries that merely claim a built-in model label.
+Other registered models fail closed, even when their database tables are empty,
+including entries that merely claim a built-in model label. Their independent
+data sources and serving routes cannot be certified by an empty table.
 Ordinary work validates the view is
 available without adopting quality-only denial conditions. The view is not a
 cached grant and does not establish continuity for a dynamically added or

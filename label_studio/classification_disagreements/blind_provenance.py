@@ -1,7 +1,7 @@
 """Forward-only ordering evidence; deliberately not an admission decision."""
 
 from django.db import connections, transaction
-from django.db.models import CharField, Count, Exists, F, OuterRef, Q, Subquery
+from django.db.models import BooleanField, CharField, Count, Exists, F, OuterRef, Q, Subquery, Value
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Cast
 
@@ -97,9 +97,14 @@ def _external_scope_checks(using='default', *, storage_classes=None, omit_projec
         'external_credentials': Exists(_projects_with_external_credentials(using)),
         'external_ml': Exists(MLBackend.objects.using(using).all()),
     }
-    checks.update({f'external_storage_{index}': Exists(model.objects.using(using).all())
-                   for index, model in enumerate(classes)
-                   if not omit_projected or _projected_storage_flag(model) is None})
+    for index, model in enumerate(classes):
+        flag = _projected_storage_flag(model)
+        if flag is None:
+            # An empty unrecognized table says nothing about an external
+            # provider's access history or independently served data.
+            checks[f'external_storage_{index}'] = Value(True, output_field=BooleanField())
+        elif not omit_projected:
+            checks[f'external_storage_{index}'] = Exists(model.objects.using(using).all())
     return checks
 
 

@@ -2041,6 +2041,7 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_unprojected_registered_storage_still_denies_quality_access(self):
         from access_control.project_operations import local_principal
+        from classification_disagreements.blind_provenance import project_file_scope_supported
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.tests.test_gold_scoring import answer
         from ml.models import MLBackend
@@ -2057,11 +2058,15 @@ class TestBlindQualityBoundary(APITestCase):
         self.client.force_authenticate(self.annotator)
         config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
                   'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        # An empty custom table cannot establish that the provider has never
+        # served data through another route or outside this database.
         with self.settings(**config), patch('io_storages.models.get_storage_classes', return_value=[MLBackend]):
-            assert Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
-            assert resolve_handle(principal=principal, task_handle=handle.task_handle)
-        # A custom registered model remains a live query, even though it has no
-        # built-in projection or capture trigger. No external service is used.
+            assert not project_file_scope_supported(self.project.pk)
+            assert Task.objects.for_user(self.annotator).filter(pk=ordinary.pk).exists()
+            assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=principal, task_handle=handle.task_handle)
+        # A populated custom table is denied as well. No external service is used.
         with self.settings(**config), patch('io_storages.models.get_storage_classes', return_value=[User]):
             assert Task.objects.for_user(self.annotator).filter(pk=ordinary.pk).exists()
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
