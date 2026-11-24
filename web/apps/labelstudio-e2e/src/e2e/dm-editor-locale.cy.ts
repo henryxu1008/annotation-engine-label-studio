@@ -316,7 +316,7 @@ describe("Data Manager and editor display locale", () => {
       .and("not.contain.text", "API_GATEWAY")
       .and("not.contain.text", "synthetic interrupted session");
     cy.window().should((win: any) => {
-      expect(win.dataManager?.store, "no store published after failed bootstrap").to.be.null;
+      expect(win.dataManager?.store ?? null, "no store published after failed bootstrap").to.be.null;
     });
     cy.get('a[aria-label="返回项目列表"]').should("be.visible").click();
     cy.location("pathname").should("eq", "/projects");
