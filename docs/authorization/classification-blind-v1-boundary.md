@@ -1220,6 +1220,11 @@ the existing migration fence; stop dependent readers before rollback and roll
 out the view to every reader before starting a new generation. This consolidates
 one predicate, not the remaining signed
 evidence checks, and does not establish timing privacy.
+A randomized, same-process PostgreSQL 16 comparison on one synthetic fixture
+used 500 warm samples for each purpose and version. Before/after ordinary
+medians were 26.09/26.12 ms and quality medians were 26.39/26.16 ms; the
+quality-versus-ordinary rank probabilities were 0.5228/0.4958. This observation
+does not measure cold-cache behavior or prove indistinguishability.
 On one isolated PostgreSQL 16 synthetic fixture, sequential 150-pair warm
 diagnostics before and after this change measured ordinary/quality medians of
 27.6/29.6 ms (rank 0.6727) and 25.7/26.1 ms (rank 0.5339), respectively, with
