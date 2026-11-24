@@ -115,6 +115,8 @@ export const API_CONFIG = {
     classificationGold: "GET:/projects/:pk/classification-disagreements/gold/",
     classificationGoldDetail: "GET:/projects/:pk/classification-disagreements/gold/:evidence/",
     classificationGoldSources: "GET:/projects/:pk/classification-disagreements/gold/tasks/:task/sources/",
+    classificationBlindScores: "GET:/projects/:pk/classification-disagreements/gold/blind-scores/",
+    classificationBlindScoreDetail: "GET:/projects/:pk/classification-disagreements/gold/blind-scores/:score/",
     createClassificationGold: "POST:/projects/:pk/classification-disagreements/gold/",
     classificationBatchPreview: "POST:/projects/:pk/classification-disagreements/batches/preview/",
     createClassificationBatch: "POST:/projects/:pk/classification-disagreements/batches/",

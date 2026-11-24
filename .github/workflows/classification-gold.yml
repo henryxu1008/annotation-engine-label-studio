@@ -151,6 +151,7 @@ jobs:
           yarn install --frozen-lockfile
           NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
             apps/labelstudio/src/pages/DataManager/ClassificationGold.test.jsx \
+            apps/labelstudio/src/pages/DataManager/ClassificationBlindScores.test.jsx \
             apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.test.jsx
           NX_DAEMON=false yarn jest --config libs/datamanager/jest.config.ts --runInBand --runTestsByPath \
             libs/datamanager/src/sdk/blind-protocol.test.js \

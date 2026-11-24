@@ -976,6 +976,11 @@ bounded manifest, its hash and its submission, assignment, marker and reference
 identities. Both endpoints recheck manager authority while holding the project
 operation fence and use private, no-store responses. They do not enable blind
 dispatch, provide an annotator score endpoint, or implement alert events.
+The existing classification-gold workbench can load these scores and page
+through them on request. It clears displayed score data after a denied read or
+project change; server authorization remains the boundary. The browser test
+exercises the empty manager list and denied reviewer/annotator requests in both
+locales; nonempty frozen-score reads are covered by backend and UI tests.
 After the earlier single-verification change, an isolated PostgreSQL fixture's 100 warm read
 pairs measured ordinary/quality medians of 26.4/36.2 ms (rank 0.9724); two
 fresh-process pairs measured 121.8/128.1 ms with a shared database cache.

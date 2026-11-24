@@ -28,11 +28,17 @@ describe('manager classification gold evidence', () => {
         expect(response!.body.manifest.contents.result.matched_controls).to.eq(0);
       });
       cy.get('[data-testid="classification-gold"] pre').should('contain.text', 'Negative');
+      cy.get('[data-testid="classification-blind-scores"]').within(() => {
+        button('Load blind scores', '加载盲投评分').click();
+        cy.contains(zh ? '暂无盲投质量评分。' : 'No blind quality scores are available.').should('be.visible');
+      });
       for (const role of ['reviewer', 'a']) {
         login(role);
         cy.get('[data-testid="open-classification-gold"]').should('not.exist');
         cy.then(() => cy.request({ url: `/api/projects/${scope.id}/classification-disagreements/gold/${reference}/`,
           failOnStatusCode: false }).its('status').should('be.oneOf', [403, 404]));
+        cy.request({ url: `/api/projects/${scope.id}/classification-disagreements/gold/blind-scores/`,
+          failOnStatusCode: false }).its('status').should('be.oneOf', [403, 404]);
       }
     });
   }
