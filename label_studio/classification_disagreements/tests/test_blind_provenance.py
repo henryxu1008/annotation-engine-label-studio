@@ -846,6 +846,102 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_sqlite_source_fix_upgrades_existing_view_without_discarding_binding(self):
+        from classification_disagreements.blind_read_binding import _seal
+        from classification_disagreements.models import (
+            BlindCaptureEpoch, BlindEligibilityProof, BlindReadBinding, BlindWorkExposureState,
+        )
+
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0066_blind_work_exposure_state')]
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                   assignee=member, assigned_by=owner)
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
+        BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest_hash='b' * 64,
+                                             manifest={'source_task_id': 9223372036854775808})
+        binding = _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+            'project_id_frozen': project.pk, 'actor_id_frozen': member.pk, 'decision_id_frozen': None,
+            'source_id_frozen': None, 'source_task_id_frozen': None, 'decision_request_hash': None,
+            'purpose': 'quality', 'reference_id_frozen': 1, 'reference_hash': 'a' * 64, 'proof_hash': 'b' * 64})
+        try:
+            MigrationExecutor(connection).migrate(before)
+            old_key = BlindWorkExposureState.objects.get(pk=assignment.pk).source_task_key
+            if connection.vendor == 'sqlite':
+                assert old_key is not None
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash).exists()
+        assert BlindWorkExposureState.objects.get(pk=assignment.pk).source_task_key is None
+
+    def test_exposure_view_rejects_unbounded_or_invalid_source_identifiers(self):
+        from classification_disagreements.blind_read_binding import _seal
+        from classification_disagreements.models import (
+            BlindCaptureEpoch, BlindEligibilityProof, BlindWorkExposureState,
+        )
+
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
+        cases = [
+            ({'source_task_id': 8}, '8'),
+            ({'source_task_id': 9223372036854775807}, '9223372036854775807'),
+            ({'source_task_id': 0}, None),
+            ({'source_task_id': -1}, None),
+            ({'source_task_id': 1.5}, None),
+            ({'source_task_id': '8'}, None),
+            ({'source_task_id': True}, None),
+            ({'source_task_id': 9223372036854775808}, None),
+            ({'source_task_id': 8, 'padding': 'x' * 16384}, None),
+        ]
+        for index, (manifest, expected) in enumerate(cases):
+            assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                       assignee=member, assigned_by=owner)
+            proof_hash = f'{index + 1:064x}'
+            BlindEligibilityProof.objects.create(assignment_id=assignment.pk, manifest=manifest,
+                                                  manifest_hash=proof_hash)
+            _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+                'project_id_frozen': project.pk, 'actor_id_frozen': member.pk, 'decision_id_frozen': None,
+                'source_id_frozen': None, 'source_task_id_frozen': None, 'decision_request_hash': None,
+                'purpose': 'quality', 'reference_id_frozen': index + 1, 'reference_hash': 'a' * 64,
+                'proof_hash': proof_hash})
+            state = BlindWorkExposureState.objects.get(pk=assignment.pk)
+            assert state.proof_matches
+            assert state.source_task_key == expected
+            assert not state.source_exposed
+
+    def test_exposure_view_recreation_reads_evidence_added_while_absent(self):
+        from classification_disagreements.blind_read_binding import _seal
+        from classification_disagreements.models import (
+            BlindCaptureEpoch, BlindReadBinding, BlindTextLengthExposure, BlindWorkExposureState,
+        )
+
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0065_blind_mix_live_lifecycle')]
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        assignments = [TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+            assignee=member, assigned_by=owner) for _ in range(2)]
+        epoch, _ = BlindCaptureEpoch.objects.get_or_create(pk=1)
+        assignment = assignments[0]
+        binding = _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+            'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
+            'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
+            'decision_request_hash': None, 'purpose': 'ordinary', 'reference_id_frozen': None,
+            'reference_hash': None, 'proof_hash': None})
+        assert not BlindWorkExposureState.objects.get(pk=assignment.pk).text_exposed
+        try:
+            MigrationExecutor(connection).migrate(before)
+            assert BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash).exists()
+            BlindTextLengthExposure.objects.create(account_id=member.pk, assignment_id=assignments[1].pk,
+                                                   generation=epoch.generation, byte_length=-1)
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        state = BlindWorkExposureState.objects.get(pk=assignment.pk)
+        assert state.binding_hash == binding.binding_hash
+        assert state.text_exposed
+
     def test_live_mix_view_can_be_recreated_without_discarding_history(self):
         from classification_disagreements.models import BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence
 

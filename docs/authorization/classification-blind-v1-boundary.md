@@ -1141,6 +1141,11 @@ fixture measured ordinary/quality medians of 24.8/29.1 ms (rank probability
 88.7/106.2 ms median with a shared database cache. The difference remains
 observable in these samples; the small fresh-process sample does not measure a
 fully cold database or establish timing privacy. Public dispatch stays disabled.
+Migration 0067 tightens the SQLite view's source identifier parsing: SQLite
+can classify an out-of-range JSON integer as an integer while extracting it as
+a real. The view now requires an actual SQLite integer before conversion. The
+signed source comparison remains mandatory on both database backends. Existing
+0066 installations must apply 0067 to replace the view definition.
 
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
