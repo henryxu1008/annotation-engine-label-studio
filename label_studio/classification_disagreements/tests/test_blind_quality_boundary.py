@@ -5670,6 +5670,86 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
     def test_direct_reference_length_waits_for_capture_reader(self):
         self._assert_direct_exposure_waits_for_capture_reader('reference')
 
+    def test_direct_mix_history_inserts_wait_for_capture_reader(self):
+        import time
+
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.blind_read_binding import _seal
+        from classification_disagreements.models import BlindBoundLifecycle, BlindMixDecision, BlindMixEvidence
+
+        provenance_fixtures.enable_test_capture()
+        for kind in ('decision', 'legacy'):
+            with self.subTest(kind=kind):
+                project = ProjectFactory()
+                actor = project.created_by
+                task = TaskFactory(project=project)
+                assignment = TaskAssignment.objects.create(task=task, project=project, assignee=actor, assigned_by=actor)
+                binding = _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': task.pk,
+                    'project_id_frozen': project.pk, 'actor_id_frozen': actor.pk, 'decision_id_frozen': None,
+                    'source_id_frozen': None, 'source_task_id_frozen': None, 'decision_request_hash': None,
+                    'purpose': 'ordinary', 'reference_id_frozen': None, 'reference_hash': None, 'proof_hash': None})
+                assert BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+                entered, release, started = Event(), Event(), Event()
+                writer_pid = []
+
+                def read():
+                    close_old_connections()
+                    try:
+                        with transaction.atomic():
+                            lock_capture_epoch_for_read()
+                            assert BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+                            entered.set()
+                            if not release.wait(15):
+                                raise AssertionError('capture reader was not released')
+                    finally:
+                        close_old_connections()
+
+                def insert():
+                    close_old_connections()
+                    try:
+                        with connection.cursor() as cursor:
+                            cursor.execute('SELECT pg_backend_pid()')
+                            writer_pid.append(cursor.fetchone()[0])
+                        started.set()
+                        if kind == 'decision':
+                            BlindMixDecision.objects.create(project=project, source_assignment=assignment,
+                                chosen_assignment=assignment, source_id_frozen=assignment.pk,
+                                source_task_id_frozen=task.pk, source_assignee_id_frozen=actor.pk,
+                                chosen_id_frozen=assignment.pk, key=uuid4(), request_hash='a' * 64,
+                                actor_id=actor.pk, ratio_basis_points=0, selected=False)
+                        else:
+                            BlindMixEvidence.objects.create(decision_id_frozen=1000000000 + assignment.pk,
+                                project_id_frozen=project.pk, source_id_frozen=assignment.pk,
+                                source_task_id_frozen=task.pk, source_assignee_id_frozen=actor.pk,
+                                chosen_id_frozen=assignment.pk)
+                    finally:
+                        close_old_connections()
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    reader = pool.submit(read)
+                    try:
+                        assert entered.wait(10)
+                        writer = pool.submit(insert)
+                        assert started.wait(10)
+                        with self.assertRaises(TimeoutError):
+                            writer.result(timeout=0.3)
+                        deadline = time.monotonic() + 5
+                        waiting = False
+                        while time.monotonic() < deadline:
+                            with connection.cursor() as cursor:
+                                cursor.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s', [writer_pid[0]])
+                                waiting = cursor.fetchone() == ('Lock',)
+                            if waiting or writer.done():
+                                break
+                            time.sleep(0.02)
+                        assert waiting, 'history writer did not reach a database lock'
+                        assert BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+                    finally:
+                        release.set()
+                    reader.result(timeout=20)
+                    writer.result(timeout=20)
+                assert not BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+
     def test_storage_creation_waits_for_capture_reader(self):
         for kind in ('s3', 'gcs', 'azure', 'redis', 'local'):
             with self.subTest(storage=kind):

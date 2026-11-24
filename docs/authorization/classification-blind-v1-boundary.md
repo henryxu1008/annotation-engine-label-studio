@@ -1226,6 +1226,14 @@ decision was deleted before shared-history backfill. Ordinary legacy work with
 no mixed history remains readable. Stop dependent readers before rolling this
 migration back: newer readers rely on this projection for those checks. The
 existing migration fence disables capture during the upgrade or rollback.
+
+Migration 0073 fences PostgreSQL inserts into mixed decisions and retained
+legacy mix evidence with the same capture-epoch lock held by participant reads.
+SQLite fenced reads already reserve the database writer. This closes the window
+in which a direct insert could invalidate the shared lifecycle while a response
+is being assembled. Applying or reversing the migration disables capture through
+the existing migration fence; stop dependent readers and writers before rollback.
+This does not establish external provider history or prove timing privacy.
 A randomized, same-process PostgreSQL 16 comparison on one synthetic fixture
 used 500 warm samples for each purpose and version. Before/after ordinary
 medians were 26.09/26.12 ms and quality medians were 26.39/26.16 ms; the

@@ -846,6 +846,34 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_mix_insert_fence_upgrade_and_rollback_disable_capture(self):
+        from classification_disagreements.models import BlindCaptureEpoch
+
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0072_blind_bound_legacy_history')]
+
+        def installed_fences():
+            if connection.vendor != 'postgresql':
+                return set()
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN "
+                               "('blind_mix_decision_insert_fence', 'blind_mix_legacy_insert_fence')")
+                return {row[0] for row in cursor.fetchall()}
+
+        try:
+            MigrationExecutor(connection).migrate(before)
+            enable_test_capture()
+            MigrationExecutor(connection).migrate(after)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            if connection.vendor == 'postgresql':
+                assert installed_fences() == {'blind_mix_decision_insert_fence', 'blind_mix_legacy_insert_fence'}
+            enable_test_capture()
+            MigrationExecutor(connection).migrate(before)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            assert not installed_fences()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     def test_legacy_lifecycle_view_upgrade_and_rollback_disable_capture(self):
         from classification_disagreements.models import BlindCaptureEpoch
 
