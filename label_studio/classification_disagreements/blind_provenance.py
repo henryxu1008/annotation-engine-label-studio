@@ -102,7 +102,32 @@ def _trusted_import_registry():
     from io_storages.functions import get_storage_list
 
     cached = sys.modules.get('io_storages.all_api')
-    return cached is None or getattr(cached, 'get_storage_list', None) is get_storage_list
+    if cached is None:
+        return True
+    if getattr(cached, 'get_storage_list', None) is not get_storage_list:
+        return False
+    # The aggregate API calls its cached view classes directly, rather than
+    # consulting get_storage_classes(). Validate their identities as well as
+    # the callback: a stale or substituted view can expose data independently
+    # of its serializer model.
+    expected = get_storage_list()
+    if settings.ENABLE_LOCAL_FILES_STORAGE:
+        from io_storages.localfiles.api import LocalFilesExportStorageListAPI, LocalFilesImportStorageListAPI
+
+        expected.append({'name': 'localfiles', 'import_list_api': LocalFilesImportStorageListAPI,
+                         'export_list_api': LocalFilesExportStorageListAPI})
+    actual = getattr(cached, '_common_storage_list', None)
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return False
+    try:
+        by_name = {entry['name']: entry for entry in actual}
+        return (len(by_name) == len(expected) and all(
+            entry['name'] in by_name
+            and by_name[entry['name']]['import_list_api'] is entry['import_list_api']
+            and by_name[entry['name']]['export_list_api'] is entry['export_list_api']
+            for entry in expected))
+    except (KeyError, TypeError):
+        return False
 
 
 def _external_scope_checks(using='default', *, storage_classes=None, omit_projected=False):

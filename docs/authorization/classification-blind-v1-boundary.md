@@ -1199,7 +1199,9 @@ data sources and serving routes cannot be certified by an empty table.
 The current registry callback must also be the built-in callback, and an
 already-loaded storage API must have cached that same callback. A custom
 callback is rejected without executing it, even if it would return only
-built-in models. This is a current-process check: returning to the built-in
+built-in models. Its cached import and export view classes must also match the
+built-in registry, including the current local-storage setting. This is a
+current-process check: returning to the built-in
 callback later does not prove that a custom provider was never exposed, so it
 does not establish deployment-wide or historical continuity.
 Ordinary work validates the view is

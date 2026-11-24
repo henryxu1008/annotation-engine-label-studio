@@ -2185,6 +2185,16 @@ class TestBlindQualityBoundary(APITestCase):
         with self.settings(**config), patch('io_storages.all_api.get_storage_list', lambda: []):
             # The API may retain an older callback after a settings change.
             assert_denied()
+        from io_storages import all_api
+
+        stale = [dict(entry) for entry in all_api._common_storage_list]
+        # A substituted view can expose an independent source even if its
+        # serializer claims a known, built-in model.
+        stale[0]['import_list_api'] = type('SubstitutedStorageList', (), {
+            'serializer_class': stale[0]['import_list_api'].serializer_class,
+        })
+        with self.settings(**config), patch('io_storages.all_api._common_storage_list', stale):
+            assert_denied()
 
     def test_collection_prefilter_is_not_a_substitute_for_integrity_verification(self):
         from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
