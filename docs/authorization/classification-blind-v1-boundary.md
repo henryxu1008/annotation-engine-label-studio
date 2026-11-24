@@ -1201,6 +1201,11 @@ cached grant and does not establish continuity for a dynamically added or
 removed storage provider. Apply the migration before starting these readers;
 stop them before reversing it. Keep public mixing disabled until the dynamic
 registry, remaining timing, and browser acceptance boundaries are resolved.
+Both work purposes now fetch the epoch generation and enabled flag through the
+same fenced projection. Quality work still requires the signed generation to
+match an enabled epoch; ordinary work does not inherit that eligibility rule.
+This removes the purpose-specific epoch predicate, but other purpose-specific
+checks remain and this alone does not establish timing privacy.
 On one isolated PostgreSQL 16 synthetic fixture, sequential 150-pair warm
 diagnostics before and after this change measured ordinary/quality medians of
 27.6/29.6 ms (rank 0.6727) and 25.7/26.1 ms (rank 0.5339), respectively, with

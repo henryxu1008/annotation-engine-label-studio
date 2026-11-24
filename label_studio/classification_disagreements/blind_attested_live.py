@@ -72,18 +72,19 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
             request_hash=binding.decision_request_hash))
     state = BlindWorkExposureState.objects.filter(assignment_id=assignment.pk, binding_id=binding.pk,
         binding_hash=binding.binding_hash, actor_id=assignment.assignee_id)
-    if binding.purpose == 'quality':
-        if quality_generation is None:
-            _deny()
-        state = state.filter(epoch_enabled=True, generation=quality_generation)
+    if binding.purpose == 'quality' and quality_generation is None:
+        _deny()
     shared_lengths = BlindWorkReferenceLengths.objects.filter(assignment_id=assignment.pk).values('lengths')[:1]
     shared_scope = BlindGlobalScopeState.objects.filter(pk=1).values('facts')[:1]
     guard = (state.annotate(**required, reference_lengths=Subquery(shared_lengths),
                             global_scope=Subquery(shared_scope), **checks)
-             .values(*required, 'reference_lengths', 'global_scope', 'exposure_clean', 'marker_present',
+             .values(*required, 'reference_lengths', 'global_scope', 'generation', 'epoch_enabled',
+        'exposure_clean', 'marker_present',
         'matching_marker_id', 'proof_present', 'proof_matches', 'source_task_key', 'source_exposed',
         'text_exposed', *checks).first())
     if guard is None or not all(guard[name] for name in required):
+        _deny()
+    if binding.purpose == 'quality' and (not guard['epoch_enabled'] or guard['generation'] != quality_generation):
         _deny()
     scope = guard['global_scope']
     if (not isinstance(scope, dict) or set(scope) != GLOBAL_SCOPE_KEYS

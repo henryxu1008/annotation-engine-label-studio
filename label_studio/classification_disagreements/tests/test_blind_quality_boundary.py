@@ -351,6 +351,7 @@ class TestBlindQualityBoundary(APITestCase):
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence,
             BlindMixLiveLifecycle, BlindWorkExposureState, BlindWorkReferenceLengths)
+        from django.db.models import F
         from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -479,6 +480,18 @@ class TestBlindQualityBoundary(APITestCase):
             with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=fence)
+            # Both purposes read the epoch from the same projection. A disabled
+            # or advanced generation must revoke quality without revoking
+            # independently authorized ordinary work, including before commit.
+            for update in ({'enabled': False}, {'generation': F('generation') + 1}):
+                with transaction.atomic():
+                    BlindCaptureEpoch.objects.filter(pk=1).update(**update)
+                    checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding,
+                                          fence=fence)
+                    with self.assertRaises(ValidationError):
+                        checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                              binding=quality_binding, fence=fence)
+                    transaction.set_rollback(True)
             from classification_disagreements import blind_attested_live
             from io_storages.s3.models import S3ImportStorage
 
