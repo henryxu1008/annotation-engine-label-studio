@@ -22,12 +22,11 @@ from .blind_read_attestation import read_attestation
 from .blind_read_binding import FIELDS
 from .models import (
     BlindCaptureCertificate,
+    BlindBoundLifecycle,
     BlindGlobalScopeState,
     BlindLabelExposure,
     BlindMixDecision,
     BlindMixEvidence,
-    BlindMixLiveLifecycle,
-    BlindMixSharedEvidence,
     BlindPrivilegeHistory,
     BlindPrivilegeReadState,
     BlindProjectFileExposure,
@@ -60,16 +59,7 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
             status__in=TaskAssignment.ACTIVE_STATUSES, task__project_id=assignment.project_id)),
         'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
     }
-    history = BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk)
-    if binding.decision_id_frozen is None:
-        required['shared_history'] = ~Exists(history)
-    else:
-        required['shared_history'] = Exists(BlindMixLiveLifecycle.objects.filter(
-            decision_id=binding.decision_id_frozen, selected=binding.purpose == 'quality',
-            project_id_frozen=assignment.project_id, chosen_id_frozen=assignment.pk,
-            source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
-            source_assignee_id_frozen=assignment.assignee_id, reference_id_frozen=binding.reference_id_frozen,
-            request_hash=binding.decision_request_hash))
+    required['shared_history'] = Exists(BlindBoundLifecycle.objects.filter(binding_id=binding.pk, valid=True))
     state = BlindWorkExposureState.objects.filter(assignment_id=assignment.pk, binding_id=binding.pk,
         binding_hash=binding.binding_hash, actor_id=assignment.assignee_id)
     if binding.purpose == 'quality' and quality_generation is None:

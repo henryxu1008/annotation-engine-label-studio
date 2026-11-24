@@ -1212,6 +1212,14 @@ projection already verifies that decision and its retained history. Its read
 does not issue a second, unused decision-existence subquery; legacy ordinary
 bindings without a decision retain the separate absence check. This removes a
 real query-shape difference without substituting artificial delay for evidence.
+Migration 0071 adds a read-only binding lifecycle projection: both ordinary and
+quality reads consult the same projection, which validates the retained mixed
+decision and source lifecycle or, for legacy bindings, the absence of mixed
+history. Applying or reversing the migration disables the capture epoch through
+the existing migration fence; stop dependent readers before rollback and roll
+out the view to every reader before starting a new generation. This consolidates
+one predicate, not the remaining signed
+evidence checks, and does not establish timing privacy.
 On one isolated PostgreSQL 16 synthetic fixture, sequential 150-pair warm
 diagnostics before and after this change measured ordinary/quality medians of
 27.6/29.6 ms (rank 0.6727) and 25.7/26.1 ms (rank 0.5339), respectively, with

@@ -347,7 +347,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
         from classification_disagreements.tests.exposure_read_oracle import legacy_exposure
-        from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
+        from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindBoundLifecycle, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence,
             BlindMixLiveLifecycle, BlindWorkExposureState, BlindWorkReferenceLengths)
@@ -454,6 +454,15 @@ class TestBlindQualityBoundary(APITestCase):
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
+            for binding in (ordinary_binding, quality_binding):
+                expected = BlindMixLiveLifecycle.objects.filter(
+                    decision_id=binding.decision_id_frozen, selected=binding.purpose == 'quality',
+                    project_id_frozen=binding.project_id_frozen, chosen_id_frozen=binding.assignment_id_frozen,
+                    source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
+                    source_assignee_id_frozen=binding.actor_id_frozen, reference_id_frozen=binding.reference_id_frozen,
+                    request_hash=binding.decision_request_hash,
+                ).exists()
+                assert expected and BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid == expected
             def assert_exposure_projection(assignment, binding, marker=None):
                 expected = legacy_exposure(assignment=assignment, binding=binding, marker=marker,
                                            signed=read_attestation(binding))

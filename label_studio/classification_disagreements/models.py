@@ -290,6 +290,17 @@ class BlindMixLiveLifecycle(models.Model):
         db_table = 'classification_blind_mix_live_lifecycle'
 
 
+class BlindBoundLifecycle(models.Model):
+    """Live lifecycle validation for a retained work binding, not a grant."""
+
+    binding_id = models.PositiveBigIntegerField(primary_key=True)
+    valid = models.BooleanField()
+
+    class Meta:
+        managed = False
+        db_table = 'classification_blind_bound_lifecycle'
+
+
 class BlindMixCompletion(models.Model):
     """Retained evidence that a sample submitted before its source was released."""
 
