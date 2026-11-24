@@ -20,7 +20,7 @@ from .blind_provenance import (
 from .models import (
     BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
     BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
-    BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision,
+    BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence,
     BlindPrivilegeReadState, ClassificationGoldEvidence,
 )
 
@@ -143,18 +143,26 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     except (KeyError, TypeError, ValueError, OverflowError):
         _deny()
 
-    all_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
-    mixes, history, valid_mix = _mixed_evidence_queries(
-        account_id=assignment.assignee_id, assignment_id=assignment.pk,
-        project_id=assignment.project_id, reference_id=marker.reference_id,
-    )
-    # Reuse the lifecycle predicates, not a list's authorization result. A
-    # signed read still requires the exact decision and source it attested.
-    bound_mix = valid_mix.filter(
-        pk=binding.decision_id_frozen, source_assignment_id=binding.source_id_frozen,
-        source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
-        request_hash=binding.decision_request_hash,
-    )
+    # An attested mixed decision is valid only if the exact decision, retained
+    # history and current source/completion all match. That single predicate
+    # already proves the decision and history exist. For unmixed work, reject
+    # either kind of orphan instead; neither case needs three extra probes.
+    if binding.decision_id_frozen is None:
+        mix_checks = {
+            'any_decision': Exists(BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)),
+            'mix_history': Exists(BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)),
+        }
+    else:
+        _, _, valid_mix = _mixed_evidence_queries(
+            account_id=assignment.assignee_id, assignment_id=assignment.pk,
+            project_id=assignment.project_id, reference_id=marker.reference_id,
+        )
+        bound_mix = valid_mix.filter(
+            pk=binding.decision_id_frozen, source_assignment_id=binding.source_id_frozen,
+            source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
+            request_hash=binding.decision_request_hash,
+        )
+        mix_checks = {'bound_mix': Exists(bound_mix)}
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
     exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
                                        lengths=lengths, assignment_id=assignment.pk)
@@ -176,10 +184,9 @@ def checked_attested_work(*, assignment, marker, binding, fence):
                           reference_hash=marker.reference_hash)),
         'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
                                    task_id=value.get('source_task_id'), generation=generation)),
-        'any_decision': Exists(all_decisions), 'mix': Exists(mixes), 'mix_history': Exists(history),
-        'bound_mix': Exists(bound_mix),
         'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
     }
+    checks.update(mix_checks)
     # Keep the existing SQLite source checks until its retained-evidence
     # replacement semantics have been addressed separately.
     if connection.vendor == 'sqlite':
@@ -212,8 +219,6 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or any(guard[name] for name in scopes)
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['length_exposed'] or (rule == 'local-unseen-source/v2' and guard['source_exposure'])
-            or guard['mix'] != guard['mix_history']
-            or (binding.decision_id_frozen is None and guard['any_decision'])
-            or (binding.decision_id_frozen is not None and not guard['mix'])
-            or (guard['mix'] and not guard['bound_mix'])):
+            or (binding.decision_id_frozen is None and (guard['any_decision'] or guard['mix_history']))
+            or (binding.decision_id_frozen is not None and not guard['bound_mix'])):
         _deny()

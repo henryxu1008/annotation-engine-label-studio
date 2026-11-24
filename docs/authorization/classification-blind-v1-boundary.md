@@ -932,6 +932,14 @@ showed 4,590/6,960 SQL compiler calls and 3,610/8,500 object-copy calls;
 profiling itself adds overhead. Two fresh-process pairs measured 105.4/117.0 ms,
 with a shared database cache. These are diagnostics, not cold-cache or privacy
 acceptance; the two purposes still use materially different live checks.
+The mixed-quality live guard now uses the exact matching decision predicate to
+establish its retained history and source lifecycle together, avoiding three
+redundant existence checks; unmixed quality still rejects orphan decisions or
+history. On another isolated synthetic PostgreSQL fixture, 100 warm pairs after
+this change measured 28.2/41.4 ms ordinary/quality (rank 0.8741); two fresh
+process pairs measured 87.5/118.1 ms with a shared database cache. Different
+fixture runs and a two-pair process sample do not establish an improvement or
+cold-cache privacy. The timing gap and public-dispatch release block remain.
 After the earlier single-verification change, an isolated PostgreSQL fixture's 100 warm read
 pairs measured ordinary/quality medians of 26.4/36.2 ms (rank 0.9724); two
 fresh-process pairs measured 121.8/128.1 ms with a shared database cache.

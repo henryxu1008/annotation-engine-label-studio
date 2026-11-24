@@ -743,8 +743,11 @@ class TestBlindQualityBoundary(APITestCase):
 
     def test_unmixed_quality_uses_same_binding_and_denies_after_reference_deletion(self):
         from access_control.project_operations import local_principal
+        from classification_disagreements.blind_attested_live import checked_attested_work
+        from classification_disagreements.blind_provenance import lock_capture_epoch_for_read
+        from classification_disagreements.blind_read_binding import verify_mixed_read_binding
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
-        from classification_disagreements.models import BlindReadBinding
+        from classification_disagreements.models import BlindMixEvidence, BlindReadBinding
         from classification_disagreements.tests.test_gold_scoring import answer
         from rest_framework.exceptions import NotFound
 
@@ -754,6 +757,19 @@ class TestBlindQualityBoundary(APITestCase):
         assert binding.reference_id_frozen == reference.pk and binding.proof_hash
         principal = local_principal(self.annotator)
         handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        assert resolve_handle(principal=principal, task_handle=handle.task_handle)
+        with transaction.atomic():
+            fence = lock_capture_epoch_for_read(with_fence=True)
+            signed_binding, _ = verify_mixed_read_binding(self.assignment)
+            marker = BlindQualityAssignment.objects.get(assignment_id=self.assignment.pk)
+            BlindMixEvidence.objects.create(decision_id_frozen=99999999, project_id_frozen=self.project.pk,
+                source_id_frozen=self.assignment.pk, source_task_id_frozen=self.assignment.task_id,
+                source_assignee_id_frozen=self.annotator.pk, chosen_id_frozen=self.assignment.pk)
+            with self.assertRaises(ValidationError):
+                checked_attested_work(assignment=self.assignment, marker=marker, binding=signed_binding, fence=fence)
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=principal, task_handle=handle.task_handle)
+            transaction.set_rollback(True)
         assert resolve_handle(principal=principal, task_handle=handle.task_handle)
         reference.delete()
         with self.assertRaises(NotFound):
