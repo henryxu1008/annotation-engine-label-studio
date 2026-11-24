@@ -6,21 +6,20 @@ from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Cast
 
 from .models import (
+    BlindAssignmentExposure,
     BlindCaptureCertificate,
     BlindCaptureEpoch,
-    BlindAssignmentExposure,
     BlindEligibilityProof,
-    BlindMixDecision,
-    BlindMixCompletion,
-    BlindCompletionReadState,
-    BlindMixEvidence,
-    BlindPrivilegeHistory,
     BlindLabelExposure,
+    BlindMixDecision,
+    BlindMixEvidence,
+    BlindMixLiveLifecycle,
+    BlindPrivilegeHistory,
     BlindProjectFileExposure,
-    BlindReferenceTextLength,
-    BlindTextLengthExposure,
     BlindProvenanceEvent,
     BlindQualityAssignment,
+    BlindReferenceTextLength,
+    BlindTextLengthExposure,
     ClassificationGoldEvidence,
 )
 
@@ -204,40 +203,12 @@ def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_
     Signed object callers also constrain the valid decision to their frozen
     binding. The collection prefilter cannot establish that binding.
     """
-    from tasks.models import Submission, TaskAssignment
-
     mixes = BlindMixDecision.objects.using(using).filter(chosen_id_frozen=assignment_id, selected=True)
     history = BlindMixEvidence.objects.using(using).filter(chosen_id_frozen=assignment_id)
-    matching_history = BlindMixEvidence.objects.using(using).filter(
-        decision_id_frozen=OuterRef('pk'), project_id_frozen=OuterRef('project_id'),
-        source_id_frozen=OuterRef('source_id_frozen'), source_task_id_frozen=OuterRef('source_task_id_frozen'),
-        source_assignee_id_frozen=OuterRef('source_assignee_id_frozen'), chosen_id_frozen=OuterRef('chosen_id_frozen'),
+    valid = BlindMixLiveLifecycle.objects.using(using).filter(
+        selected=True, project_id_frozen=project_id, chosen_id_frozen=assignment_id,
+        reference_id_frozen=reference_id, source_assignee_id_frozen=account_id,
     )
-    live_source = TaskAssignment.objects.using(using).filter(
-        pk=OuterRef('source_assignment_id'), project_id=OuterRef('project_id'),
-        assignee_id=account_id, status__in=TaskAssignment.ACTIVE_STATUSES,
-        task__project_id=OuterRef('project_id'), task_id=OuterRef('source_task_id_frozen'),
-    ).filter(pk=OuterRef('source_id_frozen'))
-    completed_source = TaskAssignment.objects.using(using).filter(
-        pk=OuterRef('source_id_frozen'), project_id=OuterRef('project_id_frozen'),
-        assignee_id=account_id, status=TaskAssignment.Status.CANCELLED,
-        version=OuterRef('source_version_after'), task__project_id=OuterRef('project_id_frozen'),
-        task_id=OuterRef(OuterRef('source_task_id_frozen')),
-    )
-    completed_submission = Submission.objects.using(using).filter(
-        pk=OuterRef('submission_id_frozen'), assignment_id=OuterRef('chosen_id_frozen'), submitted_by_id=account_id,
-    )
-    completion_state = BlindCompletionReadState.objects.using(using).filter(
-        submission_id=OuterRef('submission_id_frozen'), revoked=False,
-    )
-    completion = BlindMixCompletion.objects.using(using).filter(
-        decision_id_frozen=OuterRef('pk'), project_id_frozen=OuterRef('project_id'),
-        source_id_frozen=OuterRef('source_id_frozen'), chosen_id_frozen=OuterRef('chosen_id_frozen'),
-    ).filter(Exists(completed_source), Exists(completed_submission), Exists(completion_state))
-    valid = mixes.filter(
-        project_id=project_id, chosen_assignment_id=assignment_id, reference_id_frozen=reference_id,
-        source_assignee_id_frozen=account_id, source_assignment_id=F('source_id_frozen'),
-    ).filter(Exists(matching_history)).filter(Exists(live_source) | Exists(completion))
     return mixes, history, valid
 
 
@@ -414,6 +385,7 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
 
     from rest_framework.exceptions import ValidationError
     from review_batches.service import digest
+
     from .gold_api import bounded_query
 
     def unavailable():
@@ -476,6 +448,7 @@ def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_curren
     # reference for this check and the source-provenance rule below.
     from django.http import Http404
     from rest_framework.exceptions import APIException
+
     from .gold_api import checked
 
     try:

@@ -16,7 +16,6 @@ from .blind_provenance import (
     _external_scope_checks,
     _local_upload_backend_supported,
     _matching_text_exposures,
-    _mixed_evidence_queries,
     require_capture_fence,
 )
 from .blind_read_attestation import read_attestation
@@ -30,6 +29,7 @@ from .models import (
     BlindLabelExposure,
     BlindMixDecision,
     BlindMixEvidence,
+    BlindMixLiveLifecycle,
     BlindMixSharedEvidence,
     BlindPrivilegeHistory,
     BlindPrivilegeReadState,
@@ -65,10 +65,12 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
     if binding.decision_id_frozen is None:
         required['shared_history'] = ~Exists(history)
     else:
-        required['shared_history'] = Exists(history.filter(
-            decision_id_frozen=binding.decision_id_frozen, selected=binding.purpose == 'quality',
-            project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
-            source_task_id_frozen=binding.source_task_id_frozen, source_assignee_id_frozen=assignment.assignee_id))
+        required['shared_history'] = Exists(BlindMixLiveLifecycle.objects.filter(
+            decision_id=binding.decision_id_frozen, selected=binding.purpose == 'quality',
+            project_id_frozen=assignment.project_id, chosen_id_frozen=assignment.pk,
+            source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
+            source_assignee_id_frozen=assignment.assignee_id, reference_id_frozen=binding.reference_id_frozen,
+            request_hash=binding.decision_request_hash))
     # Both purposes load this fact; only quality eligibility requires it.
     exposure_clean = Exists(BlindAccountExposureState.objects.filter(
         account_id=assignment.assignee_id, generation=OuterRef('generation'),
@@ -130,17 +132,9 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             proofs = BlindEligibilityProof.objects.filter(assignment_id=assignment.pk)
             decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
             checks = {'marker': Exists(markers), 'proof': Exists(proofs), 'decision': Exists(decisions)}
-            if binding.decision_id_frozen is not None:
-                matching = decisions.filter(pk=binding.decision_id_frozen, project_id=assignment.project_id,
-                    selected=False, chosen_assignment_id=assignment.pk, source_assignment_id=assignment.pk,
-                    source_id_frozen=assignment.pk,
-                    source_task_id_frozen=assignment.task_id, source_assignee_id_frozen=assignment.assignee_id,
-                    request_hash=binding.decision_request_hash, reference_id_frozen__isnull=True)
-                checks['matching_decision'] = Exists(matching)
             guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
             if (guard['marker'] or guard['proof']
-                    or (binding.decision_id_frozen is None and guard['decision'])
-                    or (binding.decision_id_frozen is not None and not guard['matching_decision'])):
+                    or (binding.decision_id_frozen is None and guard['decision'])):
                 _deny()
             return
         if connection.vendor == 'postgresql' and not privilege_clean:
@@ -168,26 +162,16 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     except (KeyError, TypeError, ValueError, OverflowError):
         _deny()
 
-    # An attested mixed decision is valid only if the exact decision, retained
-    # history and current source/completion all match. That single predicate
-    # already proves the decision and history exist. For unmixed work, reject
-    # either kind of orphan instead; neither case needs three extra probes.
+    # The common guard checks a mixed decision, retained history and current
+    # source/completion together. Unmixed quality work must still reject a
+    # legacy decision or history that has no matching binding.
     if binding.decision_id_frozen is None:
         mix_checks = {
             'any_decision': Exists(BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)),
             'mix_history': Exists(BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)),
         }
     else:
-        _, _, valid_mix = _mixed_evidence_queries(
-            account_id=assignment.assignee_id, assignment_id=assignment.pk,
-            project_id=assignment.project_id, reference_id=marker.reference_id,
-        )
-        bound_mix = valid_mix.filter(
-            pk=binding.decision_id_frozen, source_assignment_id=binding.source_id_frozen,
-            source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
-            request_hash=binding.decision_request_hash,
-        )
-        mix_checks = {'bound_mix': Exists(bound_mix)}
+        mix_checks = {}
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
     exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
                                        lengths=lengths, assignment_id=assignment.pk)
@@ -244,6 +228,5 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or any(guard[name] for name in scopes)
             or guard['length_count'] != len(lengths) or guard['length_extra']
             or guard['length_exposed'] or (rule == 'local-unseen-source/v2' and guard['source_exposure'])
-            or (binding.decision_id_frozen is None and (guard['any_decision'] or guard['mix_history']))
-            or (binding.decision_id_frozen is not None and not guard['bound_mix'])):
+            or (binding.decision_id_frozen is None and (guard['any_decision'] or guard['mix_history']))):
         _deny()

@@ -846,6 +846,28 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_live_mix_view_can_be_recreated_without_discarding_history(self):
+        from classification_disagreements.models import BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0064_shared_mix_evidence')]
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        task = TaskFactory(project=project)
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=owner)
+        decision = BlindMixDecision.objects.create(project=project, source_assignment=assignment,
+            chosen_assignment=assignment, source_id_frozen=assignment.pk, source_task_id_frozen=task.pk,
+            source_assignee_id_frozen=member.pk, chosen_id_frozen=assignment.pk, reference_id_frozen=None,
+            key=uuid4(), request_hash='a' * 64, actor_id=owner.pk, ratio_basis_points=0, selected=False)
+        assert BlindMixLiveLifecycle.objects.filter(pk=decision.pk).exists()
+        try:
+            MigrationExecutor(connection).migrate(before)
+            assert BlindMixSharedEvidence.objects.filter(decision_id_frozen=decision.pk, selected=False).exists()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        assert BlindMixLiveLifecycle.objects.filter(pk=decision.pk).exists()
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL isolation test')
     def test_shared_mix_migration_rejects_stale_transaction_snapshot(self):
         before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]

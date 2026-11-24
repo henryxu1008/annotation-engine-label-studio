@@ -289,7 +289,8 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
-            BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence)
+            BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence,
+            BlindMixLiveLifecycle)
         from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -319,6 +320,8 @@ class TestBlindQualityBoundary(APITestCase):
             assert [row.purpose for row in rows] == ['ordinary', 'quality']
             shared = [BlindMixSharedEvidence.objects.get(chosen_id_frozen=assignment.pk) for assignment in assignments]
             assert [item.selected for item in shared] == [False, True]
+            assert [BlindMixLiveLifecycle.objects.get(decision_id=item.decision_id_frozen).selected
+                    for item in shared] == [False, True]
             assert not BlindMixEvidence.objects.filter(chosen_id_frozen=assignments[0].pk).exists()
             assert BlindMixEvidence.objects.filter(chosen_id_frozen=assignments[1].pk).exists()
             assert assignments[0].pk not in deferred_source_ids(members[0].pk).values_list('source_id_frozen', flat=True)
@@ -3048,7 +3051,8 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_reassignment import reassign_quality_task
         from classification_disagreements.blind_task_handles import issue_handle, lock_handle_for_write, resolve_handle
         from classification_disagreements.blind_scoring import score_quality_revision
-        from classification_disagreements.models import BlindCompletionReadState, BlindMixCompletion, BlindMixDecision
+        from classification_disagreements.models import BlindCompletionReadState, BlindMixCompletion, BlindMixDecision, BlindMixLiveLifecycle
+        from classification_disagreements.tests.mix_lifecycle_oracle import legacy_valid_mix
         from classification_disagreements.tests.test_gold_scoring import answer
         from projects.models import ProjectMember
         from projects.models import ProjectSummary
@@ -3086,6 +3090,17 @@ class TestBlindQualityBoundary(APITestCase):
             assert create_mixed_assignment(**args).pk == chosen.pk
         decision = BlindMixDecision.objects.get(project=self.project, key=args['key'])
         assert decision.selected
+        def assert_lifecycle(expected):
+            live = BlindMixLiveLifecycle.objects.filter(pk=decision.pk).exists()
+            old = legacy_valid_mix(account_id=member.pk, assignment_id=chosen.pk, project_id=self.project.pk,
+                                   reference_id=reference.pk).exists()
+            assert live == old == expected
+
+        assert_lifecycle(True)
+        assert not legacy_valid_mix(account_id=member.pk, assignment_id=chosen.pk, project_id=self.project.pk,
+                                    reference_id=reference.pk + 100000).exists()
+        assert not BlindMixLiveLifecycle.objects.filter(pk=decision.pk,
+            reference_id_frozen=reference.pk + 100000).exists()
         self.client.force_authenticate(self.manager)
         with self.settings(ANNOTATION_FIXED_PACKAGES_ENABLED=True):
             for task_id in (ordinary.pk, chosen.task_id):
@@ -3131,6 +3146,7 @@ class TestBlindQualityBoundary(APITestCase):
         source.refresh_from_db()
         assert source.status == TaskAssignment.Status.CANCELLED
         assert BlindMixCompletion.objects.filter(decision_id_frozen=decision.pk, submission_id_frozen=submission.pk).exists()
+        assert_lifecycle(True)
         assert not BlindCompletionReadState.objects.get(pk=submission.pk).revoked
         signed_read_url = f'/api/tasks/blind/{handle.task_handle}/'
         with self.settings(**config):
@@ -3139,6 +3155,7 @@ class TestBlindQualityBoundary(APITestCase):
             # A completed read is only valid for the exact released source version.
             with transaction.atomic():
                 TaskAssignment.objects.filter(pk=source.pk).update(version=source.version + 1)
+                assert_lifecycle(False)
                 assert not current_quality_assignment_ids(member.pk).filter(assignment_id=chosen.pk).exists()
                 assert self.client.get(signed_read_url).status_code == 404
                 transaction.set_rollback(True)
@@ -3160,6 +3177,7 @@ class TestBlindQualityBoundary(APITestCase):
             transaction.set_rollback(True)
         with transaction.atomic():
             Submission.objects.filter(pk=submission.pk).update(submitted_by=None)
+            assert_lifecycle(False)
             assert BlindCompletionReadState.objects.get(pk=submission.pk).revoked
             Submission.objects.filter(pk=submission.pk).update(submitted_by=member)
             with self.assertRaises(NotFound):
@@ -3218,6 +3236,7 @@ class TestBlindQualityBoundary(APITestCase):
         with self.assertRaises(DatabaseError), transaction.atomic():
             TaskAssignment.objects.filter(pk=source.pk).update(status=TaskAssignment.Status.ASSIGNED)
         source.delete()
+        assert_lifecycle(False)
         assert not Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         with self.assertRaises(NotFound):
             resolve_handle(principal=participant, task_handle=handle.task_handle)
@@ -3668,7 +3687,8 @@ class TestBlindQualityBoundary(APITestCase):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_mix import create_mixed_assignment
         from classification_disagreements.blind_task_handles import issue_handle
-        from classification_disagreements.models import BlindMixCompletion, BlindMixDecision
+        from classification_disagreements.models import BlindMixCompletion, BlindMixDecision, BlindMixLiveLifecycle
+        from classification_disagreements.tests.mix_lifecycle_oracle import legacy_valid_mix
         from projects.models import ProjectMember
 
         reference = self.valid_reference()
@@ -3691,6 +3711,9 @@ class TestBlindQualityBoundary(APITestCase):
                 references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
                 principal=local_principal(self.manager), key=key)
         decision = BlindMixDecision.objects.get(project=self.project, key=key)
+        oracle = legacy_valid_mix(account_id=member.pk, assignment_id=chosen.pk, project_id=self.project.pk,
+                                  reference_id=reference.pk)
+        assert oracle.exists() and BlindMixLiveLifecycle.objects.filter(pk=decision.pk).exists()
         assert Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         handle = issue_handle(principal=local_principal(member), assignment_id=chosen.pk)
         self.client.force_authenticate(member)
@@ -3698,6 +3721,7 @@ class TestBlindQualityBoundary(APITestCase):
         with self.settings(**config):
             assert self.client.get(read_url).status_code == 200
             decision.source_assignment.cancel()
+            assert not oracle.exists() and not BlindMixLiveLifecycle.objects.filter(pk=decision.pk).exists()
             assert self.client.get(read_url).status_code == 404
         assert not Task.objects.for_user(member).filter(pk=chosen.task_id).exists()
         assert not Task.objects.for_user(member).filter(pk=ordinary.pk).exists()

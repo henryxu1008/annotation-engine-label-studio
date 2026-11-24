@@ -980,6 +980,28 @@ warm pairs measured ordinary/quality medians of 25.8/40.6 ms and a rank
 statistic of 0.9947. Two fresh-process pairs measured 97.7/179.6 ms with a
 shared database cache. These small, separate runs are not a controlled comparison
 or a cold-database test; they demonstrate that the release blocker remains.
+The subsequent `classification_blind_mix_live_lifecycle` database view checks
+the live decision, shared identity, quality-only legacy history, source and
+completion for both mixed purposes. Participant object reads and quality
+collection/admission predicates use that same live view; it is not a cached
+grant and remains subject to the existing transaction fence. Apply the view
+migration before deploying readers. Before reversing that migration, stop the
+readers that require the view; a later refusal to discard shared evidence can
+leave the view migration reversed and requires it to be reapplied.
+On a separate isolated PostgreSQL 16 fixture, 100 warm pairs after this change
+measured ordinary/quality medians of 25.3/30.2 ms and rank 0.8396, with 20
+statements per read. Two fresh-process pairs measured 140.4/120.7 ms with a
+shared database cache. These are small diagnostic samples from separate runs,
+not a controlled performance comparison, cold-database test or privacy
+acceptance. Quality-only exposure and external-scope checks remain, and public
+dispatch stays blocked.
+In a separate isolated PostgreSQL 17 fixture, 100 warm pairs measured
+26.6/30.5 ms ordinary/quality medians (rank 0.7816). Ten pairs measured after
+evicting that database's eligible PostgreSQL shared buffers measured 29.2/32.2 ms
+(rank 0.75), with at least 45 buffers evicted on each read and no reported
+eviction failures. Both used 20 statements per read. The operating-system cache
+remained shared; these limited samples are diagnostic, not a fully cold test or
+proof that the timing side channel is absent.
 An experimental PostgreSQL checkpoint for global storage, model and credential
 scope was evaluated and discarded: it required shared table and function locks,
 additional database round trips, trigger integrity checks and privilege-dependent

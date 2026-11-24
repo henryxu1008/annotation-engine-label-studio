@@ -272,6 +272,24 @@ class BlindMixSharedEvidence(models.Model):
     selected = models.BooleanField()
 
 
+class BlindMixLiveLifecycle(models.Model):
+    """Internal live view of a mixed slot; it does not grant access alone."""
+
+    decision_id = models.PositiveBigIntegerField(primary_key=True)
+    project_id_frozen = models.PositiveBigIntegerField()
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_task_id_frozen = models.PositiveBigIntegerField()
+    source_assignee_id_frozen = models.PositiveBigIntegerField()
+    chosen_id_frozen = models.PositiveBigIntegerField()
+    reference_id_frozen = models.PositiveBigIntegerField(null=True)
+    request_hash = models.CharField(max_length=64)
+    selected = models.BooleanField()
+
+    class Meta:
+        managed = False
+        db_table = 'classification_blind_mix_live_lifecycle'
+
+
 class BlindMixCompletion(models.Model):
     """Retained evidence that a sample submitted before its source was released."""
 
