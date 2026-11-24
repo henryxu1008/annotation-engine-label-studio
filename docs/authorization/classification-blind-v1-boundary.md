@@ -1196,6 +1196,12 @@ the configurable registry. Admission and collection checks use the same scope.
 Other registered models fail closed, even when their database tables are empty,
 including entries that merely claim a built-in model label. Their independent
 data sources and serving routes cannot be certified by an empty table.
+The current registry callback must also be the built-in callback, and an
+already-loaded storage API must have cached that same callback. A custom
+callback is rejected without executing it, even if it would return only
+built-in models. This is a current-process check: returning to the built-in
+callback later does not prove that a custom provider was never exposed, so it
+does not establish deployment-wide or historical continuity.
 Ordinary work validates the view is
 available without adopting quality-only denial conditions. The view is not a
 cached grant and does not establish continuity for a dynamically added or

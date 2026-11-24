@@ -190,10 +190,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
                                                                    generation=generation)),
         )
-    from io_storages.models import get_storage_classes
-
-    registered = get_storage_classes('import')
-    scopes = _external_scope_checks(storage_classes=registered, omit_projected=True)
+    scopes = _external_scope_checks(omit_projected=True)
     checks.update(scopes)
     guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks, quality_generation=generation)
     global_scope = guard['global_scope']

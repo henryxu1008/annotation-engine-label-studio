@@ -2152,6 +2152,40 @@ class TestBlindQualityBoundary(APITestCase):
                 resolve_handle(principal=principal, task_handle=handle.task_handle)
             assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
 
+    def test_custom_or_stale_registry_denies_quality_without_blocking_ordinary(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_provenance import project_file_scope_supported
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from rest_framework.exceptions import NotFound
+
+        self.qualified_submission(answer('Positive'))
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        ordinary = TaskFactory(project=self.project, data={'text': 'ordinary custom registry'})
+        TaskAssignment.objects.create(task=ordinary, project=self.project, assignee=self.annotator,
+                                      assigned_by=self.manager)
+        self.client.force_authenticate(self.annotator)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+
+        def assert_denied():
+            assert not project_file_scope_supported(self.project.pk)
+            assert Task.objects.for_user(self.annotator).filter(pk=ordinary.pk).exists()
+            assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=principal, task_handle=handle.task_handle)
+            assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
+
+        with self.settings(**config, GET_STORAGE_LIST='synthetic.untrusted_registry'):
+            # Never execute a custom callback even if it would claim only
+            # built-in models: it could expose data through independent routes.
+            with patch('io_storages.models.get_storage_classes', side_effect=AssertionError('untrusted registry called')):
+                assert_denied()
+        with self.settings(**config), patch('io_storages.all_api.get_storage_list', lambda: []):
+            # The API may retain an older callback after a settings change.
+            assert_denied()
+
     def test_collection_prefilter_is_not_a_substitute_for_integrity_verification(self):
         from classification_disagreements.blind_provenance import checked_quality_proof, current_quality_assignment_ids
         from classification_disagreements.tests.test_gold_scoring import answer

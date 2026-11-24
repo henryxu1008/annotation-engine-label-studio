@@ -1,5 +1,8 @@
 """Forward-only ordering evidence; deliberately not an admission decision."""
 
+import sys
+
+from django.conf import settings
 from django.db import connections, transaction
 from django.db.models import BooleanField, CharField, Count, Exists, F, OuterRef, Q, Subquery, Value
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
@@ -87,17 +90,35 @@ def _projected_storage_flag(model):
         return None
 
 
+def _trusted_import_registry():
+    """Reject custom callbacks even when they claim to return built-in models.
+
+    The all-storage API caches its callable at import time. A later settings
+    change cannot establish that the mounted registry is the current one.
+    This is a live restriction, not proof of historical deployment continuity.
+    """
+    if settings.GET_STORAGE_LIST != 'io_storages.functions.get_storage_list':
+        return False
+    from io_storages.functions import get_storage_list
+
+    cached = sys.modules.get('io_storages.all_api')
+    return cached is None or getattr(cached, 'get_storage_list', None) is get_storage_list
+
+
 def _external_scope_checks(using='default', *, storage_classes=None, omit_projected=False):
     """Build the same global storage, model and credential fences for each caller."""
     from django.apps import apps
     from io_storages.models import get_storage_classes
     from ml.models import MLBackend
 
-    classes = get_storage_classes('import') if storage_classes is None else storage_classes
+    trusted = _trusted_import_registry()
+    # Do not call an untrusted registry merely to determine whether it is safe.
+    classes = (get_storage_classes('import') if storage_classes is None else storage_classes) if trusted else ()
     checks = {} if omit_projected else {
         'external_credentials': Exists(_projects_with_external_credentials(using)),
         'external_ml': Exists(MLBackend.objects.using(using).all()),
     }
+    checks['external_registry_unsupported'] = Value(not trusted, output_field=BooleanField())
     if not omit_projected:
         # Built-in storage routes remain mounted even if a configurable
         # registry omits a type. Inspect every fenced built-in table.
