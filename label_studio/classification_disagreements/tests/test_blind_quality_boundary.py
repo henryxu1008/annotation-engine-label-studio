@@ -287,10 +287,11 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_read_binding import load_attested_read_binding, verify_mixed_read_binding
         from classification_disagreements.blind_attested_live import checked_attested_work
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
+        from classification_disagreements.tests.exposure_read_oracle import legacy_exposure
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence,
-            BlindMixLiveLifecycle)
+            BlindMixLiveLifecycle, BlindWorkExposureState)
         from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -393,6 +394,18 @@ class TestBlindQualityBoundary(APITestCase):
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])
+            def assert_exposure_projection(assignment, binding, marker=None):
+                expected = legacy_exposure(assignment=assignment, binding=binding, marker=marker,
+                                           signed=read_attestation(binding))
+                actual = BlindWorkExposureState.objects.get(pk=assignment.pk)
+                assert {key: getattr(actual, key) for key in expected} == expected
+                if binding.purpose == 'quality':
+                    proof = read_attestation(binding)['quality']['proof']
+                    if proof['rule'] == 'local-unseen-source/v2':
+                        assert actual.source_task_key == str(proof['source_task_id'])
+
+            assert_exposure_projection(assignments[0], ordinary_binding)
+            assert_exposure_projection(assignments[1], quality_binding, quality_marker)
             with self.assertRaises(RuntimeError):
                 load_attested_read_binding(assignment=assignments[0], fence=None)
             fence = lock_capture_epoch_for_read(with_fence=True)
@@ -491,7 +504,9 @@ class TestBlindQualityBoundary(APITestCase):
                 assert not BlindPrivilegeReadState.objects.get(pk=members[1].pk).invalidated
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             signed_proof = read_attestation(quality_binding)['quality']['proof']
+            signed_lengths = read_attestation(quality_binding)['quality']['text_lengths']
             assert signed_proof['rule'] == 'local-unseen-source/v2'
+            assert signed_lengths
             generation = BlindCaptureEpoch.objects.get(pk=1).generation
             self.client.force_authenticate(members[1])
             ordinary_handle = issue_handle(principal=local_principal(members[1]), assignment_id=same_actor_ordinary.pk)
@@ -503,9 +518,12 @@ class TestBlindQualityBoundary(APITestCase):
                     task_id=signed_proof['source_task_id'], project_id=self.project.pk, generation=generation),
                 lambda: BlindTextLengthExposure.objects.create(account_id=members[1].pk,
                     assignment_id=same_actor_ordinary.pk, generation=generation, byte_length=-1),
+                lambda: BlindTextLengthExposure.objects.create(account_id=members[1].pk,
+                    assignment_id=same_actor_ordinary.pk, generation=generation, byte_length=signed_lengths[0]),
             ):
                 with transaction.atomic():
                     exposure()
+                    assert_exposure_projection(assignments[1], quality_binding, quality_marker)
                     assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked is (connection.vendor == 'sqlite')
                     assert not BlindReadIdentityState.objects.get(pk=same_actor_ordinary.pk).revoked
                     with self.assertRaises(ValidationError):
@@ -540,6 +558,7 @@ class TestBlindQualityBoundary(APITestCase):
                                   fence=fence)
             with transaction.atomic():
                 record_project_file_access(account_id=members[1].pk, project_id=self.project.pk)
+                assert_exposure_projection(assignments[1], quality_binding, quality_marker)
                 assert BlindAccountExposureState.objects.get(pk=members[1].pk).file_exposed
                 assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
                 with self.assertRaises(ValidationError):
@@ -551,6 +570,7 @@ class TestBlindQualityBoundary(APITestCase):
             checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                   fence=fence)
             record_label_metadata_access(account_id=members[1].pk)
+            assert_exposure_projection(assignments[1], quality_binding, quality_marker)
             assert BlindAccountExposureState.objects.get(pk=members[1].pk).label_exposed
             assert not BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
             assert not BlindReadIdentityState.objects.get(pk=assignments[0].pk).revoked

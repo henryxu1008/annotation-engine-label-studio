@@ -1126,6 +1126,22 @@ ordinary median 29.1 ms and quality median 41.7 ms (rank probability 0.9729).
 Four fresh-process pairs measured medians of 106.1 ms and 121.1 ms; this small
 sample shares the database cache and does not establish timing privacy.
 
+Migration 0066 adds a live database view for the exposure evidence used by
+both ordinary and quality reads. It reads current account, marker, proof,
+source and text exposure records under the existing capture fence; it does not
+cache authorization decisions. Quality reads still compare the source with the
+signed proof and the current reference lengths with the signed length set, and
+retain external-resource and SQLite legacy checks. Migrating to 0066 must
+precede starting readers that use the view. Stop those readers before rolling
+back the migration. The view can be recreated from retained evidence and does
+not itself enable capture or public mixed dispatch.
+With 0066, 100 paired warm reads in an isolated PostgreSQL 16 synthetic
+fixture measured ordinary/quality medians of 24.8/29.1 ms (rank probability
+0.8305), with 20 SQL statements for each. Two fresh-process pairs measured
+88.7/106.2 ms median with a shared database cache. The difference remains
+observable in these samples; the small fresh-process sample does not measure a
+fully cold database or establish timing privacy. Public dispatch stays disabled.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.

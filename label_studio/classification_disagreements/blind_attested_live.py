@@ -7,7 +7,7 @@ disabled. Static facts require signature verification and immutable identities.
 import re
 
 from django.db import connection
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists
 from rest_framework.exceptions import ValidationError
 from review_batches.service import digest
 
@@ -15,17 +15,12 @@ from .blind_provenance import (
     _exact_reference_length_checks,
     _external_scope_checks,
     _local_upload_backend_supported,
-    _matching_text_exposures,
     require_capture_fence,
 )
 from .blind_read_attestation import read_attestation
 from .blind_read_binding import FIELDS
 from .models import (
-    BlindAccountExposureState,
-    BlindAssignmentExposure,
     BlindCaptureCertificate,
-    BlindCaptureEpoch,
-    BlindEligibilityProof,
     BlindLabelExposure,
     BlindMixDecision,
     BlindMixEvidence,
@@ -35,9 +30,8 @@ from .models import (
     BlindPrivilegeReadState,
     BlindProjectFileExposure,
     BlindProvenanceEvent,
-    BlindQualityAssignment,
-    BlindReadBinding,
     BlindReadIdentityState,
+    BlindWorkExposureState,
     ClassificationGoldEvidence,
 )
 
@@ -57,8 +51,6 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
         'active_assignment': Exists(TaskAssignment.objects.filter(pk=assignment.pk, task_id=assignment.task_id,
             project_id=assignment.project_id, assignee_id=assignment.assignee_id,
             status__in=TaskAssignment.ACTIVE_STATUSES, task__project_id=assignment.project_id)),
-        'binding': Exists(BlindReadBinding.objects.filter(pk=binding.pk, binding_hash=binding.binding_hash,
-                            assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
         'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
     }
     history = BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk)
@@ -71,17 +63,15 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
             source_id_frozen=binding.source_id_frozen, source_task_id_frozen=binding.source_task_id_frozen,
             source_assignee_id_frozen=assignment.assignee_id, reference_id_frozen=binding.reference_id_frozen,
             request_hash=binding.decision_request_hash))
-    # Both purposes load this fact; only quality eligibility requires it.
-    exposure_clean = Exists(BlindAccountExposureState.objects.filter(
-        account_id=assignment.assignee_id, generation=OuterRef('generation'),
-        file_exposed=False, label_exposed=False))
-    epoch = BlindCaptureEpoch.objects.filter(pk=1)
+    state = BlindWorkExposureState.objects.filter(assignment_id=assignment.pk, binding_id=binding.pk,
+        binding_hash=binding.binding_hash, actor_id=assignment.assignee_id)
     if binding.purpose == 'quality':
         if quality_generation is None:
             _deny()
-        epoch = epoch.filter(enabled=True, generation=quality_generation)
-    guard = (epoch.annotate(**required, exposure_clean=exposure_clean, **checks)
-             .values(*required, 'exposure_clean', *checks).first())
+        state = state.filter(epoch_enabled=True, generation=quality_generation)
+    guard = (state.annotate(**required, **checks).values(*required, 'exposure_clean', 'marker_present',
+        'matching_marker_id', 'proof_present', 'proof_matches', 'source_task_key', 'source_exposed',
+        'text_exposed', *checks).first())
     if guard is None or not all(guard[name] for name in required):
         _deny()
     return guard
@@ -128,12 +118,10 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         if signed is None:
             _deny()
         if binding.purpose == 'ordinary':
-            markers = BlindQualityAssignment.objects.filter(task_id=assignment.task_id)
-            proofs = BlindEligibilityProof.objects.filter(assignment_id=assignment.pk)
             decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
-            checks = {'marker': Exists(markers), 'proof': Exists(proofs), 'decision': Exists(decisions)}
+            checks = {'decision': Exists(decisions)}
             guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
-            if (guard['marker'] or guard['proof']
+            if (guard['marker_present'] or guard['proof_present']
                     or (binding.decision_id_frozen is None and guard['decision'])):
                 _deny()
             return
@@ -173,8 +161,6 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     else:
         mix_checks = {}
     count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
-    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
-                                       lengths=lengths, assignment_id=assignment.pk)
     # Signed proof issuance validates the immutable reference and provenance;
     # migrations 0057/0061 backfill invalid history and deletion triggers
     # revoke read_identity under the caller's capture fence. Keep the live
@@ -185,15 +171,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     # Source and text exposures are immutable ledgers, checked under the same
     # epoch fence. PostgreSQL writes do not update purpose-specific bindings.
     checks = {
-        'proof': Exists(BlindEligibilityProof.objects.filter(assignment_id=assignment.pk,
-                                                             manifest_hash=binding.proof_hash)),
-        'marker': Exists(BlindQualityAssignment.objects.filter(pk=marker.pk, assignment_id=assignment.pk,
-                          task_id=assignment.task_id, project_id=assignment.project_id,
-                          assignee_id=assignment.assignee_id, reference_id=marker.reference_id,
-                          reference_hash=marker.reference_hash)),
-        'source_exposure': Exists(BlindAssignmentExposure.objects.filter(account_id=assignment.assignee_id,
-                                   task_id=value.get('source_task_id'), generation=generation)),
-        'length_count': count, 'length_extra': extra, 'length_exposed': Exists(exposed),
+        'length_count': count, 'length_extra': extra,
     }
     checks.update(mix_checks)
     # Keep the existing SQLite source checks until its retained-evidence
@@ -224,9 +202,12 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             guard[name] for name in ('account_event', 'reference_event', 'reference', 'history', 'certificate'))
             or guard['file_exposure'] or guard['label_exposure']
             or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])))
-            or not all(guard[name] for name in ('exposure_clean', 'proof', 'marker'))
+            or not all(guard[name] for name in ('exposure_clean', 'proof_matches'))
+            or guard['matching_marker_id'] != marker.pk
             or any(guard[name] for name in scopes)
             or guard['length_count'] != len(lengths) or guard['length_extra']
-            or guard['length_exposed'] or (rule == 'local-unseen-source/v2' and guard['source_exposure'])
+            or guard['text_exposed']
+            or (rule == 'local-unseen-source/v2' and (guard['source_task_key'] != str(value['source_task_id'])
+                or guard['source_exposed']))
             or (binding.decision_id_frozen is None and (guard['any_decision'] or guard['mix_history']))):
         _deny()

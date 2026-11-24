@@ -366,6 +366,29 @@ class BlindAccountExposureState(models.Model):
     label_exposed = models.BooleanField(default=False)
 
 
+class BlindWorkExposureState(models.Model):
+    """Live shared projection of exposure evidence; not an authorization grant."""
+
+    assignment_id = models.PositiveBigIntegerField(primary_key=True)
+    binding_id = models.PositiveBigIntegerField()
+    binding_hash = models.CharField(max_length=64)
+    actor_id = models.PositiveBigIntegerField()
+    generation = models.PositiveBigIntegerField()
+    epoch_enabled = models.BooleanField()
+    exposure_clean = models.BooleanField()
+    marker_present = models.BooleanField()
+    matching_marker_id = models.PositiveBigIntegerField(null=True)
+    proof_present = models.BooleanField()
+    proof_matches = models.BooleanField()
+    source_task_key = models.CharField(max_length=128, null=True)
+    source_exposed = models.BooleanField()
+    text_exposed = models.BooleanField()
+
+    class Meta:
+        managed = False
+        db_table = 'classification_blind_work_exposure_state'
+
+
 class BlindPrivilegeReadState(models.Model):
     """Retained account privilege status for transaction-fenced reads."""
 
