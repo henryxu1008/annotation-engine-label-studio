@@ -103,6 +103,21 @@ class TestBlindQualityBoundary(APITestCase):
             response = self.client.get(f'/api/projects/{self.project.pk}/work-mode/')
         assert response.status_code == 200 and response.data['restricted'] is True
 
+    def test_work_mode_authorizes_mapped_actor_but_binds_the_session_user(self):
+        from access_control.identity import Principal
+
+        class MappedProvider:
+            def resolve(provider, request):
+                return Principal('mapped:test', 'test', 'mapped', self.annotator.pk)
+
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.manager)
+        with self.settings(**config), patch('access_control.identity.get_identity_provider', return_value=MappedProvider()):
+            response = self.client.get(f'/api/projects/{self.project.pk}/work-mode/')
+        assert response.status_code == 200
+        assert response.data == {'project_id': self.project.pk, 'session_user_id': self.manager.pk, 'restricted': True}
+
     def test_manager_repairs_legacy_ordinary_binding_atomically_and_rechecks_scope(self):
         from access_control.identity import LocalIdentityProvider
         from classification_disagreements.models import BlindReadAttestation, BlindReadBinding
