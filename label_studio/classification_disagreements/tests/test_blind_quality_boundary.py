@@ -290,6 +290,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure)
+        from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
         from users.models import User
@@ -348,9 +349,16 @@ class TestBlindQualityBoundary(APITestCase):
                     'classification_disagreements.blind_read_attestation.read_attestation',
                     side_effect=AssertionError('loader verified signed evidence'),
                 ), patch('classification_disagreements.blind_attested_live.read_attestation',
-                         wraps=read_attestation) as verify_attestation:
+                         wraps=read_attestation) as verify_attestation, CaptureQueriesContext(connection) as queries:
                     assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 200
                     assert verify_attestation.call_count == 1
+                if connection.features.has_json_object_function:
+                    # Keep the independent task-wide presence probe, but only
+                    # scan once more for the exact assignment marker fields.
+                    packed = [row['sql'] for row in queries if 'AS "_quality_marker"' in row['sql']]
+                    assert len(packed) == 1
+                    marker_table = connection.ops.quote_name(BlindQualityAssignment._meta.db_table)
+                    assert packed[0].count(f'FROM {marker_table}') == 2
             quality_marker = BlindQualityAssignment.objects.get(assignment_id=assignments[1].pk)
             quality_binding, _ = verify_mixed_read_binding(assignments[1])
             ordinary_binding, _ = verify_mixed_read_binding(assignments[0])

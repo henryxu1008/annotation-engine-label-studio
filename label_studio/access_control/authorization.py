@@ -92,7 +92,9 @@ class AuthorizationService:
         from tasks.models import TaskAssignment
         from classification_disagreements.blind_mix import deferred_source_ids
         from classification_disagreements.models import BlindQualityAssignment
+        from django.db import connection
         from django.db.models import Exists, OuterRef, Subquery
+        from django.db.models.functions import JSONObject
 
         role = cls.project_role(principal, task.project)
         if role not in (ProjectMember.Role.ANNOTATOR, ProjectMember.Role.MANAGER):
@@ -100,24 +102,33 @@ class AuthorizationService:
 
         markers = BlindQualityAssignment.objects.filter(task_id=task.pk)
         matching = markers.filter(assignment_id=OuterRef('pk'))
-        assignment = (
-            TaskAssignment.objects.filter(
-                task=task,
-                assignee_id=principal.local_user_id,
-                status__in=TaskAssignment.ACTIVE_STATUSES,
-            )
-            .exclude(pk__in=deferred_source_ids(principal.local_user_id))
-            .annotate(
-                _quality_task=Exists(markers),
+        assignments = TaskAssignment.objects.filter(
+            task=task,
+            assignee_id=principal.local_user_id,
+            status__in=TaskAssignment.ACTIVE_STATUSES,
+        ).exclude(pk__in=deferred_source_ids(principal.local_user_id)).annotate(_quality_task=Exists(markers))
+        packed_marker = (
+            _attested_binding is not None
+            and connection.vendor in ('postgresql', 'sqlite')
+            and connection.features.has_json_object_function
+        )
+        if packed_marker:
+            # Assignment IDs are unique in this retained ledger. Project the
+            # exact matching marker as one row rather than five scalar probes.
+            packed = matching.annotate(
+                _marker_data=JSONObject(pk='pk', project_id='project_id', assignee_id='assignee_id',
+                                        reference_id='reference_id', reference_hash='reference_hash'),
+            ).values('_marker_data')[:1]
+            assignments = assignments.annotate(_quality_marker=Subquery(packed))
+        else:
+            assignments = assignments.annotate(
                 _quality_marker_id=Subquery(matching.values('pk')[:1]),
                 _quality_project_id=Subquery(matching.values('project_id')[:1]),
                 _quality_assignee_id=Subquery(matching.values('assignee_id')[:1]),
                 _quality_reference_id=Subquery(matching.values('reference_id')[:1]),
                 _quality_reference_hash=Subquery(matching.values('reference_hash')[:1]),
             )
-            .order_by('-assigned_at', '-id')
-            .first()
-        )
+        assignment = assignments.order_by('-assigned_at', '-id').first()
         if assignment is None:
             return None
         if _locked_task:
@@ -129,13 +140,21 @@ class AuthorizationService:
 
         marker = None
         if assignment._quality_task:
-            if assignment._quality_marker_id is None:
+            if packed_marker:
+                marker_data = assignment._quality_marker
+            elif assignment._quality_marker_id is None:
+                marker_data = None
+            else:
+                marker_data = {
+                    'pk': assignment._quality_marker_id,
+                    'project_id': assignment._quality_project_id,
+                    'assignee_id': assignment._quality_assignee_id,
+                    'reference_id': assignment._quality_reference_id,
+                    'reference_hash': assignment._quality_reference_hash,
+                }
+            if marker_data is None:
                 return None
-            marker = BlindQualityAssignment(
-                pk=assignment._quality_marker_id, assignment_id=assignment.pk, task_id=task.pk,
-                project_id=assignment._quality_project_id, assignee_id=assignment._quality_assignee_id,
-                reference_id=assignment._quality_reference_id, reference_hash=assignment._quality_reference_hash,
-            )
+            marker = BlindQualityAssignment(assignment_id=assignment.pk, task_id=task.pk, **marker_data)
         try:
             if _attested_binding is not None:
                 from classification_disagreements.blind_attested_live import checked_attested_work
