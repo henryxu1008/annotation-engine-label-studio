@@ -33,6 +33,7 @@ export const API_CONFIG = {
     projectStorageOperationResolve: "POST:/projects/:pk/storage-operations/:operation/resolve/",
     projectReviewCapability: "GET:/projects/:pk/review-capability/",
     myWork: "GET:/projects/:pk/my-work/",
+    projectWorkMode: "GET:/projects/:pk/work-mode/",
     reviewBatchCapability: "GET:/projects/:pk/review-batches/capability/",
     secondReviewCapability: "GET:/projects/:pk/second-reviews/capability/",
     secondReviews: "GET:/projects/:pk/second-reviews/",

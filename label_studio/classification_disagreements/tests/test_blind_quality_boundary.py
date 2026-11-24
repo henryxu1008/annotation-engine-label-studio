@@ -59,6 +59,46 @@ class TestBlindQualityBoundary(APITestCase):
     setUp = fixtures.TestSubmissionReviewWorkflow.setUp
     _review = fixtures.TestSubmissionReviewWorkflow._review
 
+    def test_work_mode_uses_live_actor_project_scope_and_never_accepts_actor_input(self):
+        from projects.models import ProjectMember
+
+        url = f'/api/projects/{self.project.pk}/work-mode/'
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.annotator)
+        with self.settings(ANNOTATION_CLASSIFICATION_BLIND_ENABLED=False):
+            response = self.client.get(url)
+            assert response.status_code == 200
+            assert response.data == {'project_id': self.project.pk, 'session_user_id': self.annotator.pk,
+                                     'restricted': False}
+            assert response['Cache-Control'] == 'private, no-store'
+        with self.settings(**config):
+            response = self.client.get(url)
+            assert response.status_code == 200 and response.data['restricted'] is True
+            assert response.data['session_user_id'] == self.annotator.pk
+            denied = self.client.get(url + f'?actor_id={self.manager.pk}')
+            assert denied.status_code == 404
+            assert denied['Cache-Control'] == 'private, no-store'
+            assert denied['Referrer-Policy'] == 'no-referrer'
+            self.client.force_authenticate(self.manager)
+            response = self.client.get(url)
+            assert response.status_code == 200 and response.data['restricted'] is False
+            assert response.data['session_user_id'] == self.manager.pk
+            self.client.force_authenticate(self.other_user)
+            assert self.client.get(url).status_code in (403, 404)
+            self.client.force_authenticate(self.annotator)
+            ProjectMember.objects.filter(project=self.project, user=self.annotator).update(enabled=False)
+            assert self.client.get(url).status_code in (403, 404)
+        self.client.force_authenticate(None)
+        assert self.client.get(url).status_code in (401, 403)
+
+    def test_work_mode_stays_restricted_for_retained_quality_marker_when_disabled(self):
+        bind_marker(self.assignment)
+        self.client.force_authenticate(self.annotator)
+        with self.settings(ANNOTATION_CLASSIFICATION_BLIND_ENABLED=False):
+            response = self.client.get(f'/api/projects/{self.project.pk}/work-mode/')
+        assert response.status_code == 200 and response.data['restricted'] is True
+
     def test_manager_repairs_legacy_ordinary_binding_atomically_and_rechecks_scope(self):
         from access_control.identity import LocalIdentityProvider
         from classification_disagreements.models import BlindReadAttestation, BlindReadBinding

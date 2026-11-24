@@ -7,8 +7,10 @@ side channels have been addressed. This endpoint never creates a mix slot.
 import hashlib
 import hmac
 
+from access_control.authorization import authorization
 from access_control.identity import resolve_actor, resolve_principal
-from access_control.project_operations import EDIT, READ_WORK, lock_project_operation, project_operation_policy
+from access_control.project_access import visible_projects_for_actor
+from access_control.project_operations import EDIT, READ_WORK, lock_project_actor, lock_project_operation, project_operation_policy
 from core.permissions import all_permissions
 from django.conf import settings
 from django.db import connection, transaction
@@ -52,6 +54,31 @@ def participant_text_data(project, task):
         return {field: task.data[field] for field in sorted(fields)}
     except (service.Incomparable, TypeError, ValueError, service.etree.ParseError):
         raise NotFound('Work is unavailable.')
+
+
+class ProjectWorkModeAPI(APIView):
+    """Choose the participant protocol before constructing a task workspace."""
+
+    permission_required = all_permissions.projects_view
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        response['Cache-Control'] = 'private, no-store'
+        response['Referrer-Policy'] = 'no-referrer'
+        return response
+
+    @transaction.atomic
+    def get(self, request, pk):
+        if request.query_params:
+            raise NotFound('Work is unavailable.')
+        principal, actor = resolve_actor(request)
+        candidate = generics.get_object_or_404(visible_projects_for_actor(actor), pk=pk)
+        project, actor = lock_project_actor(candidate.pk, principal)
+        if (not visible_projects_for_actor(actor).filter(pk=project.pk).exists()
+                or not authorization.can_view_project(principal, project)):
+            raise NotFound('Work is unavailable.')
+        return Response({'project_id': project.pk, 'session_user_id': request.user.pk,
+                         'restricted': sensitive_nonmanager(project, principal)})
 
 
 class BlindWorkListAPI(APIView):

@@ -1211,6 +1211,17 @@ at least 58 pages were evicted each time, and no eviction failures were
 reported. The sequential runs are not controlled comparisons, and operating
 system caches remained shared; these diagnostics do not prove timing privacy.
 
+The project workbench selects its participant protocol through the authenticated
+`work-mode` endpoint before initializing the data manager. The response binds
+the project and session user, is not cacheable, and is rechecked against live
+project membership under the project/actor lock. A sensitive non-manager uses
+the existing opaque work list and editor; it does not fetch model backends or
+initialize the legacy task grid. A failed or stale mode response fails closed.
+Managers and ordinary projects retain the legacy workbench. This UI routing is
+not an authorization grant: every work read and write still checks permissions,
+and it does not establish dynamic-storage continuity or timing privacy. Public
+mixed dispatch remains disabled until those release boundaries are verified.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.

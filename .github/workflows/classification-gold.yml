@@ -152,7 +152,8 @@ jobs:
           NX_DAEMON=false yarn jest --config apps/labelstudio/jest.config.ts --runInBand --runTestsByPath \
             apps/labelstudio/src/pages/DataManager/ClassificationGold.test.jsx \
             apps/labelstudio/src/pages/DataManager/ClassificationBlindScores.test.jsx \
-            apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.test.jsx
+            apps/labelstudio/src/pages/DataManager/MyWorkWorkspace.test.jsx \
+            apps/labelstudio/src/pages/DataManager/workModeBootstrap.test.js
           NX_DAEMON=false yarn jest --config libs/datamanager/jest.config.ts --runInBand --runTestsByPath \
             libs/datamanager/src/sdk/blind-protocol.test.js \
             libs/datamanager/src/utils/api-proxy/blind-guard.test.js \
