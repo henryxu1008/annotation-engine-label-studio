@@ -783,6 +783,118 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_shared_mix_upgrade_rejects_invalid_ordinary_history(self):
+        from classification_disagreements.models import BlindMixDecision
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
+        executor.migrate(before)
+        decision = None
+        try:
+            owner, member = UserFactory(), UserFactory()
+            project = ProjectFactory(created_by=owner)
+            source, chosen = [TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                assignee=member, assigned_by=owner) for _ in range(2)]
+            decision = BlindMixDecision.objects.create(project=project, source_assignment=source,
+                chosen_assignment=chosen, source_id_frozen=source.pk, source_task_id_frozen=source.task_id,
+                source_assignee_id_frozen=member.pk, chosen_id_frozen=chosen.pk, reference_id_frozen=None,
+                key=uuid4(), request_hash='b' * 64, actor_id=owner.pk, ratio_basis_points=0, selected=False)
+            with self.assertRaisesRegex(RuntimeError, 'Invalid ordinary mix history'):
+                MigrationExecutor(connection).migrate(after)
+        finally:
+            if decision is not None:
+                BlindMixDecision.objects.filter(pk=decision.pk).delete()
+            MigrationExecutor(connection).migrate(after)
+
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL migration lock test')
+    def test_shared_mix_backfill_waits_for_inflight_old_writer(self):
+        from classification_disagreements.models import BlindMixDecision, BlindMixSharedEvidence
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
+        executor.migrate(before)
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        task = TaskFactory(project=project)
+        assignment = TaskAssignment.objects.create(task=task, project=project, assignee=member, assigned_by=owner)
+        entered, release, migrating = Event(), Event(), Event()
+
+        def old_writer():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    decision = BlindMixDecision.objects.create(project=project, source_assignment=assignment,
+                        chosen_assignment=assignment, source_id_frozen=assignment.pk, source_task_id_frozen=task.pk,
+                        source_assignee_id_frozen=member.pk, chosen_id_frozen=assignment.pk,
+                        reference_id_frozen=None, key=uuid4(), request_hash='a' * 64,
+                        actor_id=owner.pk, ratio_basis_points=0, selected=False)
+                    entered.set()
+                    if not release.wait(15):
+                        raise AssertionError('old writer was not released')
+                    return decision.pk
+            finally:
+                close_old_connections()
+
+        def migrate():
+            close_old_connections()
+            try:
+                migrating.set()
+                MigrationExecutor(connection).migrate(after)
+            finally:
+                close_old_connections()
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                writing = pool.submit(old_writer)
+                try:
+                    assert entered.wait(15)
+                    upgrade = pool.submit(migrate)
+                    assert migrating.wait(15)
+                    with self.assertRaises(TimeoutError):
+                        upgrade.result(timeout=0.3)
+                finally:
+                    release.set()
+                decision_id = writing.result(timeout=30)
+                upgrade.result(timeout=60)
+            assert BlindMixSharedEvidence.objects.filter(decision_id_frozen=decision_id, selected=False).exists()
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+    def test_shared_mix_backfills_both_outcomes_without_changing_legacy_hiding(self):
+        from classification_disagreements.blind_mix import deferred_source_ids
+        from classification_disagreements.models import BlindMixDecision, BlindMixEvidence, BlindMixSharedEvidence
+
+        executor = MigrationExecutor(connection)
+        after = executor.loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0063_blind_shared_exposure_writes')]
+        executor.migrate(before)
+        try:
+            owner, member = UserFactory(), UserFactory()
+            project = ProjectFactory(created_by=owner)
+            assignments = [TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                assignee=member, assigned_by=owner) for _ in range(3)]
+            ordinary, source, quality = assignments
+            decisions = []
+            for selected, original, chosen in ((False, ordinary, ordinary), (True, source, quality)):
+                decisions.append(BlindMixDecision.objects.create(project=project, source_assignment=original,
+                    chosen_assignment=chosen, source_id_frozen=original.pk, source_task_id_frozen=original.task_id,
+                    source_assignee_id_frozen=member.pk, chosen_id_frozen=chosen.pk,
+                    reference_id_frozen=123 if selected else None, key=uuid4(), request_hash='a' * 64,
+                    actor_id=owner.pk, ratio_basis_points=10000 if selected else 0, selected=selected))
+        finally:
+            MigrationExecutor(connection).migrate(after)
+        shared = [BlindMixSharedEvidence.objects.get(decision_id_frozen=item.pk) for item in decisions]
+        assert [item.selected for item in shared] == [False, True]
+        assert not BlindMixEvidence.objects.filter(decision_id_frozen=decisions[0].pk).exists()
+        assert BlindMixEvidence.objects.filter(decision_id_frozen=decisions[1].pk).exists()
+        hidden = set(deferred_source_ids(member.pk).values_list('source_id_frozen', flat=True))
+        assert ordinary.pk not in hidden and source.pk in hidden
+        with self.assertRaisesRegex(RuntimeError, 'cannot be discarded'):
+            MigrationExecutor(connection).migrate(before)
+        assert BlindMixSharedEvidence.objects.filter(pk__in=[item.pk for item in shared]).count() == 2
+
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL exposure-ledger migration')
     def test_exposure_ledger_downgrade_reconciles_events_before_restoring_triggers(self):
         from classification_disagreements.models import (
@@ -1172,7 +1284,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
             BlindReadIdentityState.objects.filter(pk=assignments[0].pk).update(revoked=False)
 
     def test_read_identity_upgrade_backfills_current_and_missing_assignments(self):
-        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.blind_read_binding import _seal
         from classification_disagreements.models import BlindReadIdentityState
 
         executor = MigrationExecutor(connection)
@@ -1185,7 +1297,13 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
                 assignee=member, assigned_by=owner) for _ in range(3)]
             with transaction.atomic():
                 for assignment in assignments:
-                    seal_ordinary_read_binding(assignment=assignment)
+                    # This represents a historical unsigned binding, before
+                    # the later shared-history table existed.
+                    _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+                        'project_id_frozen': assignment.project_id, 'actor_id_frozen': assignment.assignee_id,
+                        'decision_id_frozen': None, 'source_id_frozen': None, 'source_task_id_frozen': None,
+                        'decision_request_hash': None, 'purpose': 'ordinary', 'reference_id_frozen': None,
+                        'reference_hash': None, 'proof_hash': None})
             TaskAssignment.objects.filter(pk=assignments[1].pk).delete()
             TaskAssignment.objects.filter(pk=assignments[2].pk).update(status=TaskAssignment.Status.CANCELLED)
         finally:

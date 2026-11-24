@@ -16,8 +16,17 @@ from tasks.models import Task, TaskAssignment
 
 from .blind_reassignment import _lock_admission, _locked_project, create_quality_task
 from .gold_api import checked
-from .models import (BlindAssignmentExposure, BlindCaptureEpoch, BlindEligibilityProof, BlindMixCompletion,
-                     BlindMixDecision, BlindMixEvidence, BlindQualityAssignment, ClassificationGoldEvidence)
+from .models import (
+    BlindAssignmentExposure,
+    BlindCaptureEpoch,
+    BlindEligibilityProof,
+    BlindMixCompletion,
+    BlindMixDecision,
+    BlindMixEvidence,
+    BlindMixSharedEvidence,
+    BlindQualityAssignment,
+    ClassificationGoldEvidence,
+)
 
 
 def deferred_source_ids(account_id):
@@ -111,10 +120,11 @@ def _choose_assignment(*, source, expected_version, references, ratio_basis_poin
         # immutable manifest hashes and cannot substitute for object access.
         from access_control.authorization import authorization
         from access_control.project_operations import local_principal
-        from .blind_provenance import lock_capture_epoch_for_read
-        from .blind_task_handles import _lock_bounded_task
         from rest_framework.exceptions import NotFound
         from users.models import User
+
+        from .blind_provenance import lock_capture_epoch_for_read
+        from .blind_task_handles import _lock_bounded_task
 
         lock_capture_epoch_for_read()
         scope = TaskAssignment.objects.filter(
@@ -234,6 +244,12 @@ def reassign_mixed_assignment(*, previous_id, task, assignee, principal, key):
     project, _ = _locked_project(task.project_id, assignee, principal)
     previous = get_object_or_404(BlindMixDecision.objects.select_for_update(), pk=previous_id, project=project)
     if previous.chosen_assignment_id != previous.chosen_id_frozen:
+        unavailable()
+    if not BlindMixSharedEvidence.objects.filter(
+        decision_id_frozen=previous.pk, selected=previous.selected, project_id_frozen=project.pk,
+        source_id_frozen=previous.source_id_frozen, source_task_id_frozen=previous.source_task_id_frozen,
+        source_assignee_id_frozen=previous.source_assignee_id_frozen, chosen_id_frozen=previous.chosen_id_frozen,
+    ).exists():
         unavailable()
     evidence = BlindMixEvidence.objects.filter(
         decision_id_frozen=previous.pk, project_id_frozen=project.pk, source_id_frozen=previous.source_id_frozen,

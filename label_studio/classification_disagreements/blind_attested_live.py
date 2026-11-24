@@ -11,17 +11,34 @@ from django.db.models import Exists, OuterRef
 from rest_framework.exceptions import ValidationError
 from review_batches.service import digest
 
+from .blind_provenance import (
+    _exact_reference_length_checks,
+    _external_scope_checks,
+    _local_upload_backend_supported,
+    _matching_text_exposures,
+    _mixed_evidence_queries,
+    require_capture_fence,
+)
 from .blind_read_attestation import read_attestation
 from .blind_read_binding import FIELDS
-from .blind_provenance import (
-    _exact_reference_length_checks, _external_scope_checks, _local_upload_backend_supported,
-    _matching_text_exposures, _mixed_evidence_queries, require_capture_fence,
-)
 from .models import (
-    BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindEligibilityProof,
-    BlindLabelExposure, BlindPrivilegeHistory, BlindProjectFileExposure, BlindProvenanceEvent,
-    BlindQualityAssignment, BlindReadBinding, BlindReadIdentityState, BlindMixDecision, BlindMixEvidence,
-    BlindPrivilegeReadState, ClassificationGoldEvidence,
+    BlindAccountExposureState,
+    BlindAssignmentExposure,
+    BlindCaptureCertificate,
+    BlindCaptureEpoch,
+    BlindEligibilityProof,
+    BlindLabelExposure,
+    BlindMixDecision,
+    BlindMixEvidence,
+    BlindMixSharedEvidence,
+    BlindPrivilegeHistory,
+    BlindPrivilegeReadState,
+    BlindProjectFileExposure,
+    BlindProvenanceEvent,
+    BlindQualityAssignment,
+    BlindReadBinding,
+    BlindReadIdentityState,
+    ClassificationGoldEvidence,
 )
 
 
@@ -44,6 +61,14 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
                             assignment_id_frozen=assignment.pk, actor_id_frozen=assignment.assignee_id)),
         'read_identity': Exists(BlindReadIdentityState.objects.filter(assignment_id=assignment.pk, revoked=False)),
     }
+    history = BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk)
+    if binding.decision_id_frozen is None:
+        required['shared_history'] = ~Exists(history)
+    else:
+        required['shared_history'] = Exists(history.filter(
+            decision_id_frozen=binding.decision_id_frozen, selected=binding.purpose == 'quality',
+            project_id_frozen=assignment.project_id, source_id_frozen=binding.source_id_frozen,
+            source_task_id_frozen=binding.source_task_id_frozen, source_assignee_id_frozen=assignment.assignee_id))
     # Both purposes load this fact; only quality eligibility requires it.
     exposure_clean = Exists(BlindAccountExposureState.objects.filter(
         account_id=assignment.assignee_id, generation=OuterRef('generation'),

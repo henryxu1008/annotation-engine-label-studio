@@ -3,14 +3,32 @@
 import re
 
 from django.db import connection, transaction
-from django.db.models import BinaryField, Exists, Func, IntegerField, OuterRef, Subquery, TextField
+from django.db.models import (
+    BinaryField,
+    Case,
+    CharField,
+    Exists,
+    Func,
+    IntegerField,
+    OuterRef,
+    Subquery,
+    TextField,
+    Value,
+    When,
+)
 from django.db.models.functions import Cast, Length
 from rest_framework.exceptions import NotFound, ValidationError
 from review_batches.service import digest
 
-from .models import (BlindEligibilityProof, BlindMixDecision, BlindQualityAssignment, BlindReadAttestation,
-                     BlindReadBinding, BlindReadIdentityState)
-
+from .models import (
+    BlindEligibilityProof,
+    BlindMixDecision,
+    BlindMixSharedEvidence,
+    BlindQualityAssignment,
+    BlindReadAttestation,
+    BlindReadBinding,
+    BlindReadIdentityState,
+)
 
 FIELDS = ('assignment_id_frozen', 'task_id_frozen', 'project_id_frozen', 'actor_id_frozen', 'decision_id_frozen',
           'source_id_frozen', 'source_task_id_frozen', 'decision_request_hash', 'purpose', 'reference_id_frozen',
@@ -37,7 +55,8 @@ def seal_ordinary_read_binding(*, assignment):
         raise RuntimeError('Ordinary read binding requires an atomic transaction.')
     if (BlindQualityAssignment.objects.filter(task_id=assignment.task_id).exists()
             or BlindEligibilityProof.objects.filter(assignment_id=assignment.pk).exists()
-            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()):
+            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()
+            or BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk).exists()):
         _unavailable()
     binding = _seal({
         'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
@@ -57,7 +76,8 @@ def seal_unmixed_quality_read_binding(*, assignment, marker):
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError('Quality read binding requires an atomic transaction.')
     if (marker is None or marker.assignment_id != assignment.pk or marker.task_id != assignment.task_id
-            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()):
+            or BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()
+            or BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk).exists()):
         _unavailable()
     from .blind_provenance import checked_quality_proof
 
@@ -92,6 +112,12 @@ def seal_mixed_read_binding(*, assignment, decision):
             or decision.source_assignment_id != decision.source_id_frozen
             or (not decision.selected and (decision.source_id_frozen != assignment.pk
                                             or decision.source_task_id_frozen != assignment.task_id))):
+        _unavailable()
+    if not BlindMixSharedEvidence.objects.filter(
+        decision_id_frozen=decision.pk, selected=decision.selected, project_id_frozen=assignment.project_id,
+        source_id_frozen=decision.source_id_frozen, source_task_id_frozen=decision.source_task_id_frozen,
+        source_assignee_id_frozen=assignment.assignee_id, chosen_id_frozen=assignment.pk,
+    ).exists():
         _unavailable()
     marker = BlindQualityAssignment.objects.filter(task_id=assignment.task_id).first()
     proof = None
@@ -178,6 +204,13 @@ def verify_mixed_read_binding(assignment):
         source_assignee_id_frozen=OuterRef('actor_id_frozen'), request_hash=OuterRef('decision_request_hash'),
     )
     any_decisions = BlindMixDecision.objects.filter(chosen_id_frozen=OuterRef('assignment_id_frozen'))
+    shared_histories = BlindMixSharedEvidence.objects.filter(
+        decision_id_frozen=OuterRef('decision_id_frozen'), project_id_frozen=OuterRef('project_id_frozen'),
+        source_id_frozen=OuterRef('source_id_frozen'), source_task_id_frozen=OuterRef('source_task_id_frozen'),
+        source_assignee_id_frozen=OuterRef('actor_id_frozen'), chosen_id_frozen=OuterRef('assignment_id_frozen')
+    ).annotate(_purpose=Case(When(selected=True, then=Value('quality')), default=Value('ordinary'),
+                             output_field=CharField())).filter(_purpose=OuterRef('purpose'))
+    any_shared_histories = BlindMixSharedEvidence.objects.filter(chosen_id_frozen=OuterRef('assignment_id_frozen'))
     live_identity = BlindReadIdentityState.objects.filter(assignment_id=OuterRef('assignment_id_frozen'), revoked=False)
     row = BlindReadBinding.objects.filter(assignment_id_frozen=assignment.pk).annotate(
         has_marker=Exists(markers), matching_marker=Exists(matching_marker),
@@ -185,12 +218,15 @@ def verify_mixed_read_binding(assignment):
         ordinary_decision=Exists(decisions.filter(selected=False, reference_id_frozen__isnull=True)),
         quality_decision=Exists(decisions.filter(selected=True, reference_id_frozen=OuterRef('reference_id_frozen'))),
         has_decision=Exists(any_decisions),
+        has_shared_history=Exists(any_shared_histories),
+        matching_history=Exists(shared_histories),
         has_attestation=Exists(attestations),
         live_identity=Exists(live_identity),
         bounded_attestation=Subquery(bounded_attestations.values('signed_payload')[:1]),
     ).first()
     if row is None:
-        if BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists():
+        if (BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk).exists()
+                or BlindMixSharedEvidence.objects.filter(chosen_id_frozen=assignment.pk).exists()):
             _unavailable()
         return
     values = {field: getattr(row, field) for field in FIELDS}
@@ -201,17 +237,17 @@ def verify_mixed_read_binding(assignment):
     mixed = row.decision_id_frozen is not None
     if mixed and not re.fullmatch(r'[0-9a-f]{64}', row.decision_request_hash or ''):
         _unavailable()
-    if not mixed and (row.has_decision or row.source_id_frozen is not None
+    if not mixed and (row.has_decision or row.has_shared_history or row.source_id_frozen is not None
                       or row.source_task_id_frozen is not None or row.decision_request_hash is not None):
         _unavailable()
     if row.purpose == 'ordinary':
         if (row.reference_id_frozen is not None or row.reference_hash is not None or row.proof_hash is not None
                 or row.has_marker or row.has_proof
-                or (mixed and (not row.ordinary_decision or row.source_id_frozen != assignment.pk
+                or (mixed and (not row.ordinary_decision or not row.matching_history or row.source_id_frozen != assignment.pk
                                or row.source_task_id_frozen != assignment.task_id))):
             _unavailable()
     elif row.purpose == 'quality':
-        if ((mixed and not row.quality_decision) or not row.matching_marker or not row.matching_proof
+        if ((mixed and (not row.quality_decision or not row.matching_history)) or not row.matching_marker or not row.matching_proof
                 or type(row.reference_id_frozen) is not int
                 or row.reference_id_frozen <= 0 or not re.fullmatch(r'[0-9a-f]{64}', row.reference_hash or '')
                 or not re.fullmatch(r'[0-9a-f]{64}', row.proof_hash or '')):

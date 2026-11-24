@@ -940,6 +940,42 @@ this change measured 28.2/41.4 ms ordinary/quality (rank 0.8741); two fresh
 process pairs measured 87.5/118.1 ms with a shared database cache. Different
 fixture runs and a two-pair process sample do not establish an improvement or
 cold-cache privacy. The timing gap and public-dispatch release block remain.
+On synthetic PostgreSQL 16 at `f53a17d07`, 100 alternating warm read pairs
+measured ordinary/quality medians of 27.1/41.7 ms, with a quality-versus-ordinary
+rank statistic of 0.9746 and 20 SQL statements per read. Two fresh-process pairs
+measured 100.6/110.3 ms medians while sharing the database cache; they do not
+characterize a cold database. In a separate diagnostic process, temporarily
+replacing the quality mixed-lifecycle and text-length/exposure predicates with
+fixture-only placeholders produced medians of 30.7/34.5 ms (rank 0.737). This
+ablation bypassed required authorization checks and is not a candidate fix or
+privacy acceptance; the different samples are not a controlled speedup claim.
+It shows that those predicates deserve attention in addition to global scope.
+
+The existing `BlindMixEvidence` cannot simply be populated for every ordinary
+decision: its presence currently identifies deferred quality sources in task
+assignment and package authorization. A shared lifecycle representation must
+retain a distinct, explicit quality-source predicate at those consumers, backfill
+existing decisions transactionally, and preserve cancellation/completion and
+rollback semantics. Otherwise a superficially uniform history would hide or
+block ordinary assignments. Both purposes must be verified against the resulting
+real lifecycle state without adding unrelated work merely to equalize timings.
+The additive `BlindMixSharedEvidence` migration retains both outcomes and
+backfills existing decisions under the database write fence. New binding,
+attested-read and reassignment checks require the exact retained identity. The
+existing quality-only `BlindMixEvidence` and its legacy consumers are unchanged,
+so old application processes continue to hide only selected sources during a
+rolling upgrade. PostgreSQL and SQLite capture future decisions transactionally;
+the new retained rows are immutable, and rollback refuses to discard them.
+Apply the additive migration before starting code that reads the new table;
+older code can continue using its unchanged legacy table during the rollout.
+This is an expand phase: selected decisions still also write the legacy table,
+and quality reads still evaluate additional lifecycle and exposure evidence.
+It is not timing parity and does not enable public dispatch.
+With this expand phase enabled, a separate synthetic PostgreSQL 16 run of 100
+warm pairs measured ordinary/quality medians of 25.8/40.6 ms and a rank
+statistic of 0.9947. Two fresh-process pairs measured 97.7/179.6 ms with a
+shared database cache. These small, separate runs are not a controlled comparison
+or a cold-database test; they demonstrate that the release blocker remains.
 An experimental PostgreSQL checkpoint for global storage, model and credential
 scope was evaluated and discarded: it required shared table and function locks,
 additional database round trips, trigger integrity checks and privilege-dependent

@@ -260,6 +260,18 @@ class BlindMixEvidence(models.Model):
     chosen_id_frozen = models.PositiveBigIntegerField(unique=True)
 
 
+class BlindMixSharedEvidence(models.Model):
+    """Retained identity of either outcome, independent of legacy source hiding."""
+
+    decision_id_frozen = models.PositiveBigIntegerField(unique=True)
+    project_id_frozen = models.PositiveBigIntegerField()
+    source_id_frozen = models.PositiveBigIntegerField()
+    source_task_id_frozen = models.PositiveBigIntegerField()
+    source_assignee_id_frozen = models.PositiveBigIntegerField()
+    chosen_id_frozen = models.PositiveBigIntegerField(unique=True)
+    selected = models.BooleanField()
+
+
 class BlindMixCompletion(models.Model):
     """Retained evidence that a sample submitted before its source was released."""
 

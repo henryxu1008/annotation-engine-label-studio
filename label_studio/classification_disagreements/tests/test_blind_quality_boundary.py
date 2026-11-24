@@ -280,7 +280,7 @@ class TestBlindQualityBoundary(APITestCase):
     def test_mixed_ordinary_and_quality_share_durable_binding_and_live_revocation(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
-        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_mix import create_mixed_assignment, deferred_source_ids
         from classification_disagreements.blind_provenance import record_label_metadata_access, record_project_file_access
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
         from classification_disagreements.blind_read_attestation import read_attestation
@@ -289,7 +289,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.blind_provenance import checked_quality_proof, lock_capture_epoch_for_read
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
-            BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure)
+            BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence)
         from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -317,6 +317,21 @@ class TestBlindQualityBoundary(APITestCase):
             rows = [BlindReadBinding.objects.get(assignment_id_frozen=assignment.pk) for assignment in assignments]
             assert all(not BlindReadIdentityState.objects.get(pk=assignment.pk).revoked for assignment in assignments)
             assert [row.purpose for row in rows] == ['ordinary', 'quality']
+            shared = [BlindMixSharedEvidence.objects.get(chosen_id_frozen=assignment.pk) for assignment in assignments]
+            assert [item.selected for item in shared] == [False, True]
+            assert not BlindMixEvidence.objects.filter(chosen_id_frozen=assignments[0].pk).exists()
+            assert BlindMixEvidence.objects.filter(chosen_id_frozen=assignments[1].pk).exists()
+            assert assignments[0].pk not in deferred_source_ids(members[0].pk).values_list('source_id_frozen', flat=True)
+            assert shared[1].source_id_frozen in deferred_source_ids(members[1].pk).values_list('source_id_frozen', flat=True)
+            for item in shared:
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindMixSharedEvidence.objects.filter(pk=item.pk).update(selected=not item.selected)
+                with self.assertRaises(DatabaseError), transaction.atomic():
+                    BlindMixSharedEvidence.objects.filter(pk=item.pk).delete()
+            with self.assertRaises(DatabaseError), transaction.atomic():
+                BlindMixSharedEvidence.objects.create(decision_id_frozen=99999999, project_id_frozen=self.project.pk,
+                    source_id_frozen=assignments[0].pk, source_task_id_frozen=assignments[0].task_id,
+                    source_assignee_id_frozen=members[0].pk, chosen_id_frozen=99999999, selected=False)
             assert rows[0].reference_id_frozen is None
             assert rows[1].reference_id_frozen == reference.pk and rows[1].proof_hash
             for assignment in assignments:
