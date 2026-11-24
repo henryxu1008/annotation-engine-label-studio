@@ -846,6 +846,24 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_legacy_lifecycle_view_upgrade_and_rollback_disable_capture(self):
+        from classification_disagreements.models import BlindCaptureEpoch
+
+        after = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        before = [('classification_disagreements', '0071_blind_bound_lifecycle')]
+        try:
+            MigrationExecutor(connection).migrate(before)
+            enable_test_capture()
+            MigrationExecutor(connection).migrate(after)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            enable_test_capture()
+            MigrationExecutor(connection).migrate(before)
+            assert not BlindCaptureEpoch.objects.get(pk=1).enabled
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT binding_id, valid FROM classification_blind_bound_lifecycle LIMIT 0')
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
     def test_storage_parent_fence_upgrade_and_rollback_disable_capture(self):
         from classification_disagreements.models import BlindCaptureEpoch
 
