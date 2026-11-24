@@ -25,8 +25,6 @@ from .models import (
     BlindBoundLifecycle,
     BlindGlobalScopeState,
     BlindLabelExposure,
-    BlindMixDecision,
-    BlindMixEvidence,
     BlindPrivilegeHistory,
     BlindPrivilegeReadState,
     BlindProjectFileExposure,
@@ -124,14 +122,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         if signed is None:
             _deny()
         if binding.purpose == 'ordinary':
-            # A mixed binding is already checked against the live decision in
-            # the shared lifecycle projection. Only legacy, unbound ordinary
-            # work needs the separate absence check.
-            checks = ({'decision': Exists(BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk))}
-                      if binding.decision_id_frozen is None else {})
-            guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
-            if (guard['reference_lengths'] != [] or guard['marker_present'] or guard['proof_present']
-                    or (binding.decision_id_frozen is None and guard['decision'])):
+            guard = _read_live_guard(assignment=assignment, binding=binding, checks={})
+            if guard['reference_lengths'] != [] or guard['marker_present'] or guard['proof_present']:
                 _deny()
             return
         if connection.vendor == 'postgresql' and not privilege_clean:
@@ -159,16 +151,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     except (KeyError, TypeError, ValueError, OverflowError):
         _deny()
 
-    # The common guard checks a mixed decision, retained history and current
-    # source/completion together. Unmixed quality work must still reject a
-    # legacy decision or history that has no matching binding.
-    if binding.decision_id_frozen is None:
-        mix_checks = {
-            'any_decision': Exists(BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)),
-            'mix_history': Exists(BlindMixEvidence.objects.filter(chosen_id_frozen=assignment.pk)),
-        }
-    else:
-        mix_checks = {}
+    # The shared lifecycle guard checks current decisions and retained mixed
+    # history for both bound and legacy work.
     # Very large historical signed sets retain the original exact SQL check;
     # the shared projection itself never returns an unbounded aggregate.
     large_length_set = len(lengths) > SHARED_REFERENCE_LENGTH_LIMIT
@@ -185,7 +169,6 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     if large_length_set:
         count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
         checks.update(length_count=count, length_extra=extra)
-    checks.update(mix_checks)
     # Keep the existing SQLite source checks until its retained-evidence
     # replacement semantics have been addressed separately.
     if connection.vendor == 'sqlite':
@@ -228,6 +211,5 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or (not large_length_set and guard['reference_lengths'] != lengths)
             or guard['text_exposed']
             or (rule == 'local-unseen-source/v2' and (guard['source_task_key'] != str(value['source_task_id'])
-                or guard['source_exposed']))
-            or (binding.decision_id_frozen is None and (guard['any_decision'] or guard['mix_history']))):
+                or guard['source_exposed']))):
         _deny()

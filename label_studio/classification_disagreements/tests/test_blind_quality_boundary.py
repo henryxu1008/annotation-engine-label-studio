@@ -939,6 +939,38 @@ class TestBlindQualityBoundary(APITestCase):
             response = self.client.get(f'/api/tasks/blind/{handle.task_handle}/')
             assert response.status_code == 200 and response.data['data']['text'] == 'changed'
 
+    def test_legacy_ordinary_binding_denies_retained_orphaned_mix_history(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle
+        from classification_disagreements.models import BlindBoundLifecycle, BlindMixEvidence, BlindReadBinding
+        from classification_disagreements.tests.test_gold_scoring import CONFIG
+        from tasks.assignments import create_assignment
+
+        Project.objects.filter(pk=self.project.pk).update(label_config=CONFIG)
+        task = TaskFactory(project=self.project, data={'text': 'ordinary'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        self.client.force_authenticate(self.annotator)
+        with self.settings(**config):
+            assignment = create_assignment(task=task, assignee=self.annotator, principal=local_principal(self.manager))
+            binding = BlindReadBinding.objects.get(assignment_id_frozen=assignment.pk)
+            assert binding.decision_id_frozen is None
+            handle = issue_handle(principal=local_principal(self.annotator), assignment_id=assignment.pk)
+            url = f'/api/tasks/blind/{handle.task_handle}/'
+            assert BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+            assert self.client.get(url).status_code == 200
+            with transaction.atomic():
+                # Simulate retained pre-upgrade history whose decision was
+                # deleted before shared-history backfill.
+                BlindMixEvidence.objects.create(decision_id_frozen=999999999, project_id_frozen=self.project.pk,
+                    source_id_frozen=assignment.pk, source_task_id_frozen=task.pk,
+                    source_assignee_id_frozen=self.annotator.pk, chosen_id_frozen=assignment.pk)
+                assert not BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+                assert self.client.get(url).status_code == 404
+                transaction.set_rollback(True)
+            assert BlindBoundLifecycle.objects.get(binding_id=binding.pk).valid
+            assert self.client.get(url).status_code == 200
+
     def test_unmixed_quality_uses_same_binding_and_denies_after_reference_deletion(self):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_attested_live import checked_attested_work
