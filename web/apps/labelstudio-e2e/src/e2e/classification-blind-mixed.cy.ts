@@ -13,12 +13,12 @@ describe('synthetic blind and ordinary work', () => {
       let denyMode = true;
       cy.loginAs(scope.email, fixture.password, '/user/account/personal-info');
       cy.setUserLocale(locale);
-      cy.intercept('GET', `**/api/projects/${scope.id}/work-mode/`, (req) => {
+      cy.intercept({ method: 'GET', pathname: new RegExp(`/api/projects/${scope.id}/work-mode/?$`) }, (req) => {
         if (denyMode) req.reply({ statusCode: 404, body: {} });
         else req.continue();
       }).as('workMode');
       cy.intercept('GET', '**/api/ml?*').as('legacyModels');
-      cy.intercept('GET', '**/api/dm/project/**').as('legacyDataManager');
+      cy.intercept({ method: 'GET', pathname: /\/api\/dm\/project\/?$/ }).as('legacyDataManager');
       cy.visit(`/projects/${scope.id}/data`);
       cy.wait('@workMode').its('response.statusCode').should('eq', 404);
       cy.contains(locale === 'zh-CN' ? '无法加载任务工作区' : 'Could not load the task workspace').should('be.visible');
@@ -40,7 +40,7 @@ describe('synthetic blind and ordinary work', () => {
       cy.loginAs(scope.email, fixture.password, '/user/account/personal-info');
       cy.setUserLocale(locale);
       cy.intercept('GET', '**/api/ml?*').as('legacyModels');
-      cy.intercept('GET', '**/api/dm/project/**').as('legacyDataManager');
+      cy.intercept({ method: 'GET', pathname: /\/api\/dm\/project\/?$/ }).as('legacyDataManager');
       cy.visit(`/projects/${scope.id}/data`);
       cy.request(`/api/projects/${scope.id}/blind-work/`).then(({ body }) => {
         expect(body.results).to.have.length(2);
@@ -65,7 +65,7 @@ describe('synthetic blind and ordinary work', () => {
           existing = body.annotations.length > 0;
           if (existing) expect(JSON.stringify(body.annotations[0].result)).to.contain(choice);
         });
-        cy.get('.datamanager', { timeout: 30000 }).contains(text).parent()
+        cy.get('.lsf-datamanager', { timeout: 30000 }).contains(text).parent()
           .contains('button', openText).click();
         cy.window({ timeout: 30000 }).should((win: any) => {
           expect(win.dataManager.store.taskStore.selected?.id).to.eq(expected());
@@ -91,14 +91,14 @@ describe('synthetic blind and ordinary work', () => {
         });
         // Click as soon as the response arrives, while the editor refresh may
         // still be in flight. Navigation must wait for that refresh to finish.
-        cy.get('.datamanager').contains('button', locale === 'zh-CN' ? '返回' : 'Back').click();
+        cy.get('.lsf-datamanager').contains('button', locale === 'zh-CN' ? '返回' : 'Back').click();
         cy.then(() => { if (!existing) cy.wait('@blindRefresh'); });
       };
       submit(qualityText, 'Positive', () => qualityHandle);
       submit(ordinaryText, 'Negative', () => ordinaryHandle);
       // A later metadata read invalidates the unseen-reference proof. An editor
       // that was already open must not survive a denied subsequent write.
-      cy.get('.datamanager').contains(qualityText).parent().contains('button', openText).click();
+      cy.get('.lsf-datamanager').contains(qualityText).parent().contains('button', openText).click();
       cy.window({ timeout: 30000 }).should((win: any) => {
         expect(win.dataManager.store.taskStore.selected?.id).to.eq(qualityHandle);
       });
@@ -114,7 +114,7 @@ describe('synthetic blind and ordinary work', () => {
         expect(Boolean(win.dataManager.store.taskStore.selected)).to.eq(false);
         expect(win.dataManager.mode).to.eq('explorer');
       });
-      cy.get('.datamanager').should('not.contain.text', qualityText);
+      cy.get('.lsf-datamanager').should('not.contain.text', qualityText);
     });
   }
 });
@@ -160,7 +160,7 @@ describe('participant handoff after synthetic mixed reassignment', () => {
 
         cy.visit(`/projects/${scope.id}/data`);
         cy.window({ timeout: 30000 }).its('DM.SDK.settings.blindProtocol').should('eq', true);
-        cy.get('.datamanager', { timeout: 30000 }).contains(item.text).parent()
+        cy.get('.lsf-datamanager', { timeout: 30000 }).contains(item.text).parent()
           .contains('button', locale === 'zh-CN' ? '打开标注' : 'Open annotation').click();
         cy.window({ timeout: 30000 }).should((win: any) => {
           expect(win.dataManager.store.taskStore.selected?.id).to.eq(newHandle);
