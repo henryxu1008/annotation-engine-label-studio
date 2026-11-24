@@ -6341,6 +6341,121 @@ class TestBlindQualityBoundaryConcurrency(provenance_fixtures.SyntheticTransacti
                             deactivating.result(timeout=20)
                     assert read() in (401, 403, 404)
 
+    def test_ordinary_and_quality_editor_reads_fence_live_content_changes(self):
+        import time
+
+        from access_control.identity import LocalIdentityProvider
+        from access_control.project_operations import local_principal
+        from classification_disagreements import blind_editor_api
+        from classification_disagreements.blind_mix import create_mixed_assignment
+        from classification_disagreements.blind_read_binding import seal_ordinary_read_binding
+        from classification_disagreements.blind_task_handles import issue_handle
+        from projects.models import ProjectMember
+        from rest_framework.test import APIClient
+
+        self.organization = fixtures.OrganizationFactory()
+        self.manager = self.organization.created_by
+        self.project = ProjectFactory(organization=self.organization, created_by=self.manager)
+        self.task = TaskFactory(project=self.project)
+        reference = self.valid_reference()
+        provenance_fixtures.enable_test_capture()
+        members = [UserFactory(active_organization=self.organization) for _ in range(2)]
+        for member in members:
+            self.organization.add_user(member)
+            ProjectMember.objects.create(project=self.project, user=member, role='annotator')
+        ordinary_task = TaskFactory(project=self.project, data={'text': 'independent ordinary content'})
+        ordinary = TaskAssignment.objects.create(task=ordinary_task, project=self.project, assignee=members[0],
+                                                 assigned_by=self.manager)
+        with transaction.atomic():
+            seal_ordinary_read_binding(assignment=ordinary)
+        carrier = TaskFactory(project=self.project, data={'text': 'independent quality carrier'})
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True},
+                  'ANNOTATION_CLASSIFICATION_GOLD_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_GOLD_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch(
+            'classification_disagreements.blind_reassignment.get_identity_provider', return_value=LocalIdentityProvider(),
+        ):
+            quality = create_mixed_assignment(task=carrier, assignee=members[1],
+                references=[{'id': reference.pk, 'hash': reference.manifest_hash}], ratio_basis_points=10000,
+                principal=local_principal(self.manager), key=uuid4())
+            for member, assignment in zip(members, (ordinary, quality)):
+                handle = issue_handle(principal=local_principal(member), assignment_id=assignment.pk)
+                for kind in ('project_config', 'task_data'):
+                    with self.subTest(purpose='quality' if assignment.pk == quality.pk else 'ordinary', change=kind):
+                        original_config = Project.objects.get(pk=self.project.pk).label_config
+                        original_data = Task.objects.get(pk=assignment.task_id).data
+                        entered, release, started = Event(), Event(), Event()
+                        writer_pid = []
+                        original = blind_editor_api.participant_text_data
+
+                        def pause(*args):
+                            entered.set()
+                            if not release.wait(15):
+                                raise AssertionError('editor read was not released')
+                            return original(*args)
+
+                        def read():
+                            close_old_connections()
+                            try:
+                                client = APIClient()
+                                client.force_authenticate(member)
+                                return client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code
+                            finally:
+                                close_old_connections()
+
+                        def change():
+                            close_old_connections()
+                            try:
+                                with connection.cursor() as cursor:
+                                    cursor.execute('SELECT pg_backend_pid()')
+                                    writer_pid.append(cursor.fetchone()[0])
+                                started.set()
+                                if kind == 'project_config':
+                                    Project.objects.filter(pk=self.project.pk).update(label_config=original_config + ' ')
+                                else:
+                                    Task.objects.filter(pk=assignment.task_id).update(data={**original_data, 'text': 'changed'})
+                            finally:
+                                close_old_connections()
+
+                        assert read() == 200
+                        try:
+                            with patch.object(blind_editor_api, 'participant_text_data', side_effect=pause):
+                                with ThreadPoolExecutor(max_workers=2) as pool:
+                                    reading = pool.submit(read)
+                                    try:
+                                        assert entered.wait(10)
+                                        changing = pool.submit(change)
+                                        assert started.wait(10)
+                                        with self.assertRaises(TimeoutError):
+                                            changing.result(timeout=0.3)
+                                        deadline = time.monotonic() + 5
+                                        waiting = False
+                                        while time.monotonic() < deadline:
+                                            with connection.cursor() as cursor:
+                                                cursor.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s',
+                                                               [writer_pid[0]])
+                                                waiting = cursor.fetchone() == ('Lock',)
+                                            if waiting or changing.done():
+                                                break
+                                            time.sleep(0.02)
+                                        assert waiting, 'content writer did not reach a database lock'
+                                        if kind == 'project_config':
+                                            assert Project.objects.get(pk=self.project.pk).label_config == original_config
+                                        else:
+                                            assert Task.objects.get(pk=assignment.task_id).data == original_data
+                                    finally:
+                                        release.set()
+                                    assert reading.result(timeout=20) == 200
+                                    changing.result(timeout=20)
+                            assert read() == (404 if assignment.pk == quality.pk else 200)
+                        finally:
+                            if kind == 'project_config':
+                                Project.objects.filter(pk=self.project.pk).update(label_config=original_config)
+                            else:
+                                Task.objects.filter(pk=assignment.task_id).update(data=original_data)
+                        assert read() == 200
+
     def test_mixed_replay_fences_concurrent_reference_exposure(self):
         from access_control.identity import LocalIdentityProvider
         from access_control.project_operations import local_principal
