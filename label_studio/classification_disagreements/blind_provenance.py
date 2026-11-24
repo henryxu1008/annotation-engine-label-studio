@@ -65,15 +65,41 @@ def _projects_with_external_credentials(using='default'):
     )
 
 
-def _external_scope_checks(using='default'):
+PROJECTED_STORAGE_FLAGS = {
+    'io_storages.s3importstorage': 's3',
+    'io_storages.gcsimportstorage': 'gcs',
+    'io_storages.azureblobimportstorage': 'azure',
+    'io_storages.redisimportstorage': 'redis',
+}
+
+
+def _projected_storage_flag(model):
+    """Only omit the exact core model and table represented by the view."""
+    from django.apps import apps
+
+    meta = model._meta
+    flag = PROJECTED_STORAGE_FLAGS.get(meta.label_lower)
+    if flag is None or meta.db_table != 'io_storages_' + meta.model_name:
+        return None
+    try:
+        return flag if apps.get_model(meta.app_label, meta.model_name) is model else None
+    except LookupError:
+        return None
+
+
+def _external_scope_checks(using='default', *, storage_classes=None, omit_projected=False):
     """Build the same global storage, model and credential fences for each caller."""
     from io_storages.models import get_storage_classes
     from ml.models import MLBackend
 
-    checks = {'external_credentials': Exists(_projects_with_external_credentials(using)),
-              'external_ml': Exists(MLBackend.objects.using(using).all())}
+    classes = get_storage_classes('import') if storage_classes is None else storage_classes
+    checks = {} if omit_projected else {
+        'external_credentials': Exists(_projects_with_external_credentials(using)),
+        'external_ml': Exists(MLBackend.objects.using(using).all()),
+    }
     checks.update({f'external_storage_{index}': Exists(model.objects.using(using).all())
-                   for index, model in enumerate(get_storage_classes('import'))})
+                   for index, model in enumerate(classes)
+                   if not omit_projected or _projected_storage_flag(model) is None})
     return checks
 
 

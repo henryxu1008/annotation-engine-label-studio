@@ -420,6 +420,45 @@ class TestBlindQualityBoundary(APITestCase):
             with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
                 checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
                                       fence=fence)
+            from classification_disagreements import blind_attested_live
+            from io_storages.s3.models import S3ImportStorage
+
+            live_guard = blind_attested_live._read_live_guard
+
+            def guarded_with_scope(flag):
+                def call(**kwargs):
+                    state = live_guard(**kwargs)
+                    state['global_scope'] = {**state['global_scope'], flag: True}
+                    return state
+                return call
+
+            for flag in ('credentials', 'model', 's3', 'gcs', 'azure', 'redis'):
+                with patch.object(blind_attested_live, '_read_live_guard', side_effect=guarded_with_scope(flag)):
+                    checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding,
+                                          fence=fence)
+                    with self.assertRaises(ValidationError):
+                        checked_attested_work(assignment=assignments[1], marker=quality_marker,
+                                              binding=quality_binding, fence=fence)
+            with patch('io_storages.models.get_storage_classes', return_value=[S3ImportStorage]), patch.object(
+                blind_attested_live, '_read_live_guard', side_effect=guarded_with_scope('gcs'),
+            ):
+                # A known storage type not registered in this process must
+                # not become a new restriction for existing quality work.
+                checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                      fence=fence)
+            from types import SimpleNamespace
+            from users.models import User
+
+            # A registry entry must not bypass its live query by claiming a
+            # built-in label and table while pointing to a different manager.
+            spoofed = SimpleNamespace(_meta=SimpleNamespace(label_lower='io_storages.s3importstorage',
+                app_label='io_storages', model_name='s3importstorage', db_table='io_storages_s3importstorage'),
+                objects=User.objects)
+            with patch('io_storages.models.get_storage_classes', return_value=[spoofed]):
+                checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding, fence=fence)
+                with self.assertRaises(ValidationError):
+                    checked_attested_work(assignment=assignments[1], marker=quality_marker, binding=quality_binding,
+                                          fence=fence)
             with transaction.atomic():
                 TaskAssignment.objects.filter(pk=assignments[1].pk).delete()
                 assert BlindReadIdentityState.objects.get(pk=assignments[1].pk).revoked
@@ -1873,6 +1912,48 @@ class TestBlindQualityBoundary(APITestCase):
         assert len(queries) == 1
         assert not project_file_scope_supported(-1)
 
+    def test_live_global_scope_view_matches_existing_resource_queries(self):
+        from classification_disagreements.blind_provenance import PROJECTED_STORAGE_FLAGS, _external_scope_checks
+        from classification_disagreements.models import BlindGlobalScopeState
+        from io_storages.azure_blob.models import AzureBlobImportStorage
+        from io_storages.gcs.models import GCSImportStorage
+        from io_storages.models import get_storage_classes
+        from io_storages.redis.models import RedisImportStorage
+        from io_storages.s3.models import S3ImportStorage
+        from ml.models import MLBackend
+
+        classes = get_storage_classes('import')
+        archived = ProjectFactory(organization=self.organization)
+        Project.all_objects.filter(pk=archived.pk).update(deleted_at=timezone.now())
+
+        def assert_equivalent():
+            checks = _external_scope_checks(storage_classes=classes)
+            legacy = Project.all_objects.filter(pk=self.project.pk).annotate(**checks).values(*checks).get()
+            facts = BlindGlobalScopeState.objects.get(pk=1).facts
+            assert bool(facts['credentials']) == legacy['external_credentials']
+            assert bool(facts['model']) == legacy['external_ml']
+            for index, model in enumerate(classes):
+                flag = PROJECTED_STORAGE_FLAGS[model._meta.label_lower]
+                assert bool(facts[flag]) == legacy[f'external_storage_{index}']
+
+        assert_equivalent()
+        mutations = (
+            lambda: Project.all_objects.filter(pk=self.project.pk).update(task_data_login='synthetic-login'),
+            lambda: Project.all_objects.filter(pk=self.project.pk).update(task_data_password='synthetic-password'),
+            lambda: Project.all_objects.filter(pk=archived.pk).update(task_data_login='synthetic-login'),
+            lambda: MLBackend.objects.bulk_create([MLBackend(project=self.project, url='http://127.0.0.1:1')]),
+            lambda: S3ImportStorage.objects.bulk_create([S3ImportStorage(project=self.project, bucket='synthetic')]),
+            lambda: GCSImportStorage.objects.create(project=self.project, bucket='synthetic'),
+            lambda: AzureBlobImportStorage.objects.create(project=self.project, container='synthetic'),
+            lambda: RedisImportStorage.objects.create(project=self.project, host='127.0.0.1'),
+        )
+        for mutation in mutations:
+            with transaction.atomic():
+                mutation()
+                assert_equivalent()
+                transaction.set_rollback(True)
+            assert_equivalent()
+
     def test_shared_external_scope_fence_denies_collection_and_object_access(self):
         from access_control.project_operations import local_principal
         from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
@@ -1894,6 +1975,36 @@ class TestBlindQualityBoundary(APITestCase):
         with self.settings(**config), patch(
             'classification_disagreements.blind_provenance._external_scope_checks', return_value=blocked,
         ), patch('classification_disagreements.blind_attested_live._external_scope_checks', return_value=blocked):
+            assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+            with self.assertRaises(NotFound):
+                resolve_handle(principal=principal, task_handle=handle.task_handle)
+            assert self.client.get(f'/api/tasks/blind/{handle.task_handle}/').status_code == 404
+
+    def test_unprojected_registered_storage_still_denies_quality_access(self):
+        from access_control.project_operations import local_principal
+        from classification_disagreements.blind_task_handles import issue_handle, resolve_handle
+        from classification_disagreements.tests.test_gold_scoring import answer
+        from ml.models import MLBackend
+        from rest_framework.exceptions import NotFound
+        from users.models import User
+
+        self.qualified_submission(answer('Positive'))
+        principal = local_principal(self.annotator)
+        handle = issue_handle(principal=principal, assignment_id=self.assignment.pk)
+        ordinary = TaskFactory(project=self.project, data={'text': 'custom scope ordinary ' + 'x' * 123})
+        TaskAssignment.objects.create(task=ordinary, project=self.project, assignee=self.annotator,
+                                      assigned_by=self.manager)
+        assert Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+        self.client.force_authenticate(self.annotator)
+        config = {'ANNOTATION_CLASSIFICATION_BLIND_ENABLED': True,
+                  'ANNOTATION_CLASSIFICATION_BLIND_PROJECTS': {f'{self.organization.pk}:{self.project.pk}': True}}
+        with self.settings(**config), patch('io_storages.models.get_storage_classes', return_value=[MLBackend]):
+            assert Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
+            assert resolve_handle(principal=principal, task_handle=handle.task_handle)
+        # A custom registered model remains a live query, even though it has no
+        # built-in projection or capture trigger. No external service is used.
+        with self.settings(**config), patch('io_storages.models.get_storage_classes', return_value=[User]):
+            assert Task.objects.for_user(self.annotator).filter(pk=ordinary.pk).exists()
             assert not Task.objects.for_user(self.annotator).filter(pk=self.task.pk).exists()
             with self.assertRaises(NotFound):
                 resolve_handle(principal=principal, task_handle=handle.task_handle)

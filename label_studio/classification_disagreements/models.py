@@ -400,6 +400,17 @@ class BlindWorkReferenceLengths(models.Model):
         db_table = 'classification_blind_work_reference_lengths'
 
 
+class BlindGlobalScopeState(models.Model):
+    """Live built-in resource scope, not a retained authorization grant."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True)
+    facts = models.JSONField()
+
+    class Meta:
+        managed = False
+        db_table = 'classification_blind_global_scope_state'
+
+
 class BlindPrivilegeReadState(models.Model):
     """Retained account privilege status for transaction-fenced reads."""
 

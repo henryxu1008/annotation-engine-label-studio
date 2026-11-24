@@ -15,12 +15,14 @@ from .blind_provenance import (
     _exact_reference_length_checks,
     _external_scope_checks,
     _local_upload_backend_supported,
+    _projected_storage_flag,
     require_capture_fence,
 )
 from .blind_read_attestation import read_attestation
 from .blind_read_binding import FIELDS
 from .models import (
     BlindCaptureCertificate,
+    BlindGlobalScopeState,
     BlindLabelExposure,
     BlindMixDecision,
     BlindMixEvidence,
@@ -36,9 +38,9 @@ from .models import (
     ClassificationGoldEvidence,
 )
 
-
 # Keep this in sync with the bounded database view in migration 0068.
 SHARED_REFERENCE_LENGTH_LIMIT = 1024
+GLOBAL_SCOPE_KEYS = frozenset(('credentials', 'model', 's3', 'gcs', 'azure', 'redis'))
 
 
 def _deny():
@@ -75,11 +77,17 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
             _deny()
         state = state.filter(epoch_enabled=True, generation=quality_generation)
     shared_lengths = BlindWorkReferenceLengths.objects.filter(assignment_id=assignment.pk).values('lengths')[:1]
-    guard = (state.annotate(**required, reference_lengths=Subquery(shared_lengths), **checks)
-             .values(*required, 'reference_lengths', 'exposure_clean', 'marker_present',
+    shared_scope = BlindGlobalScopeState.objects.filter(pk=1).values('facts')[:1]
+    guard = (state.annotate(**required, reference_lengths=Subquery(shared_lengths),
+                            global_scope=Subquery(shared_scope), **checks)
+             .values(*required, 'reference_lengths', 'global_scope', 'exposure_clean', 'marker_present',
         'matching_marker_id', 'proof_present', 'proof_matches', 'source_task_key', 'source_exposed',
         'text_exposed', *checks).first())
     if guard is None or not all(guard[name] for name in required):
+        _deny()
+    scope = guard['global_scope']
+    if (not isinstance(scope, dict) or set(scope) != GLOBAL_SCOPE_KEYS
+            or any(type(value) not in (bool, int) or value not in (0, 1) for value in scope.values())):
         _deny()
     return guard
 
@@ -205,15 +213,22 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             label_exposure=Exists(BlindLabelExposure.objects.filter(account_id=assignment.assignee_id,
                                                                    generation=generation)),
         )
-    scopes = _external_scope_checks()
+    from io_storages.models import get_storage_classes
+
+    registered = get_storage_classes('import')
+    scopes = _external_scope_checks(storage_classes=registered, omit_projected=True)
     checks.update(scopes)
     guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks, quality_generation=generation)
+    global_scope = guard['global_scope']
+    projected_flags = [flag for model in registered if (flag := _projected_storage_flag(model)) is not None]
     if ((connection.vendor == 'sqlite' and (not all(
             guard[name] for name in ('account_event', 'reference_event', 'reference', 'history', 'certificate'))
             or guard['file_exposure'] or guard['label_exposure']
             or (rule == 'local-first-assignment/v1' and not guard['first_assignment'])))
             or not all(guard[name] for name in ('exposure_clean', 'proof_matches'))
             or guard['matching_marker_id'] != marker.pk
+            or global_scope['credentials'] or global_scope['model']
+            or any(global_scope[name] for name in projected_flags)
             or any(guard[name] for name in scopes)
             or (large_length_set and (guard['length_count'] != len(lengths) or guard['length_extra']))
             or (not large_length_set and guard['reference_lengths'] != lengths)

@@ -1188,6 +1188,29 @@ were fenced or that a later removal preserves exposure history. A shared
 external-scope projection must account for registry and deployment changes
 transactionally before those live checks can be replaced.
 
+Migration 0070 supplies a live built-in external-scope view to both ordinary
+and quality handle reads. The quality guard applies the global credential and
+model flags, and applies each built-in storage flag only when that storage
+class is currently registered with its expected model identity and table.
+Other registered models retain their existing live ORM checks in the same
+fenced read, including entries that merely claim a built-in model label.
+Ordinary work validates the view is
+available without adopting quality-only denial conditions. The view is not a
+cached grant and does not establish continuity for a dynamically added or
+removed storage provider. Apply the migration before starting these readers;
+stop them before reversing it. Keep public mixing disabled until the dynamic
+registry, remaining timing, and browser acceptance boundaries are resolved.
+On one isolated PostgreSQL 16 synthetic fixture, sequential 150-pair warm
+diagnostics before and after this change measured ordinary/quality medians of
+27.6/29.6 ms (rank 0.6727) and 25.7/26.1 ms (rank 0.5339), respectively, with
+20 SQL statements per read. Two new-process pairs after the change measured
+107.4/95.6 ms while sharing the database cache. An independent PostgreSQL 17
+diagnostic evicted that synthetic database's eligible shared buffers before
+each of 50 alternating paired reads: medians were 28.3/28.7 ms (rank 0.5228),
+at least 58 pages were evicted each time, and no eviction failures were
+reported. The sequential runs are not controlled comparisons, and operating
+system caches remained shared; these diagnostics do not prove timing privacy.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.

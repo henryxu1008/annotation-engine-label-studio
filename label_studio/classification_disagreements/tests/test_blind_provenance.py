@@ -963,7 +963,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
     def test_exposure_view_recreation_reads_evidence_added_while_absent(self):
         from classification_disagreements.blind_read_binding import _seal
         from classification_disagreements.models import (
-            BlindCaptureEpoch, BlindReadBinding, BlindTextLengthExposure, BlindWorkExposureState,
+            BlindCaptureEpoch, BlindGlobalScopeState, BlindReadBinding, BlindTextLengthExposure, BlindWorkExposureState,
             BlindWorkReferenceLengths,
         )
 
@@ -992,6 +992,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
         assert state.binding_hash == binding.binding_hash
         assert state.text_exposed
         assert BlindWorkReferenceLengths.objects.get(pk=assignment.pk).lengths == []
+        assert not any(BlindGlobalScopeState.objects.get(pk=1).facts.values())
 
     def test_live_mix_view_can_be_recreated_without_discarding_history(self):
         from classification_disagreements.models import BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence
