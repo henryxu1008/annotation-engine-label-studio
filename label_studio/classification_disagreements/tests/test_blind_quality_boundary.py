@@ -291,7 +291,7 @@ class TestBlindQualityBoundary(APITestCase):
         from classification_disagreements.models import (BlindAccountExposureState, BlindAssignmentExposure, BlindCaptureCertificate, BlindCaptureEpoch, BlindLabelExposure,
             BlindPrivilegeHistory, BlindPrivilegeReadState, BlindProjectFileExposure, BlindProvenanceEvent, BlindReadAttestation,
             BlindReadBinding, BlindReadIdentityState, BlindTextLengthExposure, BlindMixSharedEvidence, BlindMixEvidence,
-            BlindMixLiveLifecycle, BlindWorkExposureState)
+            BlindMixLiveLifecycle, BlindWorkExposureState, BlindWorkReferenceLengths)
         from django.test.utils import CaptureQueriesContext
         from projects.models import ProjectMember
         from rest_framework.exceptions import NotFound
@@ -406,6 +406,9 @@ class TestBlindQualityBoundary(APITestCase):
 
             assert_exposure_projection(assignments[0], ordinary_binding)
             assert_exposure_projection(assignments[1], quality_binding, quality_marker)
+            assert BlindWorkReferenceLengths.objects.get(pk=assignments[0].pk).lengths == []
+            assert (BlindWorkReferenceLengths.objects.get(pk=assignments[1].pk).lengths
+                    == read_attestation(quality_binding)['quality']['text_lengths'])
             with self.assertRaises(RuntimeError):
                 load_attested_read_binding(assignment=assignments[0], fence=None)
             fence = lock_capture_epoch_for_read(with_fence=True)

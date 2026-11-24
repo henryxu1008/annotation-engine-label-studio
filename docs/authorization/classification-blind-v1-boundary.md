@@ -1146,6 +1146,27 @@ can classify an out-of-range JSON integer as an integer while extracting it as
 a real. The view now requires an actual SQLite integer before conversion. The
 signed source comparison remains mandatory on both database backends. Existing
 0066 installations must apply 0067 to replace the view definition.
+Migration 0068 adds a live reference-length view used by both work purposes.
+It returns a sorted set of at most 1,024 lengths; a larger set returns NULL
+without aggregating an unbounded result. Ordinary work must have an empty set.
+Quality work compares the live set to its authenticated signed lengths in the
+same fenced read. For signed sets larger than the view limit, the existing exact
+count and extra-value checks remain in use. The view does not cache a grant or
+replace external-resource checks. Apply it before starting readers; stop those
+readers before reversing it. This consolidation does not establish timing
+privacy or enable public dispatch.
+On one isolated PostgreSQL 16 synthetic fixture, sequential 100-pair warm
+diagnostics before and after this change measured ordinary/quality medians of
+25.7/29.4 ms (rank 0.7586) and 27.6/29.5 ms (rank 0.6363), respectively, with
+20 statements per read. Two fresh-process pairs after the change measured
+102.6/108.4 ms with a shared database cache. These sequential runs and small
+fresh-process sample do not establish a controlled improvement, a cold-cache
+result, or timing privacy; external-scope and other quality checks still differ.
+An isolated PostgreSQL 17 diagnostic after the change evicted eligible database
+buffers before each of 50 alternating paired reads. Ordinary/quality medians
+were 29.7/30.7 ms (rank 0.5976), with at least 47 pages evicted per read and
+no reported eviction failures. The operating-system cache remained shared, so
+this is not a fully cold test or evidence of timing privacy.
 
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page

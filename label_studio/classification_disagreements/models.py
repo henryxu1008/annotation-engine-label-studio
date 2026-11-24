@@ -389,6 +389,17 @@ class BlindWorkExposureState(models.Model):
         db_table = 'classification_blind_work_exposure_state'
 
 
+class BlindWorkReferenceLengths(models.Model):
+    """Bounded live reference lengths for either purpose, never a cached grant."""
+
+    assignment_id = models.PositiveBigIntegerField(primary_key=True)
+    lengths = models.JSONField(null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'classification_blind_work_reference_lengths'
+
+
 class BlindPrivilegeReadState(models.Model):
     """Retained account privilege status for transaction-fenced reads."""
 

@@ -7,7 +7,7 @@ disabled. Static facts require signature verification and immutable identities.
 import re
 
 from django.db import connection
-from django.db.models import Exists
+from django.db.models import Exists, Subquery
 from rest_framework.exceptions import ValidationError
 from review_batches.service import digest
 
@@ -32,8 +32,13 @@ from .models import (
     BlindProvenanceEvent,
     BlindReadIdentityState,
     BlindWorkExposureState,
+    BlindWorkReferenceLengths,
     ClassificationGoldEvidence,
 )
+
+
+# Keep this in sync with the bounded database view in migration 0068.
+SHARED_REFERENCE_LENGTH_LIMIT = 1024
 
 
 def _deny():
@@ -69,7 +74,9 @@ def _read_live_guard(*, assignment, binding, checks, quality_generation=None):
         if quality_generation is None:
             _deny()
         state = state.filter(epoch_enabled=True, generation=quality_generation)
-    guard = (state.annotate(**required, **checks).values(*required, 'exposure_clean', 'marker_present',
+    shared_lengths = BlindWorkReferenceLengths.objects.filter(assignment_id=assignment.pk).values('lengths')[:1]
+    guard = (state.annotate(**required, reference_lengths=Subquery(shared_lengths), **checks)
+             .values(*required, 'reference_lengths', 'exposure_clean', 'marker_present',
         'matching_marker_id', 'proof_present', 'proof_matches', 'source_task_key', 'source_exposed',
         'text_exposed', *checks).first())
     if guard is None or not all(guard[name] for name in required):
@@ -121,7 +128,7 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
             checks = {'decision': Exists(decisions)}
             guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
-            if (guard['marker_present'] or guard['proof_present']
+            if (guard['reference_lengths'] != [] or guard['marker_present'] or guard['proof_present']
                     or (binding.decision_id_frozen is None and guard['decision'])):
                 _deny()
             return
@@ -160,7 +167,9 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         }
     else:
         mix_checks = {}
-    count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
+    # Very large historical signed sets retain the original exact SQL check;
+    # the shared projection itself never returns an unbounded aggregate.
+    large_length_set = len(lengths) > SHARED_REFERENCE_LENGTH_LIMIT
     # Signed proof issuance validates the immutable reference and provenance;
     # migrations 0057/0061 backfill invalid history and deletion triggers
     # revoke read_identity under the caller's capture fence. Keep the live
@@ -170,9 +179,10 @@ def checked_attested_work(*, assignment, marker, binding, fence):
     # Signed issuance validates first assignment; history cannot be reset.
     # Source and text exposures are immutable ledgers, checked under the same
     # epoch fence. PostgreSQL writes do not update purpose-specific bindings.
-    checks = {
-        'length_count': count, 'length_extra': extra,
-    }
+    checks = {}
+    if large_length_set:
+        count, extra = _exact_reference_length_checks(reference_id=marker.reference_id, expected_lengths=lengths)
+        checks.update(length_count=count, length_extra=extra)
     checks.update(mix_checks)
     # Keep the existing SQLite source checks until its retained-evidence
     # replacement semantics have been addressed separately.
@@ -205,7 +215,8 @@ def checked_attested_work(*, assignment, marker, binding, fence):
             or not all(guard[name] for name in ('exposure_clean', 'proof_matches'))
             or guard['matching_marker_id'] != marker.pk
             or any(guard[name] for name in scopes)
-            or guard['length_count'] != len(lengths) or guard['length_extra']
+            or (large_length_set and (guard['length_count'] != len(lengths) or guard['length_extra']))
+            or (not large_length_set and guard['reference_lengths'] != lengths)
             or guard['text_exposed']
             or (rule == 'local-unseen-source/v2' and (guard['source_task_key'] != str(value['source_task_id'])
                 or guard['source_exposed']))

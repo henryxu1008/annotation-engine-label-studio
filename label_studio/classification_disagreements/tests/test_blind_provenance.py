@@ -846,6 +846,38 @@ class TestBlindProvenanceConcurrency(SyntheticTransactionTestCase):
 
 
 class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
+    def test_shared_reference_lengths_are_sorted_and_bounded(self):
+        from classification_disagreements.blind_provenance import _exact_reference_length_checks
+        from classification_disagreements.blind_read_binding import _seal
+        from classification_disagreements.models import (
+            BlindCaptureEpoch, BlindReferenceTextLength, BlindWorkReferenceLengths,
+        )
+
+        owner, member = UserFactory(), UserFactory()
+        project = ProjectFactory(created_by=owner)
+        assignment = TaskAssignment.objects.create(task=TaskFactory(project=project), project=project,
+                                                   assignee=member, assigned_by=owner)
+        reference_id = 987654321
+        _seal({'assignment_id_frozen': assignment.pk, 'task_id_frozen': assignment.task_id,
+            'project_id_frozen': project.pk, 'actor_id_frozen': member.pk, 'decision_id_frozen': None,
+            'source_id_frozen': None, 'source_task_id_frozen': None, 'decision_request_hash': None,
+            'purpose': 'quality', 'reference_id_frozen': reference_id, 'reference_hash': 'a' * 64,
+            'proof_hash': 'b' * 64})
+        assert BlindWorkReferenceLengths.objects.get(pk=assignment.pk).lengths == []
+        BlindReferenceTextLength.objects.bulk_create([
+            BlindReferenceTextLength(reference_id=reference_id, byte_length=value)
+            for value in reversed(range(1024))
+        ])
+        assert BlindWorkReferenceLengths.objects.get(pk=assignment.pk).lengths == list(range(1024))
+        BlindReferenceTextLength.objects.create(reference_id=reference_id, byte_length=1024)
+        assert BlindWorkReferenceLengths.objects.get(pk=assignment.pk).lengths is None
+        epoch, _ = BlindCaptureEpoch.objects.get_or_create(pk=1)
+        for expected, extra in ((list(range(1025)), False), (list(range(1024)) + [1025], True)):
+            count, has_extra = _exact_reference_length_checks(reference_id=reference_id, expected_lengths=expected)
+            result = (BlindCaptureEpoch.objects.filter(pk=epoch.pk).annotate(count=count, extra=has_extra)
+                      .values('count', 'extra').get())
+            assert result == {'count': 1025, 'extra': extra}
+
     def test_sqlite_source_fix_upgrades_existing_view_without_discarding_binding(self):
         from classification_disagreements.blind_read_binding import _seal
         from classification_disagreements.models import (
@@ -915,6 +947,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
         from classification_disagreements.blind_read_binding import _seal
         from classification_disagreements.models import (
             BlindCaptureEpoch, BlindReadBinding, BlindTextLengthExposure, BlindWorkExposureState,
+            BlindWorkReferenceLengths,
         )
 
         after = MigrationExecutor(connection).loader.graph.leaf_nodes()
@@ -941,6 +974,7 @@ class TestBlindProvenanceMigration(SyntheticTransactionTestCase):
         state = BlindWorkExposureState.objects.get(pk=assignment.pk)
         assert state.binding_hash == binding.binding_hash
         assert state.text_exposed
+        assert BlindWorkReferenceLengths.objects.get(pk=assignment.pk).lengths == []
 
     def test_live_mix_view_can_be_recreated_without_discarding_history(self):
         from classification_disagreements.models import BlindMixDecision, BlindMixLiveLifecycle, BlindMixSharedEvidence
