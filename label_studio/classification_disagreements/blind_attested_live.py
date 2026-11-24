@@ -134,8 +134,11 @@ def checked_attested_work(*, assignment, marker, binding, fence):
         if signed is None:
             _deny()
         if binding.purpose == 'ordinary':
-            decisions = BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk)
-            checks = {'decision': Exists(decisions)}
+            # A mixed binding is already checked against the live decision in
+            # the shared lifecycle projection. Only legacy, unbound ordinary
+            # work needs the separate absence check.
+            checks = ({'decision': Exists(BlindMixDecision.objects.filter(chosen_id_frozen=assignment.pk))}
+                      if binding.decision_id_frozen is None else {})
             guard = _read_live_guard(assignment=assignment, binding=binding, checks=checks)
             if (guard['reference_lengths'] != [] or guard['marker_present'] or guard['proof_present']
                     or (binding.decision_id_frozen is None and guard['decision'])):

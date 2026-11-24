@@ -1207,6 +1207,11 @@ same fenced projection. Quality work still requires the signed generation to
 match an enabled epoch; ordinary work does not inherit that eligibility rule.
 This removes the purpose-specific epoch predicate, but other purpose-specific
 checks remain and this alone does not establish timing privacy.
+For an ordinary assignment bound to a mixed decision, the common lifecycle
+projection already verifies that decision and its retained history. Its read
+does not issue a second, unused decision-existence subquery; legacy ordinary
+bindings without a decision retain the separate absence check. This removes a
+real query-shape difference without substituting artificial delay for evidence.
 On one isolated PostgreSQL 16 synthetic fixture, sequential 150-pair warm
 diagnostics before and after this change measured ordinary/quality medians of
 27.6/29.6 ms (rank 0.6727) and 25.7/26.1 ms (rank 0.5339), respectively, with

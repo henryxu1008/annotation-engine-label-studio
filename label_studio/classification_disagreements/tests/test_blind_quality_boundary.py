@@ -473,8 +473,11 @@ class TestBlindQualityBoundary(APITestCase):
                 load_attested_read_binding(assignment=assignments[0], fence=None)
             fence = lock_capture_epoch_for_read(with_fence=True)
             _ = assignments[0].project.organization_id, assignments[0].task.project_id
-            with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
+            with CaptureQueriesContext(connection) as ordinary_queries:
                 checked_attested_work(assignment=assignments[0], marker=None, binding=ordinary_binding, fence=fence)
+            assert len(ordinary_queries) == (2 if connection.vendor == 'postgresql' else 1)
+            assert all('classification_disagreements_blindmixdecision' not in query['sql'].lower()
+                       for query in ordinary_queries)
             assert checked_quality_proof(assignment=assignments[1], marker=quality_marker, lock_epoch=False)
             _ = assignments[1].project.label_config, assignments[1].task.data
             with self.assertNumQueries(2 if connection.vendor == 'postgresql' else 1):
