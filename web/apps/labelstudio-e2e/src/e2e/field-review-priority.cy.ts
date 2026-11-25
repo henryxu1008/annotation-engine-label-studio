@@ -124,8 +124,14 @@ describe("optional frozen field conflict-priority review", () => {
       cy.screenshot(`field-review-priority-rework-${locale}`);
       cy.contains("button", zh ? "返回批次" : "Back to batch").click();
       visit("reviewer");
+      cy.intercept({ method: "GET", pathname: /\/api\/submissions\/?$/,
+        query: { project: String(scope.id), reviewable: "true" } }).as("reworkReviewQueue");
+      cy.intercept({ method: "GET", pathname: /\/api\/submissions\/?$/,
+        query: { project: String(scope.id), history: "true" } }).as("reworkReviewHistory");
       cy.get('[data-testid="open-review-workspace"]').click();
-      cy.then(() => cy.get(`[data-testid="review-submission-${newer}"]`).click());
+      cy.wait(["@reworkReviewQueue", "@reworkReviewHistory"], { requestTimeout: 30000, responseTimeout: 60000 })
+        .each(({ response }) => { expect(response?.statusCode).to.eq(200); });
+      cy.then(() => cy.get(`[data-testid="review-submission-${newer}"]`, { timeout: 30000 }).click());
       cy.get('[data-testid="review-approve"]').click();
       visit("manager");
       cy.then(() => cy.request(`${base}${saved}/`)).then(({ body }) => {

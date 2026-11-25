@@ -1280,6 +1280,12 @@ not an authorization grant: every work read and write still checks permissions,
 and it does not establish dynamic-storage continuity or timing privacy. Public
 mixed dispatch remains disabled until those release boundaries are verified.
 
+The public-command browser test uses a separate, explicitly marked synthetic
+PostgreSQL process whose test-only runner patches the release gate in memory.
+It exercises manager dispatch, cancellation and reassignment, participant
+submission and a separate score worker in both locales. This does not change the production gate, establish
+external-provider history or serve as acceptance of the timing boundary.
+
 The optional Compose/systemd schedule in `deploy/blind-score-reconcile/` uses
 the same one-shot pattern as bbox reconciliation. It runs a bounded retry page
 every five minutes, using the deployed app service's database and Redis settings.

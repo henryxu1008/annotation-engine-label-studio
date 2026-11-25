@@ -190,10 +190,37 @@ jobs:
           yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts --browser chrome \
             --config baseUrl=http://localhost:8080,video=true \
             --spec 'apps/labelstudio-e2e/src/e2e/classification-gold.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-privacy.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-editor.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-mixed.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-draft-revocation.cy.ts,apps/labelstudio-e2e/src/e2e/classification-blind-membership-revocation.cy.ts'
+      - name: Start guarded synthetic public-mix server
+        run: |
+          export HOSTNAME=http://localhost:8081 FRONTEND_HOSTNAME=http://localhost:8081
+          export APPROVED_EXPORT_REDIS_URL=redis://localhost:6379/0
+          export ANNOTATION_CLASSIFICATION_GOLD_ENABLED=true
+          export ANNOTATION_CLASSIFICATION_GOLD_PROJECTS="$(python -c 'import json; print(json.dumps({k: True for k in json.load(open("web/apps/labelstudio-e2e/.classification81-e2e.json"))["modes"]}))')"
+          export ANNOTATION_CLASSIFICATION_BLIND_ENABLED=true
+          export ANNOTATION_CLASSIFICATION_BLIND_PROJECTS="$ANNOTATION_CLASSIFICATION_GOLD_PROJECTS"
+          nohup poetry run python label_studio/manage.py rqworker approved_exports > /tmp/classification-blind-worker.log 2>&1 &
+          echo $! > /tmp/classification-blind-worker.pid
+          LS82_SYNTHETIC_BLIND_FIXTURE=1 nohup poetry run python scripts/ci/classification_blind_public_test_server.py runserver 127.0.0.1:8081 --noreload > /tmp/classification-blind-public.log 2>&1 &
+          echo $! > /tmp/classification-blind-public.pid
+          for i in {1..90}; do
+            if curl --fail --silent http://localhost:8081/health/ >/dev/null \
+              && curl --fail --silent http://localhost:8081/react-app/main.js >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          tail -200 /tmp/classification-blind-public.log
+          exit 1
+      - name: Run synthetic public-mix bilingual browser journeys
+        working-directory: web
+        run: |
+          yarn cypress run --project apps/labelstudio-e2e --config-file cypress.config.ts --browser chrome \
+            --config baseUrl=http://localhost:8081,video=true \
+            --spec 'apps/labelstudio-e2e/src/e2e/classification-blind-public-mix.cy.ts'
       - name: Stop owned server
         if: always()
         run: |
           if test -f /tmp/classification-gold.pid; then kill "$(cat /tmp/classification-gold.pid)" || true; fi
+          if test -f /tmp/classification-blind-public.pid; then kill "$(cat /tmp/classification-blind-public.pid)" || true; fi
+          if test -f /tmp/classification-blind-worker.pid; then kill "$(cat /tmp/classification-blind-worker.pid)" || true; fi
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -203,3 +230,5 @@ jobs:
             web/dist/cypress/apps/labelstudio-e2e/screenshots/**
             web/dist/cypress/apps/labelstudio-e2e/videos/**
             /tmp/classification-gold.log
+            /tmp/classification-blind-public.log
+            /tmp/classification-blind-worker.log

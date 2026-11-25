@@ -129,6 +129,26 @@ class Command(BaseCommand):
                         'previous_handle': old_handle.task_handle, 'task_id': replacement.task_id,
                         'text': replacement.task.data['text']}
 
+            def seed_public_dispatch(project, locale, kind):
+                members = []
+                for suffix in ('original', 'next'):
+                    email = f'blind-e2e-public-{kind}-{suffix}-{locale.lower()}@classification81.example.test'
+                    user = User.objects.create_user(email, source['password'], username=email,
+                                                    active_organization=project.organization)
+                    project.organization.add_user(user)
+                    ProjectMember.objects.create(project=project, user=user, role='annotator')
+                    members.append(user)
+                task = Task.objects.create(project=project, data={
+                    'text': f'Synthetic public {kind} task for {locale}',
+                })
+                replacement = task if kind == 'ordinary' else Task.objects.create(project=project, data={
+                    'text': f'Synthetic public quality replacement carrier for {locale}',
+                })
+                return {'task_id': task.pk, 'replacement_task_id': replacement.pk,
+                        'original_id': members[0].pk, 'original_email': members[0].email,
+                        'replacement_id': members[1].pk, 'replacement_email': members[1].email,
+                        'reference': references[locale]}
+
             for locale, scope in source['projects'].items():
                 project = Project.objects.get(pk=scope['id'], created_by=manager)
                 # A separate participant and assignment supply an actual frozen
@@ -203,6 +223,8 @@ class Command(BaseCommand):
                                     'score_id': score.pk,
                                     'draft_email': draft_email, 'draft_quality_task': draft_quality.task_id,
                                     'revocations': revocations,
+                                    'public_dispatch': {kind: seed_public_dispatch(project, locale, kind)
+                                                        for kind in ('ordinary', 'quality')},
                                     'reassignments': {kind: seed_reassignment(project, locale, kind)
                                                       for kind in ('ordinary', 'quality')}}
         output.parent.mkdir(parents=True, exist_ok=True)

@@ -49,8 +49,11 @@ class TestPackageBatch(PackageFixture, TransactionTestCase):
         assert not TaskPackageBatch.objects.exists()
 
     def test_batch_rejects_deferred_source_until_its_assignment_is_cancelled(self):
-        from classification_disagreements.models import BlindMixEvidence
+        from classification_disagreements.models import BlindCaptureEpoch, BlindMixEvidence
 
+        # TransactionTestCase flushes the capture row after the previous test.
+        # Direct retained-history inserts must still take the database fence.
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
         source = self.assignment(task=self.tasks[0])
         BlindMixEvidence.objects.create(
             decision_id_frozen=12345, project_id_frozen=self.project.pk,
