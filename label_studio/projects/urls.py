@@ -21,6 +21,7 @@ from projects.lifecycle_api import LifecycleAPI, StorageOperationResolveAPI, Sto
 from review_batches.confidence_api import InputAPI as ConfidenceInputAPI
 from review_batches.confidence_api import ObservationAPI as ConfidenceObservationAPI
 from tasks.my_work import MyWorkAPI
+from classification_disagreements.blind_editor_api import BlindWorkListAPI, ProjectWorkModeAPI
 
 from . import api, views
 
@@ -42,6 +43,8 @@ _api_urlpatterns = [
     path('<int:pk>/storage-operations/', StorageOperationsAPI.as_view(), name='project-storage-operations'),
     path('<int:pk>/storage-operations/<uuid:operation_id>/resolve/', StorageOperationResolveAPI.as_view(), name='project-storage-operation-resolve'),
     path('<int:pk>/my-work/', MyWorkAPI.as_view(), name='project-my-work'),
+    path('<int:pk>/work-mode/', ProjectWorkModeAPI.as_view(), name='project-work-mode'),
+    path('<int:pk>/blind-work/', BlindWorkListAPI.as_view(), name='project-blind-work'),
     path('<int:pk>/bbox-media/tasks/<int:task_id>/prepare/', BboxPrepareAPI.as_view(), name='bbox-prepare'),
     path('<int:pk>/bbox-media/<uuid:token>/', BboxMediaAPI.as_view(), name='bbox-media'),
     path('<int:pk>/bbox-quality/preview/', BboxBatchPreviewAPI.as_view(), name='bbox-quality-preview'),

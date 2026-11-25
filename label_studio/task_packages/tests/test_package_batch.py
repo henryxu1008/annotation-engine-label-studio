@@ -34,6 +34,41 @@ class TestPackageBatch(PackageFixture, TransactionTestCase):
             self.batch_url, payload or self.payload, format='json', HTTP_IDEMPOTENCY_KEY=str(key or uuid4())
         )
 
+    def test_batch_rejects_quality_tasks_without_partial_packages(self):
+        from classification_disagreements.models import BlindQualityAssignment
+
+        assignment = self.assignment(task=self.tasks[0])
+        BlindQualityAssignment.objects.create(
+            assignment_id=assignment.pk, task_id=assignment.task_id,
+            project_id=self.project.pk, assignee_id=self.annotator.pk,
+        )
+        response = self.post_batch()
+        assert response.status_code == 400, response.content
+        assert not TaskPackage.objects.exists()
+        assert not TaskPackageItem.objects.exists()
+        assert not TaskPackageBatch.objects.exists()
+
+    def test_batch_rejects_deferred_source_until_its_assignment_is_cancelled(self):
+        from classification_disagreements.models import BlindCaptureEpoch, BlindMixEvidence
+
+        # TransactionTestCase flushes the capture row after the previous test.
+        # Direct retained-history inserts must still take the database fence.
+        BlindCaptureEpoch.objects.get_or_create(pk=1)
+        source = self.assignment(task=self.tasks[0])
+        BlindMixEvidence.objects.create(
+            decision_id_frozen=12345, project_id_frozen=self.project.pk,
+            source_id_frozen=source.pk, source_task_id_frozen=source.task_id,
+            source_assignee_id_frozen=self.annotator.pk, chosen_id_frozen=source.pk + 10000,
+        )
+        key = uuid4()
+        denied = self.post_batch(key=key)
+        assert denied.status_code == 400, denied.content
+        assert not TaskPackage.objects.exists() and not TaskPackageBatch.objects.exists()
+        source.cancel()
+        allowed = self.post_batch(key=key)
+        assert allowed.status_code == 201, allowed.content
+        assert TaskPackage.objects.count() == 2 and TaskPackageBatch.objects.count() == 1
+
     def test_thousand_tasks_and_lost_response_replay(self):
         tasks = Task.objects.bulk_create([Task(project=self.project, data={'text': 'synthetic'}) for _ in range(997)])
         ids = [t.pk for t in self.tasks + tasks]

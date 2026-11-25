@@ -160,6 +160,10 @@ def identity(row):
 
 
 def valid_source(row, project_id):
+    from classification_disagreements.blind_quality_boundary import is_quality_only_submission
+
+    if is_quality_only_submission(row):
+        return False
     if not isinstance(row.result_snapshot, dict):
         return False
     review = getattr(row, 'review', None)
@@ -187,13 +191,15 @@ def valid_snapshot_scope(row, project_id):
 
 
 def candidate_rows(project, args):
+    from classification_disagreements.models import BlindQualityAssignment
+
     newest = Submission.objects.filter(assignment_id=OuterRef("assignment_id")).order_by("-revision")
     rows = Submission.objects.filter(
         assignment__project=project,
         assignment__task__project=project,
         status=Submission.Status.PENDING,
         pk=Subquery(newest.values("pk")[:1]),
-    )
+    ).exclude(assignment__task_id__in=BlindQualityAssignment.objects.values('task_id'))
     if args["package_ids"]:
         from task_packages.access import live_items
         from task_packages.models import TaskPackage
@@ -218,11 +224,15 @@ def candidate_rows(project, args):
 
 
 def build_plan(project, args):
+    from classification_disagreements.blind_quality_boundary import with_quality_snapshot
+
     rows, source_ids = candidate_rows(project, args)
     candidates = []
     # Keep the existing byte-budget semantics; retain only bounded identity pins,
     # rather than all candidate snapshots while classification evidence is loaded.
-    source_rows = rows.filter(pk__in=source_ids).select_related("assignment__task", "review").order_by("pk")
+    source_rows = with_quality_snapshot(rows.filter(pk__in=source_ids)).select_related(
+        "assignment__task", "review"
+    ).order_by("pk")
     for row in source_rows.iterator(chunk_size=1):
         if not valid_source(row, project.pk):
             fail("REVIEW_BATCH_SOURCE_INVALID")

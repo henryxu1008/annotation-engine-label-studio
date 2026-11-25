@@ -25,9 +25,17 @@ logger = logging.getLogger(__name__)
 
 class ResolveStorageUriAPIMixin:
     def resolve(self, request: HttpRequest, fileuri: str, instance: Union[Task, Project]) -> Response:
-        model_name = type(instance).__name__
+        from access_control.authorization import authorization
+        from access_control.identity import resolve_actor
 
-        if not instance.has_permission(request.user):
+        model_name = type(instance).__name__
+        principal, actor = resolve_actor(request)
+
+        if not instance.has_permission(actor) or (
+            isinstance(instance, Task) and not authorization.can_view_task(principal, instance)
+        ) or (
+            isinstance(instance, Project) and not authorization.can_view_project(principal, instance)
+        ):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
         # Attempt to base64 decode the fileuri
@@ -48,6 +56,9 @@ class ResolveStorageUriAPIMixin:
             if pinned_storage(project, fileuri):
                 pin = pinned_task_redirect(instance, fileuri) if isinstance(instance, Task) else None
                 if pin:
+                    from classification_disagreements.blind_provenance import record_project_file_access
+
+                    record_project_file_access(account_id=actor.pk, project_id=project.pk)
                     response = HttpResponseRedirect(reverse('projects:api:bbox-media', kwargs={
                         'pk': project.pk, 'token': pin.token}), status=303)
                     response['Cache-Control'] = 'private, no-store'
@@ -62,6 +73,9 @@ class ResolveStorageUriAPIMixin:
         if not hasattr(storage, 'presign'):
             logger.error(f'Storage {storage} does not support presign URLs')
             return Response(status=status.HTTP_404_NOT_FOUND)
+        from classification_disagreements.blind_provenance import record_project_file_access
+
+        record_project_file_access(account_id=actor.pk, project_id=project.pk)
         presign = storage.presign
 
         # Check if storage should use presigned URLs;

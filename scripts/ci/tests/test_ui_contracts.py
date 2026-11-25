@@ -34,6 +34,26 @@ from ui_results import normalize_node_xml, report_reference, unit_skips, validat
 from ui_server import isolation, validate_fixture
 
 
+class CypressFailureIndicesTests(unittest.TestCase):
+    def test_only_bounded_numeric_positions_are_emitted(self):
+        from ui_run import cypress_failure_indices
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'failure.json'
+            assert cypress_failure_indices(path) == ([], [], [])
+            base = {'schema': 'ui-cypress-failure-indices/v3', 'total': 4, 'failed': [1, 4], 'categories': ['task', 'other'], 'lines': [12, 0]}
+            path.write_text(json.dumps(base), encoding='utf-8')
+            assert cypress_failure_indices(path) == ([1, 4], ['task', 'other'], [12, 0])
+            for invalid in (
+                {**base, 'message': 'private'}, {**base, 'failed': [True]},
+                {**base, 'failed': [4, 1]}, {**base, 'failed': [5]},
+                {**base, 'total': 501}, {**base, 'failed': []}, {**base, 'categories': ['private', 'task']},
+                {**base, 'lines': [12, 5001]}, {**base, 'lines': [True, 0]},
+            ):
+                path.write_text(json.dumps(invalid), encoding='utf-8')
+                assert cypress_failure_indices(path) == ([], [], [])
+
+
 def ctx(attempt=1):
     return {
         'environment': 'github',
@@ -577,6 +597,41 @@ class AggregateTests(unittest.TestCase):
             f.rows[-1]['name'] = 'unexpected'
             with self.assertRaises(ValueError):
                 latest_jobs(f.context, f.rows)
+
+    def test_historical_unexpanded_matrix_requires_failed_same_run_prepare(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Fixture(Path(d), attempt=2)
+            failed_prepare = copy.deepcopy(f.rows[0])
+            failed_prepare.update(id=900, run_attempt=1, conclusion='failure')
+            placeholder = {
+                'id': 901, 'run_id': f.context['run_id'], 'run_attempt': 1,
+                'head_sha': f.context['metadata_head'], 'name': 'Enterprise UI / ${{ matrix.shard }}',
+                'status': 'completed', 'conclusion': 'skipped', 'runner_id': None, 'steps': [],
+            }
+            rows = [*f.rows, failed_prepare, placeholder]
+            self.assertEqual(set(latest_jobs(f.context, rows)), set(JOB_NAMES))
+            f.rows = rows
+            self.assertEqual(aggregate(f.context, Path(d) / 'aggregate', f)['status'], 'success')
+            for change in (
+                lambda p: p.update(run_attempt=2),
+                lambda p: p.update(run_id=999),
+                lambda p: p.update(head_sha='f' * 40),
+                lambda p: p.update(conclusion='success'),
+                lambda p: p.update(status='in_progress'),
+                lambda p: p.update(runner_id=1),
+                lambda p: p.pop('runner_id'),
+                lambda p: p.update(steps=[{'name': 'unexpected execution'}]),
+            ):
+                altered = copy.deepcopy(rows)
+                change(altered[-1])
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    latest_jobs(f.context, altered)
+            altered = copy.deepcopy(rows)
+            altered[-2]['conclusion'] = 'success'
+            with self.assertRaises(ValueError):
+                latest_jobs(f.context, altered)
+            with self.assertRaises(ValueError):
+                latest_jobs(f.context, [*rows, {**placeholder, 'id': 902}])
 
     def test_receipt_tamper_wrong_sha_attempt_or_artifact_id_reject(self):
         for mutate in (

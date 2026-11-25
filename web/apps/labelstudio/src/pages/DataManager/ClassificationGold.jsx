@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Button } from "@humansignal/ui";
 import { useLocaleTranslation } from "@humansignal/i18n";
 import { useAPI } from "../../providers/ApiProvider";
+import { ClassificationBlindScores } from "./ClassificationBlindScores";
 
 const id = z.number().int().positive().safe();
 const listSchema = z.object({ items: z.array(z.object({ id, kind: z.enum(["reference", "score"]), created_at: z.string(), manifest_hash: z.string().length(64) })).max(100), has_more: z.boolean() });
@@ -117,5 +118,6 @@ export const ClassificationGold = ({ projectId }) => {
     <ul>{rows.map((row) => <li key={row.id}><button disabled={busy || unknown} type="button" onClick={() => open(row.id)}>
       {t(row.kind === "reference" ? "goldReference" : "goldScore")} #{row.id}</button> · {row.created_at}</li>)}</ul>
     {detail && <div><h4>{t("goldEvidence", { id: detail.id })}</h4><pre>{JSON.stringify(detail.manifest.contents, null, 2)}</pre></div>}
+    <ClassificationBlindScores projectId={projectId} />
   </section>;
 };

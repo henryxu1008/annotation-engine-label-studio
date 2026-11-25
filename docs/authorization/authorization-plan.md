@@ -128,6 +128,16 @@ Label Studio CE fork
   └─ server-side enforcement adapters
 ```
 
+Prediction API reads are scoped to live project membership and current task
+access, including quality-eligibility revocation. Prediction writes require a
+locked project-manager scope, cannot move a prediction between tasks, and reject
+quality-only tasks. Legacy cross-organization or mismatched project/task rows
+are denied rather than repaired during reads.
+Interactive ML requests resolve the trusted actor and require current access
+to the requested task. Training and debug prediction endpoints require the
+manager role. External prediction and training do not receive quality-only
+tasks through the supported prediction and training paths.
+
 The host platform owns policy. The Label Studio fork owns enforcement at Label Studio resource boundaries that cannot safely be protected only from outside the process.
 
 ### Controlled Core-only-review Pilot: submission protocol v1
@@ -2204,6 +2214,19 @@ acceptance gates are in `bbox-disagreement-v1-design.md`.
 The opt-in manager-only classification gold evidence boundary, its operation
 policy, hash-bound revision selection, and explicit exclusion of blind delivery
 are documented in `classification-gold-v1.md` (#82).
+
+The in-progress blind-delivery prerequisites change Data Manager filtering,
+task queues and annotation ownership checks. Their compatibility and remaining
+qualification, review and delivery boundaries are tracked in
+`classification-blind-v1-boundary.md`; blind delivery is not yet enabled.
+Fenced signed reads use a byte-bounded binding loader followed by a live
+authorization check; unsigned work retains the original verifier. Upstream
+changes to task/assignment locks, attestation limits, mixed decisions or the
+capture fence must be reviewed against both paths and their negative tests.
+Manager-only mixed-command routes call the existing fenced services, but remain
+hard-disabled even if their separate default-off setting is enabled. Recheck
+identity, role, idempotency, assignment cancellation, and the timing/resource
+boundary before ever removing that release gate.
 
 Local bbox quality and arbitration evidence is separate from Host review and
 release authority and is gated by explicit `fork_review` configuration. Do not

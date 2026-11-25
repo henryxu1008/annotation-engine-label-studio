@@ -250,8 +250,29 @@ def producer_for_view(view, history):
 def latest_jobs(ctx, rows):
     require(isinstance(rows, list) and len(rows) <= 256, 'Job count exceeded')
     expected = set(JOB_NAMES.values())
+    # GitHub records one unexpanded matrix placeholder when preparation fails
+    # before matrix expansion. It is not an execution or evidence and may only
+    # be ignored in an older, failed preparation attempt of this exact run.
+    placeholder = 'Enterprise UI / ${{ matrix.shard }}'
+    placeholders = [r for r in rows if r.get('name') == placeholder]
+    require(len({r.get('run_attempt') for r in placeholders}) == len(placeholders),
+            'Ambiguous skipped matrix placeholder')
+    for r in placeholders:
+        attempt = r.get('run_attempt')
+        prepare = [p for p in rows if p.get('name') == JOB_NAMES['prepare'] and p.get('run_attempt') == attempt]
+        require(
+            integer(attempt, 1, 20) and attempt < ctx['attempt']
+            and r.get('run_id') == ctx['run_id'] and r.get('head_sha') == ctx['metadata_head']
+            and integer(r.get('id'), 1) and r.get('status') == 'completed' and r.get('conclusion') == 'skipped'
+            and 'runner_id' in r and r['runner_id'] is None and r.get('steps') == []
+            and len(prepare) == 1 and prepare[0].get('run_id') == ctx['run_id']
+            and prepare[0].get('head_sha') == ctx['metadata_head'] and prepare[0].get('status') == 'completed'
+            and prepare[0].get('conclusion') in ('failure', 'cancelled', 'timed_out', 'skipped'),
+            'Invalid skipped matrix placeholder',
+        )
     require(
-        all(r.get('name') in expected | {'Current enterprise UI validation'} for r in rows), 'Unexpected logical job'
+        all(r.get('name') in expected | {'Current enterprise UI validation', placeholder} for r in rows),
+        'Unexpected logical job',
     )
     require(len({r.get('id') for r in rows}) == len(rows), 'Duplicate Actions job identity')
     latest = {}

@@ -27,6 +27,9 @@ def retrieve_tasks_predictions(project, queryset, **kwargs):
     :param project: project instance
     :param queryset: filtered tasks db queryset
     """
+    from classification_disagreements.blind_quality_boundary import quality_task_ids
+
+    queryset = queryset.exclude(pk__in=quality_task_ids())
     evaluate_predictions(queryset)
     return {'processed_items': queryset.count(), 'detail': 'Retrieved ' + str(queryset.count()) + ' predictions'}
 

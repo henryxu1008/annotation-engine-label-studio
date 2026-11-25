@@ -1,0 +1,618 @@
+"""Forward-only ordering evidence; deliberately not an admission decision."""
+
+import sys
+
+from django.conf import settings
+from django.db import connections, transaction
+from django.db.models import BooleanField, CharField, Count, Exists, F, OuterRef, Q, Subquery, Value
+from django.db.models.fields.json import KeyTextTransform, KeyTransform
+from django.db.models.functions import Cast
+
+from .models import (
+    BlindAssignmentExposure,
+    BlindCaptureCertificate,
+    BlindCaptureEpoch,
+    BlindEligibilityProof,
+    BlindLabelExposure,
+    BlindMixDecision,
+    BlindMixEvidence,
+    BlindMixLiveLifecycle,
+    BlindPrivilegeHistory,
+    BlindProjectFileExposure,
+    BlindProvenanceEvent,
+    BlindQualityAssignment,
+    BlindReferenceTextLength,
+    BlindTextLengthExposure,
+    ClassificationGoldEvidence,
+)
+
+
+class _CaptureFence:
+    """Transaction-local witness that the capture row was locked."""
+
+    def __init__(self, db):
+        if not db.in_atomic_block or not db.atomic_blocks:
+            raise RuntimeError('A capture fence requires an atomic block.')
+        self.connection = db
+        self.atomic_block = db.atomic_blocks[-1]
+        self.savepoints = tuple(db.savepoint_ids)
+        self.sentinel = lambda: None
+        transaction.on_commit(self.sentinel, using=db.alias)
+
+
+def require_capture_fence(fence, using='default'):
+    db = connections[using]
+    if (not isinstance(fence, _CaptureFence) or fence.connection is not db or not db.in_atomic_block or db.needs_rollback
+            or not any(block is fence.atomic_block for block in db.atomic_blocks)
+            or tuple(db.savepoint_ids[:len(fence.savepoints)]) != fence.savepoints
+            or not any(entry[1] is fence.sentinel for entry in db.run_on_commit)):
+        raise RuntimeError('A live capture fence is required.')
+
+
+def _local_upload_backend_supported():
+    from django.conf import settings
+    from django.core.files.storage import FileSystemStorage, storages
+
+    # Label metadata exposure must commit before a handler can take project
+    # locks; request-wide transactions would reverse the admission lock order.
+    return (not connections['default'].settings_dict.get('ATOMIC_REQUESTS', False)
+            and not settings.CLOUD_FILE_STORAGE_ENABLED and type(storages['default']) is FileSystemStorage)
+
+
+def _projects_with_external_credentials(using='default'):
+    from projects.models import Project
+
+    return Project.all_objects.using(using).filter(
+        (Q(task_data_login__isnull=False) & ~Q(task_data_login=''))
+        | (Q(task_data_password__isnull=False) & ~Q(task_data_password=''))
+    )
+
+
+PROJECTED_STORAGE_FLAGS = {
+    'io_storages.s3importstorage': 's3',
+    'io_storages.gcsimportstorage': 'gcs',
+    'io_storages.azureblobimportstorage': 'azure',
+    'io_storages.redisimportstorage': 'redis',
+}
+
+
+def _projected_storage_flag(model):
+    """Only omit the exact core model and table represented by the view."""
+    from django.apps import apps
+
+    meta = model._meta
+    flag = PROJECTED_STORAGE_FLAGS.get(meta.label_lower)
+    if flag is None or meta.db_table != 'io_storages_' + meta.model_name:
+        return None
+    try:
+        return flag if apps.get_model(meta.app_label, meta.model_name) is model else None
+    except LookupError:
+        return None
+
+
+def _trusted_import_registry():
+    """Reject custom callbacks even when they claim to return built-in models.
+
+    The all-storage API caches its callable at import time. A later settings
+    change cannot establish that the mounted registry is the current one.
+    This is a live restriction, not proof of historical deployment continuity.
+    """
+    if settings.GET_STORAGE_LIST != 'io_storages.functions.get_storage_list':
+        return False
+    from io_storages.functions import get_storage_list
+
+    cached = sys.modules.get('io_storages.all_api')
+    if cached is None:
+        return True
+    if getattr(cached, 'get_storage_list', None) is not get_storage_list:
+        return False
+    # The aggregate API calls its cached view classes directly, rather than
+    # consulting get_storage_classes(). Validate their identities as well as
+    # the callback: a stale or substituted view can expose data independently
+    # of its serializer model.
+    expected = get_storage_list()
+    if settings.ENABLE_LOCAL_FILES_STORAGE:
+        from io_storages.localfiles.api import LocalFilesExportStorageListAPI, LocalFilesImportStorageListAPI
+
+        expected.append({'name': 'localfiles', 'import_list_api': LocalFilesImportStorageListAPI,
+                         'export_list_api': LocalFilesExportStorageListAPI})
+    actual = getattr(cached, '_common_storage_list', None)
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return False
+    try:
+        by_name = {entry['name']: entry for entry in actual}
+        return (len(by_name) == len(expected) and all(
+            entry['name'] in by_name
+            and by_name[entry['name']]['import_list_api'] is entry['import_list_api']
+            and by_name[entry['name']]['export_list_api'] is entry['export_list_api']
+            for entry in expected))
+    except (KeyError, TypeError):
+        return False
+
+
+def _external_scope_checks(using='default', *, storage_classes=None, omit_projected=False):
+    """Build the same global storage, model and credential fences for each caller."""
+    from django.apps import apps
+    from io_storages.models import get_storage_classes
+    from ml.models import MLBackend
+
+    trusted = _trusted_import_registry()
+    # Do not call an untrusted registry merely to determine whether it is safe.
+    classes = (get_storage_classes('import') if storage_classes is None else storage_classes) if trusted else ()
+    checks = {} if omit_projected else {
+        'external_credentials': Exists(_projects_with_external_credentials(using)),
+        'external_ml': Exists(MLBackend.objects.using(using).all()),
+    }
+    checks['external_registry_unsupported'] = Value(not trusted, output_field=BooleanField())
+    if not omit_projected:
+        # Built-in storage routes remain mounted even if a configurable
+        # registry omits a type. Inspect every fenced built-in table.
+        for label, flag in PROJECTED_STORAGE_FLAGS.items():
+            model = apps.get_model(label)
+            checks[f'external_storage_{flag}'] = Exists(model.objects.using(using).all())
+    for index, model in enumerate(classes):
+        flag = _projected_storage_flag(model)
+        if flag is None:
+            # An empty unrecognized table says nothing about an external
+            # provider's access history or independently served data.
+            checks[f'external_storage_{index}'] = Value(True, output_field=BooleanField())
+    return checks
+
+
+def project_file_scope_supported(project_id):
+    """External project storage can issue links outside prospective read capture."""
+    if not _local_upload_backend_supported():
+        return False
+    from projects.models import Project
+
+    # Evaluate global fences in one snapshot, anchored to the live project.
+    checks = _external_scope_checks()
+    state = Project.all_objects.filter(pk=project_id).annotate(**checks).values(*checks).first()
+    return state is not None and not any(state.values())
+
+
+@transaction.atomic
+def record_project_file_accesses(*, account_id, project_ids):
+    """Record a certified account's access before granting project file bytes.
+
+    Missing/old capture cannot become eligible, so no historical claim is made
+    for accounts without a current certificate. A database failure propagates
+    and the caller must not serve the file.
+    """
+    project_ids = set(project_ids)
+    if (type(account_id) is not int or account_id <= 0
+            or any(type(project_id) is not int or project_id <= 0 for project_id in project_ids)):
+        raise ValueError('Invalid project file access scope.')
+    if connections['default'].vendor not in ('postgresql', 'sqlite'):
+        return
+    epoch = BlindCaptureEpoch.objects.select_for_update().filter(pk=1, enabled=True).first()
+    if epoch is None or not BlindCaptureCertificate.objects.filter(
+            account_id=account_id, generation=epoch.generation).exists():
+        return
+    for project_id in sorted(project_ids):
+        BlindProjectFileExposure.objects.get_or_create(
+            account_id=account_id, project_id=project_id, generation=epoch.generation,
+        )
+
+
+def record_project_file_access(*, account_id, project_id):
+    return record_project_file_accesses(account_id=account_id, project_ids=[project_id])
+
+
+@transaction.atomic
+def record_label_metadata_access(*, account_id):
+    """Fence organization-wide label metadata before it is returned."""
+    if type(account_id) is not int or account_id <= 0:
+        raise ValueError('Invalid label metadata actor.')
+    if connections['default'].vendor not in ('postgresql', 'sqlite'):
+        return
+    epoch = BlindCaptureEpoch.objects.select_for_update().filter(pk=1, enabled=True).first()
+    if epoch and BlindCaptureCertificate.objects.filter(account_id=account_id, generation=epoch.generation).exists():
+        BlindLabelExposure.objects.get_or_create(account_id=account_id, generation=epoch.generation)
+
+
+def record_uploaded_file_access(*, account_id, upload):
+    from data_import.models import FileUpload
+
+    project_ids = FileUpload.objects.filter(file=upload.file.name).values_list('project_id', flat=True)
+    return record_project_file_accesses(account_id=account_id, project_ids=project_ids)
+
+
+def lock_capture_epoch_for_write(using='default', *, with_fence=False):
+    """Serialize a participant write with admission and exposure recording.
+
+    Take this after the project lock and before task or assignment locks. Both
+    ordinary and quality writes use the same fence, including direct handle
+    callers that do not go through the blind editor adapter.
+    """
+    connection = connections[using]
+    if not connection.in_atomic_block:
+        raise RuntimeError('Capture write fencing requires an atomic transaction.')
+    epoch = BlindCaptureEpoch.objects.using(using).select_for_update().filter(pk=1).first()
+    if epoch is None:
+        from rest_framework.exceptions import NotFound
+
+        raise NotFound('Work is unavailable.')
+    if with_fence:
+        epoch._blind_capture_fence = _CaptureFence(connection)
+    return epoch
+
+
+def lock_active_capture_for_write(using='default'):
+    """Take the write fence early when exposure capture is active.
+
+    Call after locking the project and before locking tasks or assignments.
+    The database triggers are authoritative if activation races this precheck.
+    """
+    if not connections[using].in_atomic_block:
+        raise RuntimeError('Capture write fencing requires an atomic transaction.')
+    if BlindCaptureEpoch.objects.using(using).filter(pk=1, enabled=True).exists():
+        return lock_capture_epoch_for_write(using=using)
+    return None
+
+
+def lock_capture_epoch_for_read(using='default', *, with_fence=False):
+    """Fence exposure/revocation until the participant response is assembled.
+
+    PostgreSQL shared row locks allow concurrent readers, but conflict with the
+    exclusive epoch lock taken before exposure evidence is recorded. SQLite
+    takes a write reservation, since a read transaction alone does not fence
+    concurrent commits when the database uses WAL mode.
+    Call only after the project lock to preserve the admission lock order.
+    """
+    connection = connections[using]
+    if not connection.in_atomic_block:
+        raise RuntimeError('Capture read fencing requires an atomic transaction.')
+    if connection.vendor == 'postgresql':
+        table = connection.ops.quote_name(BlindCaptureEpoch._meta.db_table)
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT id FROM {table} WHERE id = %s FOR SHARE', [1])
+            locked = cursor.fetchone() is not None
+    elif connection.vendor == 'sqlite':
+        locked = bool(BlindCaptureEpoch.objects.using(using).filter(pk=1).update(generation=F('generation')))
+    else:
+        locked = False
+    if not locked:
+        from rest_framework.exceptions import NotFound
+
+        raise NotFound('Work is unavailable.')
+    return _CaptureFence(connection) if with_fence else None
+
+
+def _mixed_evidence_queries(*, account_id, assignment_id, project_id, reference_id, using='default'):
+    """Build shared lifecycle predicates; these do not authorize access alone.
+
+    Signed object callers also constrain the valid decision to their frozen
+    binding. The collection prefilter cannot establish that binding.
+    """
+    mixes = BlindMixDecision.objects.using(using).filter(chosen_id_frozen=assignment_id, selected=True)
+    history = BlindMixEvidence.objects.using(using).filter(chosen_id_frozen=assignment_id)
+    valid = BlindMixLiveLifecycle.objects.using(using).filter(
+        selected=True, project_id_frozen=project_id, chosen_id_frozen=assignment_id,
+        reference_id_frozen=reference_id, source_assignee_id_frozen=account_id,
+    )
+    return mixes, history, valid
+
+
+def _matching_text_exposures(*, account_id, generation, lengths, assignment_id, using='default'):
+    """One live exposure predicate for collection and object authorization."""
+    return (BlindTextLengthExposure.objects.using(using).filter(account_id=account_id, generation=generation)
+            .exclude(assignment_id=assignment_id)
+            .filter(Q(byte_length=-1) | Q(byte_length__in=lengths)))
+
+
+def _exact_reference_length_checks(*, reference_id, expected_lengths, using='default'):
+    """Return alias-safe SQL checks for equality to an authenticated set."""
+    lengths = BlindReferenceTextLength.objects.using(using).filter(reference_id=reference_id)
+    count = lengths.order_by().values('reference_id').annotate(total=Count('pk')).values('total')
+    return Subquery(count), Exists(lengths.exclude(byte_length__in=expected_lengths))
+
+
+def current_quality_assignment_ids(account_id, using='default'):
+    """SQL prefilter for participant lists; object access must still verify the proof hash.
+
+    This checks the live epoch and retained evidence in the executed query, so
+    a stale cached user or assignment cannot keep a revoked row in a list.
+    """
+    if (connections[using].vendor not in ('postgresql', 'sqlite') or type(account_id) is not int
+            or not _local_upload_backend_supported()):
+        return BlindQualityAssignment.objects.using(using).none().values('assignment_id')
+    epoch = BlindCaptureEpoch.objects.using(using).filter(pk=1, enabled=True).values('generation')[:1]
+    cert = BlindCaptureCertificate.objects.using(using).filter(
+        account_id=account_id, generation=Subquery(epoch),
+    )
+    account_event = BlindProvenanceEvent.objects.using(using).filter(
+        kind='account', subject_id=account_id,
+    ).annotate(sequence_text=Cast('sequence', CharField())).filter(sequence_text=OuterRef('_account_sequence'))
+    reference_event = BlindProvenanceEvent.objects.using(using).filter(kind='reference').annotate(
+        subject_text=Cast('subject_id', CharField()), sequence_text=Cast('sequence', CharField()),
+    ).filter(subject_text=OuterRef('_reference'), sequence_text=OuterRef('_reference_sequence'))
+    source_exposure = BlindAssignmentExposure.objects.using(using).filter(
+        account_id=account_id, generation=Subquery(epoch),
+    ).annotate(_task_text=Cast('task_id', CharField())).filter(_task_text=OuterRef('_source_task'))
+    first_history = BlindPrivilegeHistory.objects.using(using).filter(
+        account_id=account_id, first_assignment_id=OuterRef('assignment_id'),
+    )
+    source_reference = ClassificationGoldEvidence.objects.using(using).annotate(
+        _task_text=Cast(KeyTextTransform('task_id', KeyTransform('source', KeyTransform('contents', 'manifest'))),
+                        CharField()),
+    ).filter(pk=OuterRef(OuterRef('reference_id')), _task_text=OuterRef('_source_task'))
+    proofs = BlindEligibilityProof.objects.using(using).annotate(
+        _assignment=Cast(KeyTextTransform('assignment_id', 'manifest'), CharField()),
+        _project=Cast(KeyTextTransform('project_id', 'manifest'), CharField()),
+        _task=Cast(KeyTextTransform('task_id', 'manifest'), CharField()),
+        _assignee=Cast(KeyTextTransform('assignee_id', 'manifest'), CharField()),
+        _reference=Cast(KeyTextTransform('reference_id', 'manifest'), CharField()),
+        _reference_hash=KeyTextTransform('reference_hash', 'manifest'),
+        _generation=Cast(KeyTextTransform('capture_generation', 'manifest'), CharField()),
+        _account_sequence=Cast(KeyTextTransform('account_birth_sequence', 'manifest'), CharField()),
+        _reference_sequence=Cast(KeyTextTransform('reference_sequence', 'manifest'), CharField()),
+        _source_task=Cast(KeyTextTransform('source_task_id', 'manifest'), CharField()),
+    ).filter(
+        assignment_id=OuterRef('assignment_id'),
+        manifest__schema='classification-blind-eligibility/v1',
+        _assignment=Cast(OuterRef('assignment_id'), CharField()),
+        _project=Cast(OuterRef('project_id'), CharField()), _task=Cast(OuterRef('task_id'), CharField()),
+        _assignee=str(account_id), _reference=Cast(OuterRef('reference_id'), CharField()),
+        _reference_hash=OuterRef('reference_hash'), _generation=Cast(Subquery(epoch), CharField()),
+    ).filter(Exists(account_event), Exists(reference_event)).filter(
+        (Q(manifest__rule='local-first-assignment/v1') & Exists(first_history))
+        | (Q(manifest__rule='local-unseen-source/v2', _source_task__isnull=False)
+           & ~Q(_source_task='') & ~Q(_source_task=Cast(OuterRef('task_id'), CharField()))
+           & Exists(source_reference) & ~Exists(source_exposure))
+    )
+    history = BlindPrivilegeHistory.objects.using(using).filter(
+        account_id=account_id, elevated=False, had_assignment=True,
+    )
+    reference = ClassificationGoldEvidence.objects.using(using).filter(
+        pk=OuterRef('reference_id'), project_id=OuterRef('project_id'),
+        kind='reference', manifest_hash=OuterRef('reference_hash'),
+    )
+    from projects.models import Project
+    from tasks.models import Task
+    from tasks.my_work import JSONContentEqual
+
+    mixes, mix_history, valid_mix = _mixed_evidence_queries(
+        account_id=account_id, assignment_id=OuterRef('assignment_id'), project_id=OuterRef('project_id'),
+        reference_id=OuterRef('reference_id'), using=using,
+    )
+    file_exposure = BlindProjectFileExposure.objects.using(using).filter(
+        account_id=account_id, generation=Subquery(epoch),
+    )
+    label_exposure = BlindLabelExposure.objects.using(using).filter(
+        account_id=account_id, generation=Subquery(epoch),
+    )
+    reference_lengths = BlindReferenceTextLength.objects.using(using).filter(
+        reference_id=OuterRef(OuterRef('reference_id')),
+    ).values('byte_length')
+    text_exposure = _matching_text_exposures(
+        account_id=account_id, generation=Subquery(epoch), lengths=reference_lengths,
+        assignment_id=OuterRef('assignment_id'), using=using,
+    )
+    has_reference_lengths = BlindReferenceTextLength.objects.using(using).filter(reference_id=OuterRef('reference_id'))
+    # A stale pinned config or task payload must disappear from collection
+    # queries as well as object reads; otherwise a single stale sample turns an
+    # entire work-list response into an observable error.
+    pinned_config = reference.annotate(
+        value=KeyTextTransform('config', KeyTransform('contents', 'manifest')),
+    ).values('value')[:1]
+    pinned_data = reference.annotate(
+        value=KeyTransform('task_data', KeyTransform('contents', 'manifest')),
+    ).values('value')[:1]
+    current_project = Project.all_objects.using(using).filter(pk=OuterRef('project_id'))
+    current_task = Task.objects.using(using).filter(pk=OuterRef('task_id'), project_id=OuterRef('project_id'))
+    result = BlindQualityAssignment.objects.using(using).filter(
+        assignee_id=account_id, reference_id__isnull=False,
+    ).filter(Exists(cert), Exists(history), Exists(proofs), Exists(reference), ~Exists(file_exposure), ~Exists(label_exposure),
+             Exists(has_reference_lengths), ~Exists(text_exposure)).filter(
+                 (~Exists(mixes) & ~Exists(mix_history)) | Exists(valid_mix)).annotate(
+                     _pinned_config=Subquery(pinned_config),
+                     _current_config=Subquery(current_project.values('label_config')[:1]),
+                     _pinned_data=Subquery(pinned_data),
+                     _current_data=Subquery(current_task.values('data')[:1]),
+                 ).filter(_pinned_config__isnull=False, _pinned_data__isnull=False,
+                          _current_data__isnull=False, _pinned_config=F('_current_config')).annotate(
+                     _matching_data=JSONContentEqual(F('_pinned_data'), F('_current_data')),
+                 ).filter(_matching_data=True).values('assignment_id')
+    for blocked in _external_scope_checks(using).values():
+        result = result.filter(~blocked)
+    return result
+
+
+def account_born_after_reference(*, account_id, reference_id, using='default'):
+    """Whether database capture proves account insertion followed publication.
+
+    This is necessary but insufficient for blind admission. It says nothing
+    about later access, role history, mapped identities, or external knowledge.
+    Missing or unsupported evidence denies rather than inferring from dates.
+    """
+    if (connections[using].vendor not in ('postgresql', 'sqlite')
+            or type(account_id) is not int or account_id <= 0
+            or type(reference_id) is not int or reference_id <= 0):
+        return False
+    events = BlindProvenanceEvent.objects.using(using)
+    reference = events.filter(kind='reference', subject_id=reference_id).values('sequence')[:1]
+    return events.filter(kind='account', subject_id=account_id, sequence__gt=Subquery(reference)).exists()
+
+
+def account_has_untainted_privilege_history(*, account_id, using='default'):
+    """Check one necessary condition; this is not an admission decision."""
+    if (connections[using].vendor not in ('postgresql', 'sqlite')
+            or type(account_id) is not int or account_id <= 0):
+        return False
+    generation = BlindCaptureEpoch.objects.using(using).filter(pk=1, enabled=True).values('generation')[:1]
+    certificate = BlindCaptureCertificate.objects.using(using).filter(
+        generation=Subquery(generation),
+    ).values('account_id')
+    return BlindPrivilegeHistory.objects.using(using).filter(
+        account_id=account_id, elevated=False, account_id__in=Subquery(certificate),
+    ).exists()
+
+
+def account_has_never_been_assigned(*, account_id, using='default'):
+    """Conservative necessary condition; not a complete blind admission check."""
+    if (connections[using].vendor not in ('postgresql', 'sqlite')
+            or type(account_id) is not int or account_id <= 0):
+        return False
+    generation = BlindCaptureEpoch.objects.using(using).filter(pk=1, enabled=True).values('generation')[:1]
+    certificate = BlindCaptureCertificate.objects.using(using).filter(generation=Subquery(generation)).values('account_id')
+    return BlindPrivilegeHistory.objects.using(using).filter(
+        account_id=account_id, elevated=False, had_assignment=False, account_id__in=Subquery(certificate),
+    ).exists()
+
+
+def checked_quality_proof(*, assignment, marker, lock_epoch=True, require_current_content=True):
+    """Check admission evidence; frozen-revision scoring may use historical content."""
+    import re
+
+    from rest_framework.exceptions import ValidationError
+    from review_batches.service import digest
+
+    from .gold_api import bounded_query
+
+    def unavailable():
+        raise ValidationError({'detail': 'The quality admission evidence is unavailable.'})
+
+    if lock_epoch and not connections['default'].in_atomic_block:
+        raise RuntimeError('Quality proof validation requires a transaction.')
+    epochs = BlindCaptureEpoch.objects.filter(pk=1, enabled=True)
+    epoch = None
+    if lock_epoch:
+        epoch = epochs.select_for_update().first()
+    proofs = bounded_query(BlindEligibilityProof.objects.all(), 'manifest').defer(None).filter(
+        assignment_id=assignment.pk, _gold_bytes__gte=0, _gold_bytes__lte=16384)
+    if not lock_epoch:
+        # Participant callers already fence the capture epoch where required;
+        # read the live generation and bounded proof in the same snapshot.
+        proofs = proofs.annotate(_capture_generation=Subquery(epochs.values('generation')[:1]))
+    proof = proofs.first()
+    generation = (epoch.generation if epoch is not None else None) if lock_epoch else (
+        proof._capture_generation if proof is not None else None)
+    if (generation is None or proof is None or type(proof._gold_bytes) is not int
+            or not 0 <= proof._gold_bytes <= 16384):
+        unavailable()
+    if not _local_upload_backend_supported():
+        unavailable()
+    value = proof.manifest
+    try:
+        manifest_hash = digest(value)
+    except (TypeError, ValueError, OverflowError):
+        unavailable()
+    fields = {'schema', 'rule', 'project_id', 'task_id', 'assignment_id', 'assignee_id', 'reference_id',
+              'reference_hash', 'capture_generation', 'account_birth_sequence', 'reference_sequence',
+              'issued_by', 'issuer_principal', 'issuer_source'}
+    integer_fields = ('project_id', 'task_id', 'assignment_id', 'assignee_id', 'reference_id',
+                      'capture_generation', 'account_birth_sequence', 'reference_sequence', 'issued_by')
+    if not isinstance(value, dict):
+        unavailable()
+    rule = value.get('rule')
+    if rule == 'local-unseen-source/v2':
+        fields = fields | {'source_task_id'}
+        integer_fields = (*integer_fields, 'source_task_id')
+    if (set(value) != fields
+            or any(type(value[name]) is not int or value[name] <= 0 for name in integer_fields)
+            or not isinstance(value['reference_hash'], str)
+            or not re.fullmatch(r'[0-9a-f]{64}', value['reference_hash'])
+            or manifest_hash != proof.manifest_hash
+            or value['schema'] != 'classification-blind-eligibility/v1'
+            or rule not in ('local-first-assignment/v1', 'local-unseen-source/v2')
+            or value['assignment_id'] != assignment.pk or value['project_id'] != assignment.project_id
+            or value['task_id'] != assignment.task_id or value['assignee_id'] != assignment.assignee_id
+            or marker.assignment_id != assignment.pk or marker.project_id != assignment.project_id
+            or marker.task_id != assignment.task_id or marker.assignee_id != assignment.assignee_id
+            or value['reference_id'] != marker.reference_id or value['reference_hash'] != marker.reference_hash
+            or value['capture_generation'] != generation or value['issuer_source'] != 'label_studio_local'
+            or value['issuer_principal'] != f"label_studio_local:{value['issued_by']}"
+            or value['account_birth_sequence'] <= value['reference_sequence']):
+        unavailable()
+    # The eligibility certificate is not authority to keep serving a task
+    # after its pinned configuration or text has changed. Use the same frozen
+    # reference for this check and the source-provenance rule below.
+    from django.http import Http404
+    from rest_framework.exceptions import APIException
+
+    from .gold_api import checked
+
+    try:
+        reference = checked(assignment.project, marker.reference_id, 'reference')
+        contents = reference.manifest['contents']
+        if (reference.manifest_hash != marker.reference_hash or not isinstance(contents.get('task_data'), dict)
+                or (require_current_content and (
+                    contents.get('config') != assignment.project.label_config
+                    or digest(contents['task_data']) != digest(assignment.task.data)))):
+            unavailable()
+    except (APIException, Http404, KeyError, TypeError, ValueError, OverflowError):
+        unavailable()
+    from .blind_text_lengths import reference_text_lengths
+
+    try:
+        lengths = reference_text_lengths(reference)
+    except ValidationError:
+        unavailable()
+    # Keep all prospective admission and exposure predicates, but evaluate
+    # them together against one epoch rather than separate round trips.
+    mixes, mix_history, valid_mix = _mixed_evidence_queries(
+        account_id=assignment.assignee_id, assignment_id=assignment.pk, project_id=assignment.project_id,
+        reference_id=marker.reference_id,
+    )
+    checks = {
+        'has_certificate': Exists(BlindCaptureCertificate.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_history': Exists(BlindPrivilegeHistory.objects.filter(
+            account_id=assignment.assignee_id, elevated=False, had_assignment=True)),
+        'has_account_event': Exists(BlindProvenanceEvent.objects.filter(
+            kind='account', subject_id=assignment.assignee_id, sequence=value['account_birth_sequence'])),
+        'has_reference_event': Exists(BlindProvenanceEvent.objects.filter(
+            kind='reference', subject_id=marker.reference_id, sequence=value['reference_sequence'])),
+        'has_reference': Exists(ClassificationGoldEvidence.objects.filter(
+            pk=marker.reference_id, project_id=assignment.project_id, kind='reference',
+            manifest_hash=marker.reference_hash)),
+        'has_proof': Exists(BlindEligibilityProof.objects.filter(
+            pk=proof.pk, assignment_id=assignment.pk, manifest_hash=proof.manifest_hash)),
+        'has_file_exposure': Exists(BlindProjectFileExposure.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_label_exposure': Exists(BlindLabelExposure.objects.filter(
+            account_id=assignment.assignee_id, generation=generation)),
+        'has_mix': Exists(mixes),
+        'has_mix_history': Exists(mix_history),
+        'has_valid_mix': Exists(valid_mix),
+        'has_first_assignment': Exists(BlindPrivilegeHistory.objects.filter(
+            account_id=assignment.assignee_id, first_assignment_id=assignment.pk)),
+        'has_source_exposure': Exists(BlindAssignmentExposure.objects.filter(
+            account_id=assignment.assignee_id, task_id=value.get('source_task_id'), generation=generation)),
+    }
+    count, has_extra = _exact_reference_length_checks(reference_id=reference.pk, expected_lengths=lengths)
+    exposed = _matching_text_exposures(account_id=assignment.assignee_id, generation=generation,
+                                       lengths=lengths, assignment_id=assignment.pk)
+    checks.update(_length_count=count, _length_extra=has_extra, _length_exposed=Exists(exposed))
+    from projects.models import Project
+
+    scope_checks = _external_scope_checks()
+    checks.update(scope_checks)
+    checks['has_project'] = Exists(Project.all_objects.filter(pk=assignment.project_id))
+    guard = (BlindCaptureEpoch.objects.filter(pk=1, generation=generation, enabled=True)
+             .annotate(**checks).values(*checks).first())
+    if (guard is None or not all(guard[key] for key in (
+            'has_project', 'has_certificate', 'has_history', 'has_account_event', 'has_reference_event',
+            'has_reference', 'has_proof'))
+            or any(guard[key] for key in scope_checks)
+            or guard['has_file_exposure'] or guard['has_label_exposure']
+            or guard['_length_count'] != len(lengths) or guard['_length_extra'] or guard['_length_exposed']
+            or guard['has_mix'] != guard['has_mix_history']
+            or (guard['has_mix'] and not guard['has_valid_mix'])):
+        unavailable()
+    if rule == 'local-first-assignment/v1':
+        if not guard['has_first_assignment']:
+            unavailable()
+    else:
+        try:
+            source = reference.manifest['contents']['source']
+            if (reference.manifest_hash != marker.reference_hash or not isinstance(source, dict)
+                    or source.get('task_id') != value['source_task_id']
+                    or source.get('submitter_id') == assignment.assignee_id):
+                unavailable()
+        except (APIException, Http404, KeyError, TypeError):
+            unavailable()
+        if value['source_task_id'] == assignment.task_id or guard['has_source_exposure']:
+            unavailable()
+    return proof

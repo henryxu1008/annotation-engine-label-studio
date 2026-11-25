@@ -326,6 +326,7 @@ export class LSFWrapper {
   /** @private */
   async loadTask(taskID, annotationID, fromHistory = false) {
     if (this.destroyed) return;
+    if (this.datamanager.settings?.blindProtocol === true && !isDefined(taskID)) return false;
     if (!this.lsf) {
       return console.error("Make sure that LSF was properly initialized");
     }
@@ -371,6 +372,12 @@ export class LSFWrapper {
 
         return nextTask;
       });
+
+      if (!this.destroyed && this.lsf === lsf && !newTask
+          && this.datamanager.settings?.blindProtocol === true) {
+        this.datamanager.store?.failBlindTaskOpen();
+        return;
+      }
 
       // Add new data from received task
       if (!this.destroyed && this.lsf === lsf && newTask) {
@@ -744,6 +751,7 @@ export class LSFWrapper {
   }
 
   saveUserLabels = async () => {
+    if (this.datamanager.settings?.blindProtocol === true) return;
     const body = [];
     const userLabels = this.lsf?.userLabels?.controls;
 
@@ -766,6 +774,7 @@ export class LSFWrapper {
   };
 
   async loadUserLabels() {
+    if (this.datamanager.settings?.blindProtocol === true) return;
     const lsf = this.lsf;
     if (this.destroyed || !lsf?.userLabels) return;
 
@@ -929,8 +938,32 @@ export class LSFWrapper {
     }
   }
 
+  // Navigation must not race a write or its subsequent task refresh. Track the
+  // whole operation, not just the HTTP request's loading flag.
+  runBlindWrite = async (operation) => {
+    if (this.datamanager.settings?.blindProtocol !== true) return operation();
+    // A second action can contain different edits; never report the first
+    // action's result as if those later edits were saved.
+    if (this.pendingBlindWrite) return { $meta: { status: 409 } };
+    const editor = this.lsf;
+    const pending = Promise.resolve().then(operation);
+    this.pendingBlindWrite = pending;
+    try {
+      const result = await pending;
+      if ([401, 403, 404].includes(result?.$meta?.status)
+          && !this.destroyed && this.lsf === editor) {
+        this.datamanager.store?.failBlindTaskOpen?.();
+      }
+      return result;
+    } finally {
+      if (this.pendingBlindWrite === pending) this.pendingBlindWrite = null;
+    }
+  };
+
   /** @private */
-  onSubmitAnnotation = async () => {
+  onSubmitAnnotation = () => this.runBlindWrite(() => this.performSubmitAnnotation());
+
+  performSubmitAnnotation = async () => {
     // Prevent submission if overlap is reached (only when feature flag is enabled)
     if (isFF(FF_FIT_1304_STRICT_OVERLAP) && this.overlapReached) {
       this.showOverlapReachedMessage();
@@ -972,7 +1005,10 @@ export class LSFWrapper {
   };
 
   /** @private */
-  onUpdateAnnotation = async (ls, annotation, extraData) => {
+  onUpdateAnnotation = (ls, annotation, extraData) =>
+    this.runBlindWrite(() => this.performUpdateAnnotation(ls, annotation, extraData));
+
+  performUpdateAnnotation = async (ls, annotation, extraData) => {
     if (annotation.draftSavePromise) await annotation.draftSavePromise;
     if (annotation.draftConflict) return { $meta: { status: 409 } };
     const { task } = this;
@@ -1019,7 +1055,7 @@ export class LSFWrapper {
 
     const isRejectedQueue = isDefined(task.default_selected_annotation);
 
-    if (isRejectedQueue) {
+    if (isRejectedQueue && this.datamanager.settings?.blindProtocol !== true) {
       // load next task if that one was updated task from rejected queue
       await this.loadTask();
     } else {
@@ -1112,6 +1148,7 @@ export class LSFWrapper {
   onSubmitDraft = async (_studio, annotation, params = {}) => {
     // It should be preserved as soon as possible because each `await` will allow it to be changed
     const taskId = this.task.id;
+    const editor = this.lsf;
     const annotationDoesntExist = !annotation.pk;
     const data = { body: this.prepareData(annotation, { isNewDraft: true }) }; // serializedAnnotation
     const hasChanges = this.needsDraftSave(annotation);
@@ -1131,6 +1168,7 @@ export class LSFWrapper {
 
       showToast && this.draftToast(res.$meta?.status, res);
       this.datamanager.invoke("submitDraft", this, annotation, res);
+      await this.closeBlindEditorAfterDraftDenial(res, taskId, editor);
       return res;
     }
     let response;
@@ -1150,7 +1188,27 @@ export class LSFWrapper {
     showToast && this.draftToast(response.$meta?.status, response);
     this.datamanager.invoke("submitDraft", this, annotation, response);
 
+    await this.closeBlindEditorAfterDraftDenial(response, taskId, editor);
+
     return response;
+  };
+
+  // A missing draft may be a conflict rather than a revoked assignment. Check
+  // the task separately before discarding the editor and its recovery state.
+  closeBlindEditorAfterDraftDenial = async (response, taskId, editor) => {
+    if (this.datamanager.settings?.blindProtocol !== true) return;
+    let status = response?.$meta?.status;
+    if (status === 404) {
+      try {
+        const task = await this.datamanager.apiCall("task", { taskID: taskId }, {}, { errorHandler: () => true });
+        status = task?.$meta?.status ?? task?.status;
+      } catch {
+        return; // A network failure is not proof that access was revoked.
+      }
+    }
+    if ([401, 403, 404].includes(status) && !this.destroyed && this.lsf === editor && this.task?.id === taskId) {
+      this.datamanager.store?.failBlindTaskOpen?.();
+    }
   };
 
   // Handle this expected concurrency outcome in the editor's localized,
@@ -1311,6 +1369,7 @@ export class LSFWrapper {
   };
 
   shouldLoadNext = () => {
+    if (this.datamanager.settings?.blindProtocol === true) return false;
     if (!this.labelStream) return false;
 
     // validating if URL is from notification, in case of notification it shouldn't load next task
@@ -1320,6 +1379,7 @@ export class LSFWrapper {
   };
 
   shouldExitStream = () => {
+    if (this.datamanager.settings?.blindProtocol === true) return false;
     const paramName = "exitStream";
     const urlParam = new URLSearchParams(location.search).get(paramName);
     const searchParams = new URLSearchParams(window.location.search);

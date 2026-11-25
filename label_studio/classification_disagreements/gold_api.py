@@ -70,10 +70,19 @@ def source(project, submission_id):
 
 
 def checked(project, evidence_id, kind):
-    item = get_object_or_404(bounded_query(ClassificationGoldEvidence.objects.all(), 'manifest'),
+    # Return the manifest only when the database's byte bound passes. The
+    # metadata, bound and content are read in one statement and snapshot.
+    query = bounded_query(ClassificationGoldEvidence.objects.all(), 'manifest').annotate(
+        _bounded_manifest=models.Case(
+            models.When(_gold_bytes__gte=0, _gold_bytes__lte=MAX_BYTES, then=models.F('manifest')),
+            default=models.Value(None), output_field=models.JSONField(),
+        ),
+    )
+    item = get_object_or_404(query,
                              pk=evidence_id, project=project, kind=kind)
     if type(item._gold_bytes) is not int or not 0 <= item._gold_bytes <= MAX_BYTES:
         fail('GOLD_EVIDENCE_INVALID', 409)
+    item.manifest = item._bounded_manifest
     partial.bounded_size(item.manifest, MAX_BYTES)
     if (not isinstance(item.manifest, dict) or item.manifest.get('schema') != SCHEMA
             or item.manifest.get('project_id') != project.pk or item.manifest.get('kind') != kind

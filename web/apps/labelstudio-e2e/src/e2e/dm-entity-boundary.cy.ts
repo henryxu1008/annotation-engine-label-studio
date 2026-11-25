@@ -66,30 +66,49 @@ describe('Existing text entity boundary handles', () => {
             expect(result.find(r => r.type === 'textarea')).to.include({ id: 'entity-1' });
             expect(result.find(r => r.type === 'textarea').value.text).to.deep.eq(['原始备注']);
           };
+          const checkEditor = (win: any) => {
+            expect(Number(win.Htx?.task?.id), 'the expected task is loaded').to.eq(scope.task_id);
+            expect(win.Htx?.isLoading, 'editor finished loading').to.eq(false);
+            expect(win.Htx?.annotationStore?.selected, 'selected annotation is available').to.exist;
+            check(win.Htx.annotationStore.selected.serializeAnnotation());
+          };
+          const checkLeft = (win: any) => {
+            const results = win.Htx.annotationStore.selected.serializeAnnotation();
+            expect(results, 'left resize retains the region and note').to.have.length(2);
+            expect(results.find((r: any) => r.type === 'labels').value).to.include({
+              start: value.targetStart, end: value.end,
+            });
+            expect(results.find((r: any) => r.type === 'textarea').value.text).to.deep.eq(['原始备注']);
+            expect(win.Htx.annotationStore.selected.history.isFrozen).to.eq(false);
+          };
           cy.loginAs(fixture.users.annotator_a.email, fixture.password, '/user/account/personal-info');
           cy.get('[data-testid="language-preference-select"]').select(locale).should('have.value', locale).and('not.be.disabled');
           cy.visit(`/projects/${scope.project_id}/data?task=${scope.task_id}`);
-          cy.window().should((win: any) => {
+          cy.window({ timeout: 30000 }).should((win: any) => {
             expect(win.Htx?.isLoading).to.eq(false);
             expect(win.Htx?.annotationStore?.selected?.history?.isFrozen).to.eq(false);
           });
           cy.get('.htx-highlight').click();
           cy.get('.lsf-richtext__container').should('have.css', 'white-space', 'pre-wrap');
           resize('left', value.targetStart);
+          // A second native drag must start only after the first resize has
+          // updated the region and retained its linked note. Checking the
+          // actual model avoids racing the editor's history/DOM refresh.
+          cy.window({ timeout: 30000 }).should(checkLeft);
           trace('left-adjusted');
           resize('right', value.targetEnd);
           trace('right-adjusted');
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('[aria-label="' + (locale === 'zh-CN' ? '撤销' : 'Undo') + '"]').click();
-          cy.window().should((win: any) => expect(win.Htx.annotationStore.selected.serializeAnnotation().find((r: any) => r.type === 'labels').value.end).to.eq(value.end));
+          cy.window({ timeout: 30000 }).should(checkLeft);
           cy.get('[aria-label="' + (locale === 'zh-CN' ? '重做' : 'Redo') + '"]').click();
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('body').then($body => { if ($body.find('[data-testid="draft-save-retry"]').length) cy.get('[data-testid="draft-save-retry"]').click(); });
           cy.window({ timeout: 15000 }).should((win: any) => expect(win.Htx.annotationStore.selected.hasUnsavedDraft).to.eq(false));
           cy.request(`/api/tasks/${scope.task_id}/`).then(({ body }) => { check(body.drafts[0].result); expect(body.annotations).to.deep.eq([]); });
           trace('draft-saved');
           cy.reload();
-          cy.window().should((win: any) => check(win.Htx.annotationStore.selected.serializeAnnotation()));
+          cy.window({ timeout: 30000 }).should(checkEditor);
           cy.get('[data-testid="draft-save-retry"]').should('not.exist');
           trace('reloaded');
           cy.intercept('POST', `**/api/tasks/${scope.task_id}/annotations*`).as('submitBoundary');

@@ -14,7 +14,7 @@ from django.db.models import Count
 from django.utils import timezone
 from organizations.models import OrganizationMember
 from projects.models import ProjectMember
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.generics import get_object_or_404
 from tasks.assignments import validate_assignment_target
 from tasks.models import TaskAssignment
@@ -140,6 +140,12 @@ def claim_pool(*, project_id, package_id, principal, key):
         require_project_operation(project, EDIT)
         if authorization.project_role(principal, project) not in ('annotator', 'manager'):
             raise PermissionDenied()
+        # The HTTP check can precede this project lock. A sample may have
+        # made the project sensitive while the claimant was waiting.
+        from classification_disagreements.blind_participant_projection import sensitive_nonmanager
+
+        if sensitive_nonmanager(project, principal):
+            raise NotFound('Work is unavailable.')
         pool = get_object_or_404(
             TaskPackagePool.objects.select_for_update(),
             package_id=package_id,
@@ -269,6 +275,14 @@ def balanced_dispatch(*, project_id, package_id, principal, key, request_hash, a
         require_project_operation(project, ASSIGN)
         if not authorization.can_manage_project(principal, project):
             raise PermissionDenied()
+        # Balancing uses active-assignment counts, which distinguish a hidden
+        # sample from its deferred ordinary source. Until the blind protocol
+        # has a uniform allocation contract, neither manual nor scheduled
+        # balancing may turn those counts into a participant-visible outcome.
+        from classification_disagreements.blind_participant_projection import sensitive_project
+
+        if sensitive_project(project):
+            fail(DispatchConflict, 'POOL_BLIND_UNAVAILABLE', 'Balanced allocation is unavailable for this project.')
         pool = get_object_or_404(
             TaskPackagePool.objects.select_for_update(), package_id=package_id, package__project=project
         )

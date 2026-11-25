@@ -59,11 +59,14 @@ def is_private_local_path(path, *, storage_root=False):
 
 
 def has_immutable_release_boundary(project_id):
+    from classification_disagreements.models import BlindQualityAssignment
     from tasks.models import Submission
 
     from .approved_models import ApprovedDatasetRelease
 
     return (
-        Submission.objects.filter(assignment__project_id=project_id).exists()
+        Submission.objects.filter(assignment__project_id=project_id).exclude(
+            assignment__task_id__in=BlindQualityAssignment.objects.values('task_id')
+        ).exists()
         or ApprovedDatasetRelease.objects.filter(project_id=project_id).exists()
     )

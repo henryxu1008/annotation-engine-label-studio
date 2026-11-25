@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createLocaleRuntime } from "@humansignal/i18n";
+import { observable, runInAction } from "mobx";
 import { MyWorkWorkspace } from "./MyWorkWorkspace";
 
 const mockCallApi = jest.fn();
@@ -43,6 +44,60 @@ const mount = (props = {}) => {
 
 describe("personal work projection", () => {
   beforeEach(() => mockCallApi.mockReset());
+
+  it("uses the restricted work store and removes old work after access is revoked", async () => {
+    const task = 2 ** 51 + 1;
+    const open = jest.fn();
+    const store = observable({ blindWorkPage: null, blindWorkError: false });
+    store.loadBlindWork = jest.fn()
+      .mockImplementationOnce(async () => runInAction(() => {
+        store.blindWorkPage = { page: 1, has_next: false, results: [{ task_id: task, assignment_id: task + 1,
+          can_label: true, data: { text: "Synthetic work" } }] };
+      }))
+      .mockImplementationOnce(async () => runInAction(() => {
+        store.blindWorkPage = null;
+        store.blindWorkError = true;
+      }));
+    const { runtime, unmount } = mount({ blindStore: store, onOpenBlindTask: open });
+    const button = await screen.findByRole("button", { name: "Open annotation" });
+    expect(screen.getByText("Synthetic work")).not.toBeNull();
+    expect(mockCallApi).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(open).toHaveBeenCalledWith(task);
+    act(() => runtime.updateLocale("zh-CN"));
+    expect(screen.getByRole("button", { name: "打开标注" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Synthetic work")).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开标注" })).toBeNull();
+    unmount();
+    runtime.destroy();
+  });
+
+  it("does not show old restricted work while switching projects", async () => {
+    const task = 2 ** 51 + 1;
+    let finish;
+    const store = observable({ blindWorkPage: null, blindWorkError: false });
+    store.loadBlindWork = jest.fn()
+      .mockImplementationOnce(async () => runInAction(() => {
+        store.blindWorkPage = { page: 1, has_next: false, results: [{ task_id: task, assignment_id: task + 1,
+          can_label: true, data: { text: "Old project text" } }] };
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { runtime, rerender, unmount } = mount({ blindStore: store });
+    await screen.findByText("Old project text");
+    const Provider = runtime.provider;
+    rerender(<Provider><MyWorkWorkspace projectId={5} blindStore={store} /></Provider>);
+    expect(screen.queryByText("Old project text")).toBeNull();
+    expect(screen.getByRole("status")).not.toBeNull();
+    await act(async () => {
+      runInAction(() => { store.blindWorkPage = null; store.blindWorkError = true; });
+      finish();
+    });
+    expect(screen.queryByText("Old project text")).toBeNull();
+    unmount();
+    runtime.destroy();
+  });
 
   it("switches display language without changing work, filters or making writes", async () => {
     mockCallApi.mockResolvedValue(data);

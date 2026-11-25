@@ -154,6 +154,8 @@ class OrganizationMemberListAPI(generics.ListAPIView):
         return projects_map
 
     def _get_contributed_to_projects_map(self):
+        from classification_disagreements.blind_participant_projection import sensitive_project_filter
+
         members = self.paginated_members
         user_ids = [member.user_id for member in members]
         org_project_ids = Project.objects.filter(organization=self.request.user.active_organization).values_list(
@@ -161,6 +163,7 @@ class OrganizationMemberListAPI(generics.ListAPIView):
         )
         annotations = (
             Annotation.objects.filter(completed_by__in=list(user_ids), project__in=list(org_project_ids))
+            .exclude(sensitive_project_filter('project'))
             .values('completed_by', 'project_id')
             .distinct()
         )
@@ -208,7 +211,9 @@ class OrganizationMemberListAPI(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         page = self.paginated_members   # Using cached property to avoid multiple queries
         serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        response = self.get_paginated_response(serializer.data)
+        response['Cache-Control'] = 'private, no-store'
+        return response
 
 
 @method_decorator(
@@ -297,7 +302,9 @@ class OrganizationMemberDetailAPI(GetParentObjectMixin, generics.RetrieveDestroy
         member = get_object_or_404(queryset, user=user_pk)
         self.check_object_permissions(request, member)
         serializer = self.get_serializer(member)
-        return Response(serializer.data)
+        response = Response(serializer.data)
+        response['Cache-Control'] = 'private, no-store'
+        return response
 
     def delete(self, request, pk=None, user_pk=None):
         org = self.parent_object

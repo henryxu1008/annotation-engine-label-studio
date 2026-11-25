@@ -524,5 +524,12 @@
   "goldScore": "Evaluate revision",
   "goldHistory": "Evidence history",
   "goldEvidence": "Evidence #{{id}}",
-  "goldHistoryLimit": "Only the most recent 100 records are shown."
+  "goldHistoryLimit": "Only the most recent 100 records are shown.",
+  "blindScoresTitle": "Blind quality scores",
+  "blindScoresLoad": "Load blind scores",
+  "blindScoresEmpty": "No blind quality scores are available.",
+  "blindScoresMore": "Load more scores",
+  "blindScoreItem": "Score #{{id}}",
+  "blindScoreSubmission": "Submission #{{id}}",
+  "blindScoreResult": "Matched controls: {{matched}} of {{total}}"
 }

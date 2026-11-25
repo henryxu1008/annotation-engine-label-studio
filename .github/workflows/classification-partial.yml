@@ -34,6 +34,41 @@ env:
   JSON_LOG: "0"
 
 jobs:
+  classification-partial-regressions:
+    name: Partial match PostgreSQL full regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      partial-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: priority-ci-synthetic-only
+          POSTGRES_DB: classification_partial
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d classification_partial"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Poetry
+        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: poetry
+      - name: Install backend OS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext fontconfig fonts-noto-cjk libffi8 libldap2-dev libsasl2-dev libssl-dev libxml2-dev libxslt-dev python3-dev
+          test -n "$(fc-list :lang=zh-cn family)"
+      - name: Install backend dependencies
+        run: poetry install --with test
+      - name: PostgreSQL frozen comparison and concurrency regression
+        working-directory: label_studio
+        run: |
+          poetry run python core/version.py
+          poetry run pytest -q classification_disagreements/tests review_batches/tests
+
   classification-partial:
     name: Partial match PostgreSQL and bilingual E2E
     runs-on: ubuntu-latest
@@ -65,11 +100,6 @@ jobs:
           test -n "$(fc-list :lang=zh-cn family)"
       - name: Install backend dependencies
         run: poetry install --with test
-      - name: PostgreSQL frozen comparison and concurrency regression
-        working-directory: label_studio
-        run: |
-          poetry run python core/version.py
-          poetry run pytest -q classification_disagreements/tests review_batches/tests
       - name: Prepare fresh synthetic database
         run: |
           poetry run python label_studio/core/version.py

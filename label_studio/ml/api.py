@@ -3,6 +3,7 @@
 import logging
 
 from access_control.identity import resolve_actor
+from access_control.authorization import authorization
 from access_control.project_access import require_project_manager, visible_projects_for_actor
 from access_control.project_operations import lifecycle_background_fence_enabled
 from core.api_permissions import HasActorObjectPermission
@@ -316,6 +317,7 @@ class MLBackendTrainAPI(APIView):
             raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
+        require_project_manager(request, ml_backend.project)
 
         ml_backend.train()
         return Response(status=status.HTTP_200_OK)
@@ -364,6 +366,7 @@ class MLBackendPredictTestAPI(APIView):
             raise PermissionDenied('ML requests are unavailable while lifecycle admission is enabled.')
         ml_backend = generics.get_object_or_404(MLBackend, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, ml_backend)
+        require_project_manager(request, ml_backend.project)
 
         random = request.query_params.get('random', False)
         if random:
@@ -428,6 +431,7 @@ class MLBackendInteractiveAnnotating(APIView):
     predicted region based on annotator input.
     """
 
+    permission_classes = (HasActorObjectPermission, IsAuthenticated)
     permission_required = all_permissions.tasks_view
 
     def _error_response(self, message, log_function=logger.info):
@@ -435,7 +439,15 @@ class MLBackendInteractiveAnnotating(APIView):
         return Response({'errors': [message]}, status=status.HTTP_200_OK)
 
     def _get_task(self, ml_backend, validated_data):
-        return generics.get_object_or_404(Task, pk=validated_data['task'], project=ml_backend.project)
+        principal, actor = resolve_actor(self.request)
+        task = generics.get_object_or_404(
+            Task.objects.for_user(actor), pk=validated_data['task'], project=ml_backend.project,
+        )
+        if not authorization.can_view_task(principal, task):
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound()
+        return task
 
     def _get_credentials(self, request, context, project):
         if flag_set('ff_back_dev_2362_project_credentials_060722_short', request.user):

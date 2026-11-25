@@ -3,6 +3,39 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 
+function failureIndices(result, call) {
+  if (!result || !Array.isArray(result.runs) || result.runs.length !== 1) return null;
+  const actualSpec = String(result.runs[0]?.spec?.absolute || '').replaceAll('\\', '/');
+  if (!call || !actualSpec.endsWith('/' + call.spec) || result.browserName !== call.browser) return null;
+  const tests = result.runs[0]?.tests;
+  if (!Array.isArray(tests) || tests.length === 0 || tests.length > 500) return null;
+  const failed = tests.flatMap((entry, index) => entry?.state === 'failed' ? [index + 1] : []);
+  const basename = path.posix.basename(call.spec).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const location = new RegExp('(?:^|[\\s/\\\\(])' + basename + ':(\\d{1,4}):\\d{1,4}(?:\\D|$)', 'm');
+  const messages = tests.filter((entry) => entry?.state === 'failed').map((entry) =>
+    [entry.displayError, ...(entry.attempts || []).flatMap((a) => [a?.error?.message, a?.error?.stack])]
+      .filter((part) => typeof part === 'string').join('\n'));
+  const lines = messages.map((message) => {
+    const match = message.match(location);
+    const line = match ? Number(match[1]) : 0;
+    return Number.isSafeInteger(line) && line >= 1 && line <= 5000 ? line : 0;
+  });
+  const categories = messages.map((message) => {
+    if (/cy\.task\(/i.test(message)) return 'task';
+    if (/cy\.request\(|status code.*(?:4\d\d|5\d\d)/i.test(message)) return 'request';
+    if (/timed out|timeout/i.test(message)) {
+      if (/expected (?:undefined|null|NaN) to (?:equal|eq)/i.test(message)) return 'timeout-value';
+      if (/expected to find (?:element|content)/i.test(message)) return 'timeout-element';
+      if (/cy\.(?:visit|request|wait)\(/i.test(message)) return 'timeout-network';
+      return 'timeout';
+    }
+    if (/uncaught|unhandled/i.test(message)) return 'uncaught';
+    if (/assertionerror|expected/i.test(message)) return 'assertion';
+    return 'other';
+  });
+  return failed.length ? { schema: 'ui-cypress-failure-indices/v3', total: tests.length, failed, categories, lines } : null;
+}
+
 function summarize(result, call) {
   assert.ok(result && Array.isArray(result.runs) && result.runs.length === 1, 'One actual spec result is required');
   const run = result.runs[0];
@@ -51,7 +84,7 @@ function summarize(result, call) {
 }
 
 async function main() {
-  const [input, output] = process.argv.slice(2);
+  const [input, output, diagnostic] = process.argv.slice(2);
   const call = JSON.parse(fs.readFileSync(input, 'utf8'));
   // This tool is never a Docker/container client, including on a developer machine.
   assert.ok(!process.env.ENTERPRISE_E2E_CONTAINER, 'Container mode is forbidden');
@@ -63,6 +96,10 @@ async function main() {
     spec: path.join(web, call.spec), browser: call.browser, env: call.env,
     config: { baseUrl: process.env.UI_BASE_URL || 'http://localhost:8080', video: true },
   });
+  // Only bounded numeric positions leave the private runner. Never export
+  // Cypress errors, test titles, configuration, URLs or browser output.
+  const failure = failureIndices(result, call);
+  if (failure && diagnostic) fs.writeFileSync(diagnostic, JSON.stringify(failure), { flag: 'wx' });
   const report = summarize(result, call);
   const raw = JSON.stringify(report);
   const { redactDiagnostic } = require('../../web/apps/labelstudio-e2e/src/support/failure-diagnostics.cjs');
@@ -76,7 +113,7 @@ async function main() {
   fs.writeFileSync(output, raw, { flag: 'wx' });
 }
 
-module.exports = { summarize };
+module.exports = { summarize, failureIndices };
 if (require.main === module) main().catch(() => {
   // Cypress itself prints sanitized diagnostic output; do not serialize raw result/config/errors here.
   console.error('UI_CYPRESS_RESULT_INVALID');

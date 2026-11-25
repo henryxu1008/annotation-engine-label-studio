@@ -13,12 +13,12 @@ import { useLocaleTranslation } from "@humansignal/i18n";
 import "./Label.scss";
 
 // Todo: consider renaming this file to something like LabelingWrapper as it is not a Label component
-const LabelingHeader = ({ SDK, onClick, isExplorerMode }) => {
+const LabelingHeader = ({ SDK, onClick, isExplorerMode, forceBack = false }) => {
   const { t } = useLocaleTranslation("datamanager");
   return (
     <div className={cn("label-view").elem("header").mod({ labelStream: !isExplorerMode }).toClassName()}>
       <Space size="large">
-        {SDK.interfaceEnabled("backButton") && (
+        {(forceBack || SDK.interfaceEnabled("backButton")) && (
           <Button
             icon={<IconChevronLeft style={{ marginRight: 4, fontSize: 16 }} />}
             type="link"
@@ -58,6 +58,7 @@ export const Labeling = injector(
     const SDK = store?.SDK;
     const view = store?.currentView;
     const { isExplorerMode } = store;
+    const restricted = SDK.settings?.blindProtocol === true;
 
     const isLabelStream = useMemo(() => {
       return SDK.mode === "labelstream";
@@ -138,12 +139,13 @@ export const Labeling = injector(
 
     return (
       <div className={cn("label-view").mod({ loading }).toClassName()}>
-        {SDK.interfaceEnabled("labelingHeader") && (
-          <LabelingHeader SDK={SDK} onClick={closeLabeling} isExplorerMode={isExplorerMode} />
+        {(restricted || SDK.interfaceEnabled("labelingHeader")) && (
+          <LabelingHeader SDK={SDK} onClick={closeLabeling} isExplorerMode={isExplorerMode && !restricted}
+            forceBack={restricted} />
         )}
 
         <div className={cn("label-view").elem("content").toClassName()}>
-          {isExplorerMode && (
+          {isExplorerMode && !restricted && (
             <div className={cn("label-view").elem("table").toClassName()}>
               <Resizer
                 className={cn("label-view").elem("dataview").toClassName()}

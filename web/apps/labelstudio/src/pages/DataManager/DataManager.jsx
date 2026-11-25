@@ -17,6 +17,7 @@ import { ExportPage } from "../ExportPage/ExportPage";
 import { APIConfig } from "./api-config";
 import { AssignmentManager } from "./AssignmentManager";
 import { MyWorkWorkspace } from "./MyWorkWorkspace";
+import { loadWorkspaceBootstrap } from "./workModeBootstrap";
 import { TaskPackageEntry, TaskPackages, TaskPackageTitle } from "./TaskPackages";
 import { selectedTaskPackageIds } from "./taskPackageSelection";
 import { ReviewerWorkspace } from "./ReviewerWorkspace";
@@ -56,21 +57,31 @@ const initializeDataManager = (root, props, params) => {
     apiGateway: `${window.APP_SETTINGS.hostname}/api/dm`,
     apiVersion: 2,
     project: params.project,
+    blindWorkspace: ({ store }) => <MyWorkWorkspace projectId={params.id} blindStore={store}
+      onOpenBlindTask={(taskID) => store.setTask({ taskID })} />,
     polling: window.APP_SETTINGS?.polling,
     showPreviews: false,
     apiEndpoints: APIConfig.endpoints,
-    interfaces: {
-      import: true,
-      export: true,
-      backButton: false,
-      labelingHeader: false,
-      autoAnnotation: params.autoAnnotation,
-    },
     labelStudio: {
       keymap: window.APP_SETTINGS.editor_keymap,
     },
     ...props,
     ...settings,
+    settings: { ...(props.settings ?? {}), blindProtocol: params.restricted },
+    interfaces: params.restricted ? {
+      ...(props.interfaces ?? {}),
+      import: false,
+      export: false,
+      backButton: true,
+      labelingHeader: true,
+      autoAnnotation: false,
+    } : (props.interfaces ?? {
+      import: true,
+      export: true,
+      backButton: false,
+      labelingHeader: false,
+      autoAnnotation: params.autoAnnotation,
+    }),
     locale: params.locale,
   };
 
@@ -130,6 +141,8 @@ const CollaborationModalLanguage = ({ initialPreference, setPreference }) => {
 
 export const DataManagerPage = ({ ...props }) => {
   const { locale, t } = useLocaleTranslation("datamanager");
+  const { t: projectText } = useLocaleTranslation("projects");
+  const { user } = useAuth();
   const latestLocale = useRef(locale);
   latestLocale.current = locale;
   const dependencies = useMemo(loadDependencies, []);
@@ -141,31 +154,37 @@ export const DataManagerPage = ({ ...props }) => {
   const { project } = useProject();
   const setContextProps = useContextProps();
   const [crashed, setCrashed] = useState(false);
-  const [loading, setLoading] = useState(!window.DataManager || !window.LabelStudio);
+  const [loading, setLoading] = useState(true);
+  const [retryGeneration, setRetryGeneration] = useState(0);
   const dataManagerRef = useRef();
   const projectId = project?.id;
+  const sessionUserId = user?.id;
 
   const init = useCallback(async (isCancelled) => {
-    if (!window.LabelStudio) return;
-    if (!window.DataManager) return;
+    if (!window.LabelStudio || !window.DataManager) throw new Error("Workspace dependencies are unavailable");
     if (!root.current) return;
     if (!project?.id) return;
+    if (!sessionUserId) return;
     if (dataManagerRef.current) return;
 
-    const mlBackends = await api.callApi("mlBackends", {
-      params: { project: project.id },
+    const bootstrap = await loadWorkspaceBootstrap({
+      callApi: api.callApi,
+      projectId: project.id,
+      sessionUserId,
+      isCancelled,
     });
 
     // A slow backend response can arrive after navigation or a newer init
     // effect. Never construct a workspace for the disposed page.
-    if (isCancelled() || !root.current || dataManagerRef.current) return;
+    if (!bootstrap || isCancelled() || !root.current || dataManagerRef.current) return;
 
-    const interactiveBacked = (mlBackends ?? []).find(({ is_interactive }) => is_interactive);
+    const interactiveBacked = bootstrap.interactiveBackend;
 
     const dataManager = initializeDataManager(root.current, props, {
       ...params,
-      project,
+      project: bootstrap.restricted ? { id: project.id } : project,
       autoAnnotation: isDefined(interactiveBacked),
+      restricted: bootstrap.restricted,
       locale: latestLocale.current,
     });
     if (!dataManager) return;
@@ -273,30 +292,37 @@ export const DataManagerPage = ({ ...props }) => {
     }
 
     setContextProps({ dmRef: dataManager });
-  }, [projectId]);
+  }, [projectId, sessionUserId]);
 
   const destroyDM = useCallback(() => {
     if (dataManagerRef.current) {
-      dataManagerRef.current.destroy();
+      const previous = dataManagerRef.current;
+      if (window.dataManager === previous) delete window.dataManager;
+      if (window.DM === previous.store) delete window.DM;
+      previous.destroy();
       dataManagerRef.current = null;
+      setContextProps({ dmRef: null });
     }
+    if (root.current) delete root.current.dataset.dmInitialized;
   }, []);
+
+  useEffect(() => {
+    setCrashed(false);
+  }, [projectId, sessionUserId]);
 
   useEffect(() => {
     let cancelled = false;
+    if (crashed || !projectId || !sessionUserId) return () => { cancelled = true; destroyDM(); };
+    setLoading(true);
     Promise.all(dependencies)
       .then(() => {
         if (cancelled) return;
-        setLoading(false);
         return init(() => cancelled);
-      });
-    return () => { cancelled = true; };
-  }, [init]);
-
-  useEffect(() => {
-    // destroy the data manager when the component is unmounted
-    return () => destroyDM();
-  }, []);
+      })
+      .then(() => { if (!cancelled) setLoading(false); })
+      .catch(() => { if (!cancelled) { setLoading(false); setCrashed(true); } });
+    return () => { cancelled = true; destroyDM(); };
+  }, [init, retryGeneration, crashed]);
 
   useEffect(() => {
     dataManagerRef.current?.setLocale(locale);
@@ -305,6 +331,10 @@ export const DataManagerPage = ({ ...props }) => {
   return crashed ? (
     <div className={cn("crash").toClassName()}>
       <div className={cn("crash").elem("info").toClassName()}>{t("workspaceLoadFailed")}</div>
+
+      <Button onClick={() => { destroyDM(); setCrashed(false); setRetryGeneration((value) => value + 1); }}>
+        {projectText("retry")}
+      </Button>
 
       <Link to="/projects" className={buttonVariant()} aria-label={t("backToProjects")}>
         {t("backToProjects")}
@@ -597,11 +627,13 @@ DataManagerPage.context = ({ dmRef }) => {
   };
 
   const openMyWork = () => {
-    if (!localePreference.ready) return;
+    if (!localePreference.ready || !dmRef) return;
     const dialog = modal({
       title: <CollaborationModalTitle kind="myWork" />,
       header: <CollaborationModalLanguage initialPreference={localePreference.preference} setPreference={localePreference.setPreference} />,
-      body: <MyWorkWorkspace projectId={project.id} onOpenReviewQueue={() => { dialog.close(); openReviews(); }} />,
+      body: <MyWorkWorkspace projectId={project.id} onOpenReviewQueue={() => { dialog.close(); openReviews(); }}
+        blindStore={dmRef?.settings?.blindProtocol === true ? dmRef.store : null}
+        onOpenBlindTask={(taskID) => { dialog.close(); dmRef.store.setTask({ taskID }); }} />,
       style: { width: 960 },
     });
   };
@@ -667,7 +699,7 @@ DataManagerPage.context = ({ dmRef }) => {
   return project && project.id ? (
     <Space size="small">
       {taskPackage !== null && <span data-testid="package-work-scope">{tp("workContext", { id: taskPackage })} <a href={`/projects/${project.id}/data`} data-external>{tp("projectWork")}</a></span>}
-      <Button size="small" look="outlined" onClick={openMyWork} disabled={!localePreference.ready} data-testid="open-my-work">
+      <Button size="small" look="outlined" onClick={openMyWork} disabled={!localePreference.ready || !dmRef} data-testid="open-my-work">
         {tc("myWorkTitle")}
       </Button>
       <TaskPackageEntry projectId={project.id} onOpen={openTaskPackages} disabled={!localePreference.ready} />
